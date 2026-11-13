@@ -2,8 +2,9 @@ opensheaf-py, a literate program
 ================================
 
 > [!WARNING]
-> **Draft, and an experiment.** OpenSheaf 0.1 is a draft specification, and
-> this literate form of its tools is an experiment on the branch `literate`.
+> **Draft.** OpenSheaf 0.1 is a draft specification: until version 1.0, a
+> revision may change the format in incompatible ways, and these tools follow
+> the latest draft.
 
 This is the source of [opensheaf-py](https://github.com/opensheaf/opensheaf-py)
 (the `osheaf` command), the reference tools of the
