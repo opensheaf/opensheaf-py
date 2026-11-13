@@ -155,6 +155,9 @@ def render(members):
     entries, urls = [], [(base, None)]
     page_t = template("paper.html")
     for m in members:
+        if m.get("archive") != P.ARCHIVE["archiveId"]:
+            entries.append(remote_entry(m))
+            continue
         obj_id, cur = m["id"], m["version"]
         d = P.OCFL / obj_id
         inv = P.load_inventory(d)
@@ -218,7 +221,7 @@ def render(members):
     (root_out / "sitemap.xml").write_text("\n".join(sm) + "\n", encoding="utf-8")
     # remove landing pages of documents no longer in the collection
     for p in (root_out / "paper").glob("*") if (root_out / "paper").exists() else []:
-        if p.name not in {m["id"] for m in members}:
+        if p.name not in {m["id"] for m in members if m.get("archive") == P.ARCHIVE["archiveId"]}:
             shutil.rmtree(p)
 
 
@@ -226,3 +229,35 @@ def template_path(name):
     d = P.INDEX.get("html", {}).get("templates")
     p = P.ROOT / d / name if d else None
     return p if p and p.exists() else DEFAULTS / name
+
+
+def remote_entry(m):
+    """The home-page entry of a member of another archive: its metadata read
+    from that archive, or else the cached citation."""
+    from . import collections
+    cite = m.get("cite", {})
+    title, by, year = cite.get("title", m["id"]), ", ".join(cite.get("creators", [])), cite.get("year", "")
+    links, abstract, archive_name = [], "", m.get("archiveUrl", "")
+    try:
+        r = collections.Remote(m["archiveUrl"])
+        archive_name = r.disc.get("name", archive_name)
+        inv = r.inventory(m["id"])
+        dc = json.loads(r.file(m["id"], inv, m["version"], "datacite.json"))
+        title, by = dc["titles"][0]["title"], authors(dc)
+        if dc.get("url"):
+            links.append(f'<a href="{esc(dc["url"])}">landing page</a>')
+        cp = P.content_path(inv, m["version"], "paper.pdf")
+        if cp:
+            links.append(f'<a href="{esc(r.root + m["id"] + "/" + cp)}">PDF</a>')
+        abstract = abstract_html(dc)
+    except Exception:  # noqa: BLE001 - the cached citation is shown
+        links.append('<span class="missing">archive unavailable: cached citation</span>')
+    return "\n".join([
+        '<li class="paper member">',
+        f'<span class="paper-title">{esc(title)}</span>',
+        f'<div class="paper-authors">{esc(by)}</div>',
+        f'<div class="paper-meta">{esc(str(year))} · in <a href="{esc(m["archiveUrl"])}">{esc(archive_name)}</a>'
+        + (" · " + " · ".join(links) if links else "")
+        + f' · <span class="pin" title="{m["inventorySha512"]}">pin {m["inventorySha512"][:32]}…</span></div>',
+        f"<details><summary>Abstract</summary>{abstract}</details>" if abstract else "",
+        "</li>"])

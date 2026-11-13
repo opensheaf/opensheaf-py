@@ -189,6 +189,20 @@ def next_object_version(inv):
     return f"v{int(inv['head'][1:]) + 1}" if inv else "v1"
 
 
+def carried_files(obj_id, inv):
+    """{logical path: file} of the notice files of the head, which every later
+    object version keeps (section 7.3)."""
+    if not inv:
+        return {}
+    d = OCFL / obj_id
+    head = read_json(d, inv, OBJ)
+    out = {}
+    for n in head.get("notices", []):
+        if n.get("path"):
+            out[n["path"]] = d / content_path(inv, inv["head"], n["path"])
+    return out
+
+
 def carry_forward(prev, new, inv, new_ver, after_doc=None):
     """Keep the notices of the head (they persist unchanged) and its history,
     updated for NEW, the object.json of object version NEW_VER: a new document
@@ -582,6 +596,8 @@ def deposit(args):
         prev_obj, prev_dc = read_json(obj_dir, inv, OBJ), read_json(obj_dir, inv, "datacite.json")
         if prev_obj["kind"] != "document":
             sys.exit(f"{obj_id} is not a document")
+        if prev_obj.get("status") == "withdrawn":
+            sys.exit(f"{obj_id} is withdrawn (section 11.1): a withdrawn document gets no new versions")
         doc_version = max(doc_version_of(obj_dir, inv, v) for v in inv["versions"]) + 1
     if args.created and args.available:
         sys.exit("give --created (a version not public at the time) or --available, not both")
@@ -688,6 +704,8 @@ def deposit(args):
     if args.stage:
         obj["stage"] = {"scheme": "NISO-JAV", "value": args.stage}
     carry_forward(prev_obj, obj, inv, next_object_version(inv), args.after)
+    for lp, f in carried_files(obj_id, inv).items():
+        files.setdefault(lp, f)
     write_json(tmp / "datacite.json", datacite)
     write_json(tmp / OBJ, obj)
     files["datacite.json"] = tmp / "datacite.json"
@@ -722,9 +740,10 @@ RIGHTS = {
 }
 
 
-def description_version(obj_id, change, message):
+def description_version(obj_id, change, message, add_files=None):
     """Add a description-only version of document OBJ_ID: the files of the
-    head, with datacite.json and object.json changed by CHANGE(dc, obj). The
+    head (and ADD_FILES, {logical path: file}, such as the file of a notice),
+    with datacite.json and object.json changed by CHANGE(dc, obj). The
     document version stays; datacite.json gets the Updated date."""
     obj_dir = OCFL / obj_id
     inv = load_inventory(obj_dir)
@@ -743,10 +762,120 @@ def description_version(obj_id, change, message):
     write_json(tmp / "datacite.json", dc)
     write_json(tmp / OBJ, obj)
     files = {p: obj_dir / inv["manifest"][d][0] for p, d in state.items()}
+    for lp, f in (add_files or {}).items():
+        if lp in files:
+            sys.exit(f"{obj_id} has a file {lp} already")
+        files[lp] = Path(f)
     files["datacite.json"], files[OBJ] = tmp / "datacite.json", tmp / OBJ
     inv = add_version(obj_id, files, message)
     shutil.rmtree(tmp, ignore_errors=True)
     return inv
+
+
+def note_from(text, file, folder):
+    """A note (section 9): a text, a file of the content, or both."""
+    note, add = {}, {}
+    if text:
+        note["text"] = text
+    if file:
+        f = Path(file)
+        lp = f"{folder}/{f.name}"
+        note["path"] = lp
+        note["mediaType"] = {".pdf": "application/pdf", ".md": "text/markdown", ".txt": "text/plain",
+                             ".html": "text/html"}.get(f.suffix.lower(), "application/octet-stream")
+        add[lp] = f
+    if not note:
+        sys.exit("a note needs a text, a file, or both")
+    return note, add
+
+
+def notice(args):
+    """A notice about a document version (section 7.3), by a description-only
+    version: kept, unchanged, in every later object version."""
+    d = OCFL / args.id
+    inv = load_inventory(d)
+    if inv is None:
+        sys.exit(f"no object {args.id}")
+    numbers = {doc_version_of(d, inv, v) for v in inv["versions"]}
+    if args.about not in numbers:
+        sys.exit(f"{args.id} has no document version {args.about}")
+    note, add = note_from(args.text, args.file, "notices")
+    note.update(documentVersion=args.about, date=args.date or TODAY)
+
+    def change(dc, obj):
+        obj["notices"] = obj.get("notices", []) + [note]
+    inv = description_version(args.id, change, args.message or
+                              f"Notice about document version {args.about} (description-only version)", add)
+    print(f"{args.id}: {inv['head']} (notice about version {args.about})")
+
+
+def withdraw(args):
+    """Withdraw a document (section 11.1): a description-only version with the
+    status withdrawn, the reason, and the Withdrawn date in datacite.json. The
+    content stays."""
+    reason, add = note_from(args.reason, args.file, "withdrawal")
+    date = args.date or TODAY
+
+    def change(dc, obj):
+        if obj.get("status") == "withdrawn":
+            sys.exit(f"{args.id} is withdrawn already")
+        obj["status"] = "withdrawn"
+        obj["withdrawal"] = {"date": date, "reason": reason}
+        set_date(dc, "Withdrawn", date)
+    inv = description_version(args.id, change, args.message or "Withdrawal (description-only version)", add)
+    print(f"{args.id}: {inv['head']} (withdrawn)")
+
+
+def complete(args):
+    """Add the sources of a document version recorded without them
+    (sourcesMissing, section 7.3): a new object version holding the files of
+    that document version and the sources; its number stays."""
+    d = OCFL / args.id
+    inv = load_inventory(d)
+    if inv is None:
+        sys.exit(f"no object {args.id}")
+    last = None
+    for v in inv["versions"]:
+        if doc_version_of(d, inv, v) == args.version:
+            last = v
+    if last is None:
+        sys.exit(f"{args.id} has no document version {args.version}")
+    obj = read_json(d, inv, OBJ, last)
+    if not obj.get("sourcesMissing"):
+        sys.exit(f"{args.id}: document version {args.version} has its sources already")
+    head = read_json(d, inv, OBJ)
+    dc = read_json(d, inv, "datacite.json", last)
+    state = {p: dg for dg, ps in inv["versions"][last]["state"].items() for p in ps}
+    files = {p: d / inv["manifest"][dg][0] for p, dg in state.items() if p not in ("datacite.json", OBJ)}
+    source = Path(args.source)
+    main = source.name
+    for lp, f in [(main, source)] + [(x.partition("=")[2] or Path(x.partition("=")[0]).name,
+                                      Path(x.partition("=")[0])) for x in args.extra_source or []]:
+        if lp in files:
+            sys.exit(f"{args.id}: version {args.version} has a file {lp} already (completing only adds files)")
+        if not f.is_file():
+            sys.exit(f"no file {f}")
+        files[lp] = f
+    obj.pop("sourcesMissing")
+    obj["mainSource"] = main
+    obj["sourceFormat"] = args.source_format or SOURCE_FORMATS.get(source.suffix.lower(), "application/octet-stream")
+    obj.pop("notices", None)
+    obj.pop("history", None)
+    carry_forward(head, obj, inv, next_object_version(inv))
+    set_date(dc, "Updated", TODAY)
+    fmt = obj["sourceFormat"]
+    if fmt not in dc.get("formats", []):
+        dc["formats"] = [fmt] + dc.get("formats", [])
+    tmp = Path(tempfile.mkdtemp())
+    write_json(tmp / "datacite.json", dc)
+    write_json(tmp / OBJ, obj)
+    files["datacite.json"], files[OBJ] = tmp / "datacite.json", tmp / OBJ
+    for lp, f in carried_files(args.id, inv).items():     # notice files are kept
+        files.setdefault(lp, f)
+    inv = add_version(args.id, files, args.message or
+                      f"Sources of document version {args.version} added (sourcesMissing completed)")
+    shutil.rmtree(tmp, ignore_errors=True)
+    print(f"{args.id}: {inv['head']} (sources of version {args.version})")
 
 
 def relate(args):
@@ -806,6 +935,10 @@ def collect(args):
     holding the current version."""
     init_storage_root()
     coll_id = ARCHIVE["mainCollection"]
+    cinv = load_inventory(OCFL / coll_id)
+    if cinv and read_json(OCFL / coll_id, cinv, "members.json").get("order") == "manual":
+        print(f"{coll_id} is curated (order manual): use osheaf collection sync|update")
+        return
     members = []
     for obj_id, d, inv, cur, obj, dc in documents():
         cite = {"title": dc["titles"][0]["title"],
@@ -1028,7 +1161,8 @@ def index(args):
     if INDEX.get("html"):
         from . import html
         html.render(members)
-        print(f"opensheaf.json, index.html, {len(members)} landing pages and sitemap.xml written")
+        local = sum(1 for m in members if m.get("archive") == ARCHIVE["archiveId"])
+        print(f"opensheaf.json, index.html, {local} landing pages and sitemap.xml written")
         return
     if not INDEX.get("template"):
         print("opensheaf.json written (no index configured)")
@@ -1238,6 +1372,12 @@ def verify_errors():
 
 def verify(args):
     errors = verify_errors()
+    if getattr(args, "remote", False):
+        from . import collections
+        for obj_id, d, inv in objects():
+            if read_json(d, inv, OBJ)["kind"] == "collection":
+                errors += [f"{obj_id}: {e}" for e in
+                           collections.check_remote(read_json(d, inv, "members.json")["members"])]
     for e in errors:
         print(e)
     print("OK" if not errors else f"{len(errors)} problem(s)")
@@ -1274,7 +1414,13 @@ def init(args):
             shutil.copyfile(f, root / "templates" / f.name)
     configure(root)
     init_storage_root()
-    collect(None)
+    if str(getattr(args, "curated", "")).lower() in ("1", "true", "yes"):
+        # a curated collection: members from any archive, in the curator's order
+        from . import collections
+        collections.write(cfg["mainCollection"], [], args.name, "A collection of documents.", "manual",
+                          "Collection created (curated)")
+    else:
+        collect(None)
     index(argparse_namespace(no_html=False))
     print(f"archive created in {root}: edit {CONFIG_NAME} and templates/, then deposit")
 

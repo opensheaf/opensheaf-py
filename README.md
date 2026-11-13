@@ -56,11 +56,16 @@ osheaf init FOLDER --archive-id URI --name NAME --base-url URL --curator "Family
 osheaf deposit ID SOURCE --pdf PAPER.pdf --title T --author "Family, Given|Affiliation" ...
 osheaf deposit ID SOURCE.tm --title T --author ...           (TeXmacs: typeset by the archive)
 osheaf deposit ID --pdf PAPER.pdf --no-source REASON ...
+osheaf notice ID --about N --text "..." [--file erratum.pdf]
+osheaf withdraw ID --reason "..."
+osheaf complete ID --version N --source paper.tex [--extra-source ...]
 osheaf relicense ID --rights cc-by-4.0 --method "..."
 osheaf relate ID --to arxiv:ID|doi:DOI [--relation IsIdenticalTo]
 osheaf collect
+osheaf collection sync [ID] --from collection.yaml
+osheaf collection update [ID]
 osheaf index
-osheaf verify
+osheaf verify [--remote]
 osheaf zenodo ID [--production]
 osheaf arxiv fetch DOWNLOADS --author AUTHOR-ID | ARXIV-ID ...
 osheaf arxiv import DOWNLOADS [ARXIV-ID ...] [--update] [--versions v1,v3]
@@ -98,6 +103,19 @@ osheaf arxiv import DOWNLOADS [ARXIV-ID ...] [--update] [--versions v1,v3]
   available: 2015-08-31
   related: ["IsIdenticalTo:arxiv:1508.07764"]
   ```
+- **notice**, **withdraw**: later statements about a version (an erratum, by
+  a description-only version; notices stay in every later version) and the
+  withdrawal of a document (the content stays; no new versions).
+- **complete**: adds the sources of a version deposited without them
+  (`--no-source`); its number stays.
+- **collection sync / update**: curated collections, with members from this
+  archive or any other (an `https://` address, or a local folder), in the
+  curator's order, each pinned by the SHA-512 of its version's inventory and
+  checked against the checksum file its archive publishes; `update` follows
+  members to their current versions. `osheaf init --curated` makes an archive
+  whose main collection is curated; `osheaf verify --remote` fetches every
+  member and checks its pin. See `osheaf collection --help` and the template
+  [opensheaf/collection-template](https://github.com/opensheaf/collection-template).
 - **relicense**, **relate**: description-only versions (a new licence with the
   authors' agreement; a link to the same work elsewhere).
 - **collect**: a new version of the main collection when a document has a new

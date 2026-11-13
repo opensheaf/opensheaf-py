@@ -294,3 +294,70 @@ def test_yaml_inputs(tmp_path):
     P.configure(P.find_root(root))
     assert P.ARCHIVE["archiveId"] == "tag:example.org,2026:y"
     assert P.verify_errors() == []
+
+
+def make_archive(root, name="T", curated=False):
+    argv = ["init", str(root), "--archive-id", f"tag:example.org,2026:{name}", "--name", name,
+            "--base-url", f"https://example.org/{name}/", "--curator", "Doe, Jane"]
+    run(*(argv + (["--curated"] if curated else [])))
+
+
+def test_notice_withdraw_complete(tmp_path):
+    root = tmp_path / "a"
+    make_archive(root)
+    pdf, src, note = tmp_path / "p.pdf", tmp_path / "p.tex", tmp_path / "erratum.md"
+    pdf.write_bytes(b"%PDF-1.4 p")
+    src.write_text("\\documentclass{article}")
+    note.write_text("Theorem 2 is wrong.")
+    r = ["--root", str(root)]
+    run(*r, "deposit", "lost", "--pdf", str(pdf), "--no-source", "lost", "--title", "T", "--author", "Doe, J")
+    run(*r, "notice", "lost", "--about", "1", "--text", "Theorem 2 is wrong.", "--file", str(note))
+    run(*r, "complete", "lost", "--version", "1", "--source", str(src))
+    pdf2 = tmp_path / "p2.pdf"
+    pdf2.write_bytes(b"%PDF-1.4 p2")
+    run(*r, "deposit", "lost", str(src), "--pdf", str(pdf2), "--title", "T", "--author", "Doe, J")
+    run(*r, "withdraw", "lost", "--reason", "an error")
+    run(*r, "collect")
+    run(*r, "index")
+    assert P.verify_errors() == []
+    d = root / "ocfl" / "lost"
+    inv = P.load_inventory(d)
+    v3 = P.read_json(d, inv, P.OBJ, "v3")
+    assert v3["documentVersion"] == 1 and v3["mainSource"] == "p.tex" and "sourcesMissing" not in v3
+    head = P.read_json(d, inv, P.OBJ)
+    assert head["status"] == "withdrawn" and head["notices"][0]["documentVersion"] == 1
+    assert "notices/erratum.md" in {p for ps in inv["versions"][inv["head"]]["state"].values() for p in ps}
+    with pytest.raises(SystemExit):        # a withdrawn document gets no new versions
+        run(*r, "deposit", "lost", str(src), "--pdf", str(pdf2), "--title", "T", "--author", "Doe, J")
+
+
+def test_curated_collection_across_archives(tmp_path):
+    a, c = tmp_path / "a", tmp_path / "c"
+    make_archive(a, "papers")
+    pdf = tmp_path / "p.pdf"
+    pdf.write_bytes(b"%PDF-1.4 p")
+    for i in ("one", "two"):
+        run("--root", str(a), "deposit", i, "--pdf", str(pdf), "--no-source", "x", "--title", i.title(),
+            "--author", "Doe, J", "--issued", "2020-01-01")
+    run("--root", str(a), "collect")
+    run("--root", str(a), "index")
+    make_archive(c, "reading", curated=True)
+    (tmp_path / "collection.yaml").write_text(
+        f"title: Reading\nmembers:\n  - {{archive: {a}, id: two}}\n  - {{archive: {a}, id: one, follow: no}}\n")
+    run("--root", str(c), "collection", "sync", "--from", str(tmp_path / "collection.yaml"))
+    members = P.read_json(c / "ocfl" / "collection-main", P.load_inventory(c / "ocfl" / "collection-main"),
+                          "members.json")
+    assert [m["id"] for m in members["members"]] == ["two", "one"] and members["order"] == "manual"
+    assert members["members"][0]["archive"] == "tag:example.org,2026:papers"
+    run("--root", str(c), "index")
+    assert P.verify_errors() == []
+    from opensheaf import collections
+    assert collections.check_remote(members["members"]) == []
+    # a new version in the member archive: update follows "two" only
+    run("--root", str(a), "deposit", "two", "--pdf", str(pdf), "--no-source", "x", "--title", "Two",
+        "--author", "Doe, J", "--changes", "again")
+    run("--root", str(c), "collection", "update")
+    new = P.read_json(c / "ocfl" / "collection-main", P.load_inventory(c / "ocfl" / "collection-main"),
+                      "members.json")["members"]
+    assert new[0]["version"] == "v2" and new[1]["version"] == "v1"
+    assert collections.check_remote(new) == []

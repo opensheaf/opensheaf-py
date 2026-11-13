@@ -487,6 +487,8 @@ def import_paper(folder, taken, report, dry, texmacs=None, licences=None, existi
             d = P.OCFL / obj_id
             inv0 = P.load_inventory(d)
             P.carry_forward(P.read_json(d, inv0, P.OBJ) if inv0 else None, obj, inv0, P.next_object_version(inv0))
+            for lp, f in P.carried_files(obj_id, inv0).items():
+                content.setdefault(lp, f)
             P.write_json(tmp / "datacite.json", datacite)
             P.write_json(tmp / P.OBJ, obj)
             content["datacite.json"] = tmp / "datacite.json"

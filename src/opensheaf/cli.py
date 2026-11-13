@@ -8,6 +8,10 @@ Commands:
   deposit ID [SOURCE]    deposit a document (TeXmacs, or any source with --pdf)
   relicense ID           description-only version with a new licence
   relate ID              description-only version linking the same work elsewhere
+  notice ID              a notice about a document version
+  withdraw ID            withdraw a document (the content stays)
+  complete ID            add the sources of a version deposited without them
+  collection sync|update curated collections, with members from any archive
   collect                new version of the main collection when needed
   index                  write opensheaf.json and the readable index
   verify                 check the archive (section 14 of the specification)
@@ -94,11 +98,43 @@ def build_parser():
                     help="take the options from a YAML or JSON file (a list: several, in order)")
     rl.set_defaults(func=core.relate)
 
+    nt = sub.add_parser("notice", help="a notice about a document version (description-only)")
+    nt.add_argument("id")
+    nt.add_argument("--about", type=int, required=True, help="the document version it is about")
+    nt.add_argument("--text", help="the notice (plain text)")
+    nt.add_argument("--file", help="a file with the full statement (PDF, Markdown, ...)")
+    nt.add_argument("--date", help="default: today")
+    nt.add_argument("--message")
+    nt.set_defaults(func=core.notice)
+    w = sub.add_parser("withdraw", help="withdraw a document (description-only; the content stays)")
+    w.add_argument("id")
+    w.add_argument("--reason", help="why (plain text)")
+    w.add_argument("--file", help="a file with the full statement")
+    w.add_argument("--date", help="default: today")
+    w.add_argument("--message")
+    w.set_defaults(func=core.withdraw)
+    c = sub.add_parser("complete", help="add the sources of a version deposited without them")
+    c.add_argument("id")
+    c.add_argument("--version", type=int, required=True, help="the document version")
+    c.add_argument("--source", required=True, help="the main source")
+    c.add_argument("--extra-source", action="append", help="FILE[=LOGICAL/PATH]")
+    c.add_argument("--source-format")
+    c.add_argument("--message")
+    c.set_defaults(func=core.complete)
+    co = sub.add_parser("collection", help="curated collections, with members from any archive")
+    co.add_argument("action", choices=["sync", "update"])
+    co.add_argument("collection", nargs="?", help="the collection object (default: the main collection)")
+    co.add_argument("--from", dest="from_file", metavar="FILE", help="sync: collection.yaml")
+    co.add_argument("--message")
+    co.set_defaults(func=None)
     sub.add_parser("collect", help="new version of the main collection when needed").set_defaults(func=core.collect)
     i = sub.add_parser("index", help="write opensheaf.json and the readable index")
     i.add_argument("--no-html", action="store_true")
     i.set_defaults(func=core.index)
-    sub.add_parser("verify", help="check the archive").set_defaults(func=core.verify)
+    v = sub.add_parser("verify", help="check the archive")
+    v.add_argument("--remote", action="store_true",
+                   help="also fetch the members of collections from their archives and check their pins")
+    v.set_defaults(func=core.verify)
 
     from . import zenodo
     zenodo.add_parser(sub, core)
@@ -117,6 +153,9 @@ def build_parser():
     n.add_argument("--curator", help='"Family, Given"')
     n.add_argument("--affiliation")
     n.add_argument("--contact", help="a URL or mailto: address")
+    n.add_argument("--curated", action="store_true",
+                   help="the main collection is curated (osheaf collection sync), e.g. for an archive of "
+                   "collections of other archives' documents")
     n.add_argument("--from", dest="from_file", metavar="FILE",
                     help="take the options from a YAML or JSON file (a list: several, in order)")
     n.set_defaults(func=None)
@@ -166,6 +205,13 @@ def main(argv=None):
     if args.cmd == "arxiv":
         from . import arxiv
         return arxiv.main(args.rest)
+    if args.cmd == "collection":
+        from . import collections
+        if args.action == "sync":
+            if not args.from_file:
+                p.error("collection sync needs --from collection.yaml")
+            return collections.sync(args)
+        return collections.update(args)
     args.func(args)
 
 
