@@ -1,3 +1,4 @@
+# Generated from literate/60-command-line.md by tools/tangle.py: edit the document, not this file.
 """Inputs from YAML (or JSON) files: `osheaf deposit --from paper.yaml`.
 
 A file holds the same options as the command line, with their names (`title`,

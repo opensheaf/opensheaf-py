@@ -1,3 +1,4 @@
+# Generated from literate/70-tests.md by tools/tangle.py: edit the document, not this file.
 """Tests of the archive machinery on small archives built in temporary
 folders (no TeXmacs, no network)."""
 

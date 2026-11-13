@@ -1,3 +1,4 @@
+# Generated from literate/20-collections.md by tools/tangle.py: edit the document, not this file.
 """Mirrors (section 10.2 of the specification): a copy, in this archive's
 storage root, of another archive's object, byte for byte and with all its
 versions, kept under its own identifier.

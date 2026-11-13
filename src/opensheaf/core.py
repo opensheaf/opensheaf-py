@@ -1,3 +1,4 @@
+# Generated from literate/10-core.md by tools/tangle.py: edit the document, not this file.
 """The OpenSheaf archive: objects, document versions, collections, the
 discovery document, the index and the checks (specification 0.1,
 https://opensheaf.org).

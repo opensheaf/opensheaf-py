@@ -1,3 +1,4 @@
+# Generated from literate/20-collections.md by tools/tangle.py: edit the document, not this file.
 """Accepting a vetted version (a journal, a series, a curated archive):
 
     osheaf accept ARCHIVE-URL ID --version vN [--as NEW-ID] [--stage VoR]

@@ -1,3 +1,4 @@
+# Generated from literate/60-command-line.md by tools/tangle.py: edit the document, not this file.
 """osheaf: keep an OpenSheaf archive (specification 0.1, https://opensheaf.org).
 
 The archive is the folder given with --root, or else the nearest folder above

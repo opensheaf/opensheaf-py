@@ -1,0 +1,17 @@
+#!/bin/sh
+# Generated from literate/90-tangle.md by tools/tangle.py: edit the document, not this file.
+# Tangle the program out of literate/, checking that the tangler
+# reproduces itself, then weave the website into site/.
+set -e
+cd "$(dirname "$0")/.."
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+python3 tools/tangle.py --out "$tmp/a"
+python3 "$tmp/a/tools/tangle.py" --out "$tmp/b"
+diff -r "$tmp/a" "$tmp/b"
+python3 "$tmp/b/tools/tangle.py"
+if python3 -c "import markdown, pygments" 2>/dev/null; then
+    python3 tools/weave.py --out site
+else
+    echo "not weaving: pip install markdown pygments" >&2
+fi
