@@ -1432,6 +1432,8 @@ def init(args):
         collect(None)
     index(argparse_namespace(no_html=False))
     print(f"archive created in {root}: edit {CONFIG_NAME} and templates/, then deposit")
+    print("note: OpenSheaf 0.1 is a draft; until version 1.0 a revision may change the format in"
+          " incompatible ways, and archives may have to be rebuilt or migrated")
 
 
 def argparse_namespace(**kw):

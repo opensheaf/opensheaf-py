@@ -22,6 +22,9 @@ Commands:
 
 deposit, relicense, relate and init also take their options from a YAML or
 JSON file: --from FILE (a list of entries: several, in order).
+
+Warning: OpenSheaf 0.1 is a draft. Until version 1.0, a revision may change
+the format in incompatible ways, and archives may have to be rebuilt.
 """
 
 import argparse

@@ -6,6 +6,13 @@
 [![Python](https://img.shields.io/badge/python-3.9%E2%80%933.13-blue)](pyproject.toml)
 [![licence: GPL v3+](https://img.shields.io/badge/licence-GPL--3.0--or--later-blue)](LICENSE)
 
+> [!WARNING]
+> **Draft.** OpenSheaf 0.1 is a draft specification. Until version 1.0, any
+> revision may change the format in incompatible ways (one already did:
+> `provenance.json` became `object.json`). Archives and collections made now
+> may have to be rebuilt or migrated, and the tools follow the latest draft.
+> Do not rely on it yet for anything you cannot redo.
+
 The unit tests run on Python 3.9 and 3.13; the testing grounds of the two
 templates build archives and collections from the
 [example papers](https://github.com/opensheaf/example-papers) and go through
