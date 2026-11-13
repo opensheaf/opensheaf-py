@@ -207,7 +207,8 @@ tools/build
 which tangles the files (checking that the tangler, itself tangled from
 [literate/90-tangle.md](literate/90-tangle.md), reproduces itself) and, if
 the packages `markdown` and `pygments` are installed, weaves the documents
-into a website in `site/`. `tools/tangle.py --where FILE:LINE` tells which
+into a website in `site/`, published at
+[opensheaf.github.io/opensheaf-py](https://opensheaf.github.io/opensheaf-py/). `tools/tangle.py --where FILE:LINE` tells which
 line of which document a line of a tangled file comes from. The continuous
 integration checks that the files are exactly what the documents say.
 
