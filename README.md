@@ -174,6 +174,27 @@ osheaf arxiv import DOWNLOADS [ARXIV-ID ...] [--update] [--versions v1,v3]
   a version that is not on arXiv is placed by importing up to the arXiv
   version before it, depositing it, and continuing with `--update`.
 
+## A literate program
+
+The source of these tools is a literate program: the Markdown documents in
+[literate/](literate/index.md) explain the code in the order in which it is
+best understood, and the Python files under `src/` and `tests/` are
+*tangled* out of them (in the style of Kragen Sitaker's
+[handaxeweb](https://github.com/kragen/peg-bootstrap/blob/master/handaxeweb.md)).
+The tangled files are kept in the repository, so the package installs as
+usual; to change the code, edit the documents and run
+
+```
+tools/build
+```
+
+which tangles the files (checking that the tangler, itself tangled from
+[literate/90-tangle.md](literate/90-tangle.md), reproduces itself) and, if
+the packages `markdown` and `pygments` are installed, weaves the documents
+into a website in `site/`. `tools/tangle.py --where FILE:LINE` tells which
+line of which document a line of a tangled file comes from. The continuous
+integration checks that the files are exactly what the documents say.
+
 ## The first archive
 
 [mgubi.org/papers](https://mgubi.org/papers/)

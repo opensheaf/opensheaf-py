@@ -1,86 +1,70 @@
-Tests
-========================================
+The tests
+=========
 
-## `tests/test_core.py`
+The tests check the archive machinery on small archives built in temporary
+folders. They need neither TeXmacs nor the network: the sources are LaTeX
+files of one line, the PDFs a few bytes that start like a PDF, and the
+"other archives" of the tests on collections are folders next to the
+first. They run with `pytest`, on every push, on the oldest and the newest
+supported Python.
+
+There are two kinds of tests. The first kind writes object versions by
+hand, without the deposit command, so as to build archives that the
+command would refuse to make, and checks that verification (section 14 of
+the specification) finds what is wrong with them; it tests the rules of
+document versions of section 7.3. The second kind runs `osheaf` as a user
+would, through the `main` function of the [command line](60-command-line.md),
+and checks the files it writes: the deposits, the website, files of
+options, and the work across archives (collections, mirrors, accepted
+copies), explained in the chapters on the core and on collections. A few
+tests in between check small functions on their own.
+
+All the tests are in one file, `tests/test_core.py`, in this order. The
+prose below follows it, except that the helper `make_archive` is explained
+with `run`, before the first test that uses it.
 
     # in tests/test_core.py:
-    <<test_core.py: CONFIG>>
+    <<test: the imports of the tests>>
+
+    <<test: the configuration of a test archive>>
 
 
-    <<test_core.py: archive>>
+    <<test: a fresh archive for each test>>
 
 
-    <<test_core.py: put>>
+    <<test: writing an object version by hand>>
 
 
-    <<test_core.py: FILES1>>
+    <<test: three document versions>>
 
 
-    <<test_core.py: finish>>
+    <<test: closing and verifying an archive>>
 
 
-    <<test_core.py: test_simple_archive_verifies>>
+    <<test: the rules of document versions>>
 
 
-    <<test_core.py: test_gap_in_numbering_is_an_error>>
+    <<test: small functions>>
 
 
-    <<test_core.py: test_same_number_with_other_files_is_an_error>>
+    <<test: running osheaf>>
 
 
-    <<test_core.py: test_version_found_later_keeps_the_current_version>>
+    <<test: deposits through osheaf>>
 
 
-    <<test_core.py: test_description_only_version_updates_the_history>>
+    <<test: making an archive with osheaf init>>
 
 
-    <<test_core.py: test_notices_are_kept>>
+    <<test: notices, withdrawal and completion through osheaf>>
 
 
-    <<test_core.py: test_sources_missing>>
+    <<test: collections, mirrors and accepted copies>>
 
+The tests use the core under the short name `P`, as the other modules of
+the package do, and the arXiv module for its text functions.
 
-    <<test_core.py: test_member_order>>
-
-
-    <<test_core.py: test_clean_text>>
-
-
-    <<test_core.py: test_preamble_macros>>
-
-
-    <<test_core.py: test_tm_escape>>
-
-
-    <<test_core.py: run>>
-
-
-    <<test_core.py: test_init_deposit_website>>
-
-
-    <<test_core.py: test_deposit_needs_pdf_or_texmacs>>
-
-
-    <<test_core.py: test_yaml_inputs>>
-
-
-    <<test_core.py: make_archive>>
-
-
-    <<test_core.py: test_notice_withdraw_complete>>
-
-
-    <<test_core.py: test_curated_collection_across_archives>>
-
-
-    <<test_core.py: test_mirror>>
-
-
-    <<test_core.py: test_accept_vetted_version>>
-
-Prose for test_core.py: CONFIG.
-
-    # in test_core.py: CONFIG:
+    # in test: the imports of the tests:
     """Tests of the archive machinery on small archives built in temporary
     folders (no TeXmacs, no network)."""
 
@@ -93,6 +77,17 @@ Prose for test_core.py: CONFIG.
 
     from opensheaf import arxiv, core as P
 
+Archives built by hand
+----------------------
+
+### A test archive
+
+The configuration of the archives built by hand is the content of an
+`osheaf.json`, with only what the core needs: the identifier of the
+archive, its name and address, the identifier of its main collection, the
+curator, and the depositor recorded in the inventories (section 7.1).
+
+    # in test: the configuration of a test archive:
     CONFIG = {
         "archiveId": "tag:example.org,2026:test",
         "name": "Test archive",
@@ -102,9 +97,13 @@ Prose for test_core.py: CONFIG.
         "depositor": {"name": "Jane Doe", "address": "https://example.org/jane"},
     }
 
-Prose for test_core.py: archive.
+The fixture `archive` gives each test that asks for it a new archive: a
+temporary folder with that configuration and an empty storage root. The
+core keeps the paths of the archive it works on in module variables, set
+by `P.configure`; so the fixture configures the core, and every later call
+of the test acts on this archive. The folder is removed after the test.
 
-    # in test_core.py: archive:
+    # in test: a fresh archive for each test:
     @pytest.fixture
     def archive():
         root = Path(tempfile.mkdtemp())
@@ -114,9 +113,25 @@ Prose for test_core.py: archive.
         yield root
         shutil.rmtree(root, ignore_errors=True)
 
-Prose for test_core.py: put.
+### Writing object versions directly
 
-    # in test_core.py: put:
+`put` adds one object version to an object, holding document version N
+with the given files. It does by hand what a deposit does, but decides
+nothing: the document version number is whatever the test says, which is
+how the tests make the mistakes that verification must find.
+
+It writes an `object.json` and a `datacite.json` of the minimal form
+(sections 8 and 9), a document with a LaTeX main source and a PDF
+rendition. `extra_obj` adds or replaces fields of `object.json`, such as
+notices; with `sourcesMissing` the version has no main source, as section
+9 requires. The one thing taken from the core is `carry_forward`, which
+keeps the notices of the previous head and maintains the history: with
+`after`, a document version is placed after another (a version found
+later); with `description_only`, the version replaces the entry of its
+document version in the history instead. Finally `P.add_version` writes
+the files as a new OCFL version of the object.
+
+    # in test: writing an object version by hand:
     def put(obj_id, n, files, *, after=None, available="2026-01-01", message="test", extra_obj=None,
             description_only=False):
         """Add an object version holding document version N with FILES ({name: bytes})."""
@@ -149,24 +164,35 @@ Prose for test_core.py: put.
         shutil.rmtree(tmp)
         return inv
 
-Prose for test_core.py: FILES1.
+Three sets of files, each a source and a PDF, stand for three different
+document versions: what matters to the rules is only whether two versions
+hold the same files or not.
 
-    # in test_core.py: FILES1:
+    # in test: three document versions:
     FILES1 = {"main.tex": b"\\documentclass{article}one", "paper.pdf": b"%PDF one"}
     FILES2 = {"main.tex": b"\\documentclass{article}two", "paper.pdf": b"%PDF two"}
     FILES3 = {"main.tex": b"\\documentclass{article}three", "paper.pdf": b"%PDF three"}
 
-Prose for test_core.py: finish.
+`finish` does what one does after deposits: a new version of the main
+collection, the discovery document, and the checks. It returns the list of
+errors found, empty for a valid archive.
 
-    # in test_core.py: finish:
+    # in test: closing and verifying an archive:
     def finish():
         P.collect(None)
         P.write_json(P.ROOT / "opensheaf.json", P.discovery())
         return P.verify_errors()
 
-Prose for test_core.py: test_simple_archive_verifies.
+### The rules of document versions
 
-    # in test_core.py: test_simple_archive_verifies:
+The tests of this section follow section 7.3 of the specification. The
+first builds the simplest valid archive: two document versions of one
+paper and one of another. The current version of `paper-a` is its object
+version `v2`, and the main collection, ordered by date of issue
+(`issued-desc`, section 10.2), pins each document at the object version
+that holds its current version.
+
+    # in test: the rules of document versions:
     def test_simple_archive_verifies(archive):
         put("paper-a", 1, FILES1)
         put("paper-a", 2, FILES2, available="2026-02-01")
@@ -180,26 +206,34 @@ Prose for test_core.py: test_simple_archive_verifies.
         assert members["order"] == "issued-desc"
         assert {m["id"]: m["version"] for m in members["members"]} == {"paper-a": "v2", "paper-b": "v1"}
 
-Prose for test_core.py: test_gap_in_numbering_is_an_error.
+Document versions are numbered from 1 without gaps. A paper whose second
+object version claims to be document version 3 breaks the numbering.
 
-    # in test_core.py: test_gap_in_numbering_is_an_error:
+    # in test: the rules of document versions:
     def test_gap_in_numbering_is_an_error(archive):
         put("paper-a", 1, FILES1)
         put("paper-a", 3, FILES2)
         errors = finish()
         assert any("breaks the numbering" in e for e in errors)
 
-Prose for test_core.py: test_same_number_with_other_files_is_an_error.
+A new number is given exactly when new files are added; conversely, two
+object versions with the same document version must hold the same files.
+Here the second object version reuses number 1 with other files.
 
-    # in test_core.py: test_same_number_with_other_files_is_an_error:
+    # in test: the rules of document versions:
     def test_same_number_with_other_files_is_an_error(archive):
         put("paper-a", 1, FILES1)
         put("paper-a", 1, FILES2)
         assert any("other files than document version 1" in e for e in finish())
 
-Prose for test_core.py: test_version_found_later_keeps_the_current_version.
+A version found later, earlier in the work than the current one, is
+deposited with `after`: it gets the next number, 3, but its place in the
+history is after document version 1. The object then has a `history`,
+listing the object versions in the order of the work, and the current
+version, the last entry of the history, stays `v2`: dates and numbers
+never decide it.
 
-    # in test_core.py: test_version_found_later_keeps_the_current_version:
+    # in test: the rules of document versions:
     def test_version_found_later_keeps_the_current_version(archive):
         put("paper-a", 1, FILES1)
         put("paper-a", 2, FILES2)
@@ -212,9 +246,13 @@ Prose for test_core.py: test_version_found_later_keeps_the_current_version.
         assert P.current_version(d, inv) == "v2"
         assert finish() == []
 
-Prose for test_core.py: test_description_only_version_updates_the_history.
+The same archive then gets a description-only version of document version
+2: the same files, a new object version `v4`. The entry of document
+version 2 in the history becomes `v4`, the last object version holding
+it, since it carries the most complete description; so `v4` is now the
+current version.
 
-    # in test_core.py: test_description_only_version_updates_the_history:
+    # in test: the rules of document versions:
     def test_description_only_version_updates_the_history(archive):
         put("paper-a", 1, FILES1)
         put("paper-a", 2, FILES2)
@@ -227,9 +265,11 @@ Prose for test_core.py: test_description_only_version_updates_the_history.
         assert P.current_version(d, inv) == "v4"
         assert finish() == []
 
-Prose for test_core.py: test_notices_are_kept.
+A notice about document version 1 is added by a description-only version;
+a later document version must keep it, unchanged. `carry_forward` copies
+it, and the verifier checks that every notice stays.
 
-    # in test_core.py: test_notices_are_kept:
+    # in test: the rules of document versions:
     def test_notices_are_kept(archive):
         notice = {"documentVersion": 1, "date": "2026-02-01", "text": "Theorem 2 is wrong as stated."}
         put("paper-a", 1, FILES1)
@@ -239,9 +279,11 @@ Prose for test_core.py: test_notices_are_kept.
         assert P.read_json(d, P.load_inventory(d), P.OBJ)["notices"] == [notice]
         assert finish() == []
 
-Prose for test_core.py: test_sources_missing.
+A version may have no sources, only its PDF, as for some old versions on
+arXiv. Its `object.json` then says why in `sourcesMissing` and names no
+main source, and the archive is valid.
 
-    # in test_core.py: test_sources_missing:
+    # in test: the rules of document versions:
     def test_sources_missing(archive):
         put("paper-a", 1, {"paper.pdf": b"%PDF only"},
             extra_obj={"sourcesMissing": {"text": "arXiv keeps only the PDF of this version"}})
@@ -250,17 +292,32 @@ Prose for test_core.py: test_sources_missing.
         assert "mainSource" not in obj and obj["sourcesMissing"]
         assert finish() == []
 
-Prose for test_core.py: test_member_order.
+Small functions
+---------------
 
-    # in test_core.py: test_member_order:
+Four tests check functions on their own, without an archive.
+
+The order `issued-desc` of section 10.2 sorts the members by their
+`Issued` date, newest first, then by their `Available` date; members with
+neither date come last, and ties are broken by the object identifier, so
+that the order is reproducible. Here `a` and `b` have the same date and
+`c` has none.
+
+    # in test: small functions:
     def test_member_order():
         m = lambda i, issued, avail=None: {"id": i, "cite": {"issued": issued, "available": avail}}
         out = P.member_order([m("b", "2020-01-01"), m("a", "2020-01-01"), m("c", None), m("d", "2024-05-01")])
         assert [x["id"] for x in out] == ["d", "a", "b", "c"]
 
-Prose for test_core.py: test_clean_text.
+Titles and abstracts imported from arXiv are LaTeX; the specification
+wants plain text with mathematics between single dollars (section 8). The
+arXiv chapter explains `clean_text`: quotes and accents outside
+mathematics become Unicode, display mathematics becomes `$...$`, and the
+authors' macros without arguments are replaced by their definitions.
+`unknown_macros` lists the macros of the mathematics that MathJax would
+not know.
 
-    # in test_core.py: test_clean_text:
+    # in test: small functions:
     def test_clean_text():
         s = r"Comment on ``Dynamic behavior'' of H\"older drift, It\^o, \[ \R^3 \] and $\be^2<4\pi$"
         out = arxiv.clean_text(s, {"R": r"\mathbb{R}", "be": r"\beta"})
@@ -268,30 +325,68 @@ Prose for test_core.py: test_clean_text.
                       "${\\mathbb{R}}^3$ and ${\\beta}^2<4\\pi$"
         assert arxiv.unknown_macros(r"$\FF L^p$ and $\alpha$") == ["FF"]
 
-Prose for test_core.py: test_preamble_macros.
+The definitions come from the preamble of the source, by
+`preamble_macros`: only macros without arguments, and only those defined
+before `\begin{document}`.
 
-    # in test_core.py: test_preamble_macros:
+    # in test: small functions:
     def test_preamble_macros():
         tex = r"\newcommand{\R}{\mathbb{R}}\def\be{\beta}\newcommand{\F}[1]{x}\begin{document}\newcommand{\Z}{z}"
         assert arxiv.preamble_macros(tex) == {"R": r"\mathbb{R}", "be": r"\beta"}
 
-Prose for test_core.py: test_tm_escape.
+Text written into TeXmacs documents is escaped by `tm_escape`: the
+characters special to TeXmacs become their symbols, and a letter outside
+the Cork encoding becomes a Unicode symbol `\<#17A\>`. `tex_text` turns
+TeX accents and special letters of author names into Unicode.
 
-    # in test_core.py: test_tm_escape:
+    # in test: small functions:
     def test_tm_escape():
         assert P.tm_escape("Brzeźniak a|b <x>") == "Brze\\<#17A\\>niak a\\|b <less>x<gtr>"
         assert P.tex_text(r"H{\o}egh It\^o Pawe{\l}") == "Høegh Itô Paweł"
 
-Prose for test_core.py: run.
+Through the command line
+------------------------
 
-    # in test_core.py: run:
+### Running `osheaf`
+
+The other tests run commands as a user types them, with `run`, which calls
+`main` of the command line with a list of arguments. An error of the
+command is a `SystemExit`, which a test expects with `pytest.raises`.
+
+    # in test: running osheaf:
     def run(*argv):
         from opensheaf import cli
         cli.main(list(argv))
 
-Prose for test_core.py: test_init_deposit_website.
+Since every command configures the core for its archive, the checks a
+test makes afterwards with `P.verify_errors()` and `P.ARCHIVE` concern the
+archive of the last command run. The tests therefore end with a command
+(usually `index`) on the archive they then verify.
 
-    # in test_core.py: test_init_deposit_website:
+Most tests begin by creating archives with `osheaf init`. `make_archive`
+gives each a name, from which come its identifier and address, and makes
+its main collection curated if asked.
+
+    # in test: making an archive with osheaf init:
+    def make_archive(root, name="T", curated=False):
+        argv = ["init", str(root), "--archive-id", f"tag:example.org,2026:{name}", "--name", name,
+                "--base-url", f"https://example.org/{name}/", "--curator", "Doe, Jane"]
+        run(*(argv + (["--curated"] if curated else [])))
+
+### Deposits and the website
+
+The first test follows the life of a small archive kept without TeXmacs.
+After `init`, it deposits a LaTeX source with its PDF, with an abstract
+and a licence; then a second version of the same paper with only a change
+note; then a paper of which only the PDF remains. After `collect` and
+`index` the archive must verify. The second version must have kept the
+abstract and the licence of the first, since a new version inherits them
+unless they are given. The website must show the title with its
+mathematics in the `citation_title` tag read by Google Scholar, both
+versions with the change note, the reason why the sources of the old notes
+are missing, and both papers in the index and in the sitemap.
+
+    # in test: deposits through osheaf:
     def test_init_deposit_website(tmp_path):
         """A house-made archive without TeXmacs: init, a LaTeX deposit with its
         PDF, a new version keeping abstract and licence, a PDF-only deposit, the
@@ -327,9 +422,10 @@ Prose for test_core.py: test_init_deposit_website.
         assert "first-paper" in (root / "index.html").read_text()
         assert "paper/old-notes/" in (root / "sitemap.xml").read_text()
 
-Prose for test_core.py: test_deposit_needs_pdf_or_texmacs.
+The archive typesets only TeXmacs sources. Any other source must come
+with its PDF, and a deposit of a LaTeX source alone is refused.
 
-    # in test_core.py: test_deposit_needs_pdf_or_texmacs:
+    # in test: deposits through osheaf:
     def test_deposit_needs_pdf_or_texmacs(tmp_path):
         root = tmp_path / "archive"
         run("init", str(root), "--archive-id", "tag:example.org,2026:t", "--name", "T",
@@ -339,9 +435,26 @@ Prose for test_core.py: test_deposit_needs_pdf_or_texmacs.
         with pytest.raises(SystemExit):
             run("--root", str(root), "deposit", "p", str(src), "--title", "T", "--author", "Doe, J")
 
-Prose for test_core.py: test_yaml_inputs.
+### Files of options
 
-    # in test_core.py: test_yaml_inputs:
+The next test checks the files of options of the command line. The
+archive is created from `archive.yaml`. The paper lives in a folder of
+its own with a figure in a sub-folder, and `paper.yaml` holds two entries,
+two versions of the same paper, deposited in order with one command. The
+first entry uses every convenience: plural keys, an extra source and an
+author written as mappings, an abstract of two paragraphs, a relation.
+Its values are those a converting YAML reader would spoil: the arXiv
+identifier `2611.14296`, the date `2025-01-02`, the version `1.10` in the
+change note. The test checks that they arrive as written, that the paths
+were read relative to the file, and that the second version inherits the
+licence.
+
+Then three more things: a title given on the command line overrides the
+one of the file; a file with an unknown key (`titel`) is refused; and an
+archive whose configuration is `osheaf.yaml` instead of `osheaf.json` is
+found, read and verified like any other.
+
+    # in test: deposits through osheaf:
     def test_yaml_inputs(tmp_path):
         """init and deposits from YAML: values stay text, paths are relative to
         the file, a list deposits in order, the command line overrides, unknown
@@ -416,17 +529,20 @@ Prose for test_core.py: test_yaml_inputs.
         assert P.ARCHIVE["archiveId"] == "tag:example.org,2026:y"
         assert P.verify_errors() == []
 
-Prose for test_core.py: make_archive.
+### Notices, withdrawal and completion
 
-    # in test_core.py: make_archive:
-    def make_archive(root, name="T", curated=False):
-        argv = ["init", str(root), "--archive-id", f"tag:example.org,2026:{name}", "--name", name,
-                "--base-url", f"https://example.org/{name}/", "--curator", "Doe, Jane"]
-        run(*(argv + (["--curated"] if curated else [])))
+This test goes through the later statements about a document. A paper is
+deposited without its sources (object version `v1`); a notice about its
+document version 1 is added, with a short text and a file in Markdown
+(`v2`); the sources are found and the version is completed (`v3`); a
+second document version follows (`v4`); and the paper is withdrawn
+(`v5`). The completed version keeps its number 1, names its main source
+and no longer has `sourcesMissing`; the head is withdrawn and still has
+the notice, whose file stays in the content under `notices/`. Finally, a
+withdrawn document gets no new versions (section 11.1): the last deposit
+is refused.
 
-Prose for test_core.py: test_notice_withdraw_complete.
-
-    # in test_core.py: test_notice_withdraw_complete:
+    # in test: notices, withdrawal and completion through osheaf:
     def test_notice_withdraw_complete(tmp_path):
         root = tmp_path / "a"
         make_archive(root)
@@ -455,9 +571,26 @@ Prose for test_core.py: test_notice_withdraw_complete.
         with pytest.raises(SystemExit):        # a withdrawn document gets no new versions
             run(*r, "deposit", "lost", str(src), "--pdf", str(pdf2), "--title", "T", "--author", "Doe, J")
 
-Prose for test_core.py: test_curated_collection_across_archives.
+Across archives
+---------------
 
-    # in test_core.py: test_curated_collection_across_archives:
+The last three tests use two archives in neighbouring folders: one of
+authors, and a second one that collects, mirrors or accepts their
+documents. A local folder stands for the address of an archive, so no
+network is needed.
+
+### A curated collection
+
+Archive `papers` has two documents. Archive `reading` is created with a
+curated main collection and synchronised from a `collection.yaml` that
+lists `two` before `one`, the second with `follow: no`. The members keep
+the curator's order (`manual`, section 10.2), record the identifier of
+their archive, and their pins are confirmed by `check_remote`, which reads
+the other archive as a verifier would (section 14). Then `two` gets a new
+version in its archive; `collection update` moves `two` to it and leaves
+`one`, which does not follow, at its version.
+
+    # in test: collections, mirrors and accepted copies:
     def test_curated_collection_across_archives(tmp_path):
         a, c = tmp_path / "a", tmp_path / "c"
         make_archive(a, "papers")
@@ -489,9 +622,19 @@ Prose for test_core.py: test_curated_collection_across_archives.
         assert new[0]["version"] == "v2" and new[1]["version"] == "v1"
         assert collections.check_remote(new) == []
 
-Prose for test_core.py: test_mirror.
+### Mirrors
 
-    # in test_core.py: test_mirror:
+Mirroring copies a whole object and is allowed only if every version may
+be redistributed (section 10.4). The authors' archive has `open`, two
+versions under CC BY (the second inherits the licence), and `closed`,
+with all rights reserved. A curated archive `journal` cannot mirror
+`closed`. Its collection lists both, `open` with `mirror: yes`: `open` is
+copied with every version and listed with the journal as a mirror, while
+`closed` is only referenced. When the authors' archive disappears (its
+folder is moved away), the remote check finds `closed` no longer, but
+still confirms `open` on the copy.
+
+    # in test: collections, mirrors and accepted copies:
     def test_mirror(tmp_path):
         """Open objects are mirrored (every version, checked), closed ones refused;
         a collection checks a mirrored member on the copy when its archive is gone."""
@@ -524,9 +667,22 @@ Prose for test_core.py: test_mirror.
         errors = collections.check_remote(members)
         assert len(errors) == 1 and "closed" in errors[0]          # the mirrored member is checked on the copy
 
-Prose for test_core.py: test_accept_vetted_version.
+### Accepted copies
 
-    # in test_core.py: test_accept_vetted_version:
+A journal accepts one version of a paper (section 10.5). The authors
+deposit the paper twice, the first time with all rights reserved and the
+second under CC BY. Accepting the first is refused, since only an open
+licence allows the copy; accepting the second, as version of record with
+the journal's terms as agreement, makes the journal's document. When the
+authors deposit a third version, the journal's copy does not change: it
+has still one object version, whose PDF is byte for byte the accepted
+one, and whose `object.json` records its source as `paper v2`, pinned by
+the SHA-512 of that version's inventory. A correction is the journal's
+decision: accepting the authors' `v3` makes the journal's document version
+2. (`--licence-checked` is given there, though `v3` has inherited the open
+licence of `v2`.)
+
+    # in test: collections, mirrors and accepted copies:
     def test_accept_vetted_version(tmp_path):
         """A journal accepts one version (byte for byte, with its source and pin);
         the authors' later versions change nothing; a correction is the journal's
