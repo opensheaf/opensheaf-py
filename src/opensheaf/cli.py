@@ -15,6 +15,9 @@ Commands:
   arxiv fetch            download papers from arXiv (no archive needed)
   arxiv import           import downloaded arXiv papers into the archive
   help-config            describe osheaf.json
+
+deposit, relicense, relate and init also take their options from a YAML or
+JSON file: --from FILE (a list of entries: several, in order).
 """
 
 import argparse
@@ -32,7 +35,7 @@ def build_parser():
 
     d = sub.add_parser("deposit", help="deposit a document, or a new document version",
                        description=core.deposit.__doc__)
-    d.add_argument("id")
+    d.add_argument("id", nargs="?")
     d.add_argument("source", nargs="?", help="the main source (.tm: typeset by the archive; "
                    "anything else: give the PDF with --pdf)")
     d.add_argument("--pdf", help="the PDF of this version (required unless the source is TeXmacs)")
@@ -42,11 +45,11 @@ def build_parser():
     d.add_argument("--abstract", help="the abstract (plain text, mathematics in $...$)")
     d.add_argument("--abstract-file", help="a UTF-8 file with the abstract (paragraphs separated by blank lines)")
     d.add_argument("--keyword", action="append", help="a keyword (repeatable)")
-    d.add_argument("--language", default="en")
+    d.add_argument("--language", help="default: en")
     d.add_argument("--toolchain", action="append", metavar="NAME=VERSION",
                    help="a tool that produced the PDF (repeatable), e.g. pdflatex=TeX Live 2025")
-    d.add_argument("--title", required=True)
-    d.add_argument("--author", action="append", required=True,
+    d.add_argument("--title")
+    d.add_argument("--author", action="append",
                    help='"Family, Given|Affiliation", as printed in the document')
     d.add_argument("--available", "--date", dest="available",
                    help="when this version first became public (default: today, the deposit)")
@@ -66,23 +69,29 @@ def build_parser():
     d.add_argument("--extra-source", action="append",
                    help="FILE[=LOGICAL/PATH], another source at the path the main source refers to")
     d.add_argument("--message")
+    d.add_argument("--from", dest="from_file", metavar="FILE",
+                    help="take the options from a YAML or JSON file (a list: several, in order)")
     d.set_defaults(func=core.deposit)
 
     r = sub.add_parser("relicense", help="description-only version with a new licence")
-    r.add_argument("id")
-    r.add_argument("--rights", required=True, choices=sorted(core.RIGHTS))
-    r.add_argument("--method", required=True, help="how the authors agreed, e.g. 'confirmed by email'")
+    r.add_argument("id", nargs="?")
+    r.add_argument("--rights", choices=sorted(core.RIGHTS))
+    r.add_argument("--method", help="how the authors agreed, e.g. 'confirmed by email'")
     r.add_argument("--date", help="date of the agreement (default today)")
     r.add_argument("--message")
+    r.add_argument("--from", dest="from_file", metavar="FILE",
+                    help="take the options from a YAML or JSON file (a list: several, in order)")
     r.set_defaults(func=core.relicense)
 
     rl = sub.add_parser("relate", help="description-only version linking the same work elsewhere")
-    rl.add_argument("id")
-    rl.add_argument("--to", required=True, help="arxiv:ID or doi:DOI")
+    rl.add_argument("id", nargs="?")
+    rl.add_argument("--to", help="arxiv:ID or doi:DOI")
     rl.add_argument("--relation", default="IsIdenticalTo",
                     choices=["IsIdenticalTo", "IsVariantFormOf", "IsPreprintOf", "IsVersionOf"])
     rl.add_argument("--issued", help="also correct the Issued date (first public appearance)")
     rl.add_argument("--message")
+    rl.add_argument("--from", dest="from_file", metavar="FILE",
+                    help="take the options from a YAML or JSON file (a list: several, in order)")
     rl.set_defaults(func=core.relate)
 
     sub.add_parser("collect", help="new version of the main collection when needed").set_defaults(func=core.collect)
@@ -101,16 +110,38 @@ def build_parser():
 
     n = sub.add_parser("init", help="create an archive (osheaf.json, storage root, website templates)")
     n.add_argument("folder", nargs="?", help="where (default: the current folder)")
-    n.add_argument("--archive-id", required=True,
+    n.add_argument("--archive-id",
                    help="a URI that does not change when the archive moves, e.g. tag:example.org,2026:name")
-    n.add_argument("--name", required=True, help="the name of the archive, e.g. 'Papers of Jane Doe'")
-    n.add_argument("--base-url", required=True, help="where the archive is served, e.g. https://example.org/papers/")
-    n.add_argument("--curator", required=True, help='"Family, Given"')
+    n.add_argument("--name", help="the name of the archive, e.g. 'Papers of Jane Doe'")
+    n.add_argument("--base-url", help="where the archive is served, e.g. https://example.org/papers/")
+    n.add_argument("--curator", help='"Family, Given"')
     n.add_argument("--affiliation")
     n.add_argument("--contact", help="a URL or mailto: address")
+    n.add_argument("--from", dest="from_file", metavar="FILE",
+                    help="take the options from a YAML or JSON file (a list: several, in order)")
     n.set_defaults(func=None)
     sub.add_parser("help-config", help="describe osheaf.json").set_defaults(func=None)
     return p
+
+
+REQUIRED = {"deposit": ("id", "title", "author"), "relicense": ("id", "rights", "method"),
+            "relate": ("id", "to"), "init": ("archive_id", "name", "base_url", "curator")}
+
+
+def runs(p, args):
+    """The runs of a command: one, or one per entry of its --from file."""
+    from . import inputs
+    entries = inputs.load(args.from_file) if getattr(args, "from_file", None) else [{}]
+    out = []
+    for entry in entries:
+        ns = inputs.merge(args, entry, p, args.cmd)
+        missing = [k for k in REQUIRED.get(args.cmd, ()) if getattr(ns, k, None) in (None, [])]
+        if missing:
+            p.error(f"{args.cmd}: missing " + ", ".join(m.replace("_", "-") for m in missing))
+        if args.cmd == "relicense" and ns.rights not in core.RIGHTS:
+            p.error(f"relicense: rights must be one of {', '.join(sorted(core.RIGHTS))}")
+        out.append(ns)
+    return out
 
 
 def main(argv=None):
@@ -120,8 +151,14 @@ def main(argv=None):
     if args.cmd == "help-config":
         print(core.__doc__)
         return
-    if args.cmd == "init":
-        return core.init(args)
+    if args.cmd in REQUIRED:
+        todo = runs(p, args)
+        if args.cmd == "init":
+            return core.init(todo[0])
+        core.configure(core.find_root(args.root))
+        for ns in todo:
+            ns.func(ns)
+        return
     if args.cmd == "arxiv" and args.action == "fetch":
         from . import arxiv
         return arxiv.fetch_main(args.rest)

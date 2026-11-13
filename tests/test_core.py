@@ -219,3 +219,78 @@ def test_deposit_needs_pdf_or_texmacs(tmp_path):
     src.write_text("x")
     with pytest.raises(SystemExit):
         run("--root", str(root), "deposit", "p", str(src), "--title", "T", "--author", "Doe, J")
+
+
+def test_yaml_inputs(tmp_path):
+    """init and deposits from YAML: values stay text, paths are relative to
+    the file, a list deposits in order, the command line overrides, unknown
+    keys are refused, and osheaf.yaml works as configuration."""
+    (tmp_path / "archive.yaml").write_text(
+        "archive-id: tag:example.org,2026:y\n"
+        "name: Papers of Jane Doe\n"
+        "base-url: https://example.org/papers/\n"
+        "curator: Doe, Jane\n")
+    root = tmp_path / "archive"
+    run("init", str(root), "--from", str(tmp_path / "archive.yaml"))
+    w = tmp_path / "work"
+    (w / "fig").mkdir(parents=True)
+    (w / "main.tex").write_text("\\documentclass{article}")
+    (w / "fig" / "a.pdf").write_bytes(b"%PDF fig")
+    (w / "paper.pdf").write_bytes(b"%PDF-1.4 paper")
+    (w / "paper.yaml").write_text(
+        "- id: yaml-paper\n"
+        "  source: main.tex\n"
+        "  pdf: paper.pdf\n"
+        "  extra-sources: [{file: fig/a.pdf, path: fig/a.pdf}]\n"
+        "  title: On $\\Phi^4_3$\n"
+        "  authors:\n"
+        "    - Doe, Jane|Example University\n"
+        "    - {name: 'Roe, Richard', affiliation: Elsewhere}\n"
+        "  abstract: |\n"
+        "    First paragraph with $x$.\n"
+        "\n"
+        "    Second paragraph.\n"
+        "  keywords: [one, two]\n"
+        "  rights: cc-by-4.0\n"
+        "  available: 2025-01-02\n"
+        "  related: ['IsIdenticalTo:arxiv:2611.14296']\n"
+        "- id: yaml-paper\n"
+        "  source: main.tex\n"
+        "  pdf: paper.pdf\n"
+        "  title: On $\\Phi^4_3$\n"
+        "  authors: ['Doe, Jane|Example University']\n"
+        "  available: 2025-02-03\n"
+        "  changes: Version 1.10 corrects typos.\n")
+    run("--root", str(root), "deposit", "--from", str(w / "paper.yaml"))
+    d = root / "ocfl" / "yaml-paper"
+    inv = P.load_inventory(d)
+    dc1, dc2 = (P.read_json(d, inv, "datacite.json", v) for v in ("v1", "v2"))
+    assert dc1["relatedIdentifiers"][0]["relatedIdentifier"] == "arXiv:2611.14296"
+    assert {x["dateType"]: x["date"] for x in dc1["dates"]}["Available"] == "2025-01-02"
+    assert dc1["creators"][1]["affiliation"] == [{"name": "Elsewhere"}]
+    assert dc1["descriptions"][0]["description"] == "First paragraph with $x$.\n\nSecond paragraph."
+    assert P.read_json(d, inv, P.OBJ, "v2")["changes"]["text"] == "Version 1.10 corrects typos."
+    assert "fig/a.pdf" in {p for ps in inv["versions"]["v1"]["state"].values() for p in ps}
+    assert dc2["rightsList"][0]["rightsIdentifier"] == "cc-by-4.0"
+    # the command line overrides the file
+    (w / "one.yaml").write_text("id: other\nsource: main.tex\npdf: paper.pdf\ntitle: From the file\n"
+                                "author: Doe, Jane\n")
+    run("--root", str(root), "deposit", "--from", str(w / "one.yaml"), "--title", "From the command line")
+    oinv = P.load_inventory(root / "ocfl" / "other")
+    assert P.read_json(root / "ocfl" / "other", oinv, "datacite.json")["titles"][0]["title"] == \
+        "From the command line"
+    # unknown keys are refused
+    (w / "bad.yaml").write_text("id: bad\ntitel: typo\n")
+    with pytest.raises(SystemExit):
+        run("--root", str(root), "deposit", "--from", str(w / "bad.yaml"))
+    run("--root", str(root), "collect")
+    run("--root", str(root), "index")
+    assert P.verify_errors() == []
+    # osheaf.yaml instead of osheaf.json
+    cfg = json.loads((root / "osheaf.json").read_text())
+    import yaml
+    (root / "osheaf.json").unlink()
+    (root / "osheaf.yaml").write_text(yaml.safe_dump(cfg, allow_unicode=True))
+    P.configure(P.find_root(root))
+    assert P.ARCHIVE["archiveId"] == "tag:example.org,2026:y"
+    assert P.verify_errors() == []

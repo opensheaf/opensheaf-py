@@ -15,7 +15,7 @@ The package is `opensheaf`; its command is `osheaf` (also installed as
 pipx install "opensheaf[validate] @ git+https://github.com/opensheaf/opensheaf-py"
 ```
 
-(or `pip install` in a virtual environment). Python 3.9 or later. The extra
+(or `pip install` in a virtual environment). Python 3.9 or later (PyYAML is installed with it). The extra
 `validate` adds `jsonschema` and `ocfl-py`, with which `osheaf verify` also
 validates the JSON files against the schemas and the storage root with an
 independent OCFL validator. Depositing TeXmacs documents needs
@@ -75,6 +75,29 @@ osheaf arxiv import DOWNLOADS [ARXIV-ID ...] [--update] [--versions v1,v3]
   `--stage` (NISO-JAV), `--changes`, and `--after N` for a version found
   later, which writes the history. A new version keeps the abstract, keywords
   and licence of the previous one unless they are given.
+- **--from FILE.yaml** (deposit, relicense, relate, init): the options from a
+  YAML or JSON file, with the same names (`title`, `authors`, `abstract`,
+  `extra-sources`, `available`, ...; paths relative to the file); a list
+  makes several deposits in order, and the command line overrides the file.
+  YAML is read with every value kept as text, so that nothing is converted
+  silently (`2611.14296`, `2025-01-02` and `1.10` stay as written). The
+  settings may also be `osheaf.yaml`. Example:
+
+  ```yaml
+  id: kpz-uniqueness
+  source: paper.tex
+  pdf: paper.pdf
+  extra-sources: [refs.bib, {file: figures/fig1.pdf, path: figures/fig1.pdf}]
+  title: Energy solutions of KPZ are unique
+  authors:
+    - Doe, Jane|Example University
+    - {name: "Roe, Richard", affiliation: Another University}
+  abstract: |
+    We prove that energy solutions of the KPZ equation are unique.
+  rights: cc-by-4.0
+  available: 2015-08-31
+  related: ["IsIdenticalTo:arxiv:1508.07764"]
+  ```
 - **relicense**, **relate**: description-only versions (a new licence with the
   authors' agreement; a link to the same work elsewhere).
 - **collect**: a new version of the main collection when a document has a new

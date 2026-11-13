@@ -39,6 +39,7 @@ import unicodedata
 from pathlib import Path
 
 CONFIG_NAME = "osheaf.json"
+CONFIG_NAMES = ("osheaf.json", "osheaf.yaml", "osheaf.yml")
 SCHEMAS = Path(__file__).resolve().parent / "schemas"
 USER_PLUGINS = Path(os.environ.get("TEXMACS_PLUGINS", Path.home() / ".TeXmacs/plugins"))
 
@@ -59,16 +60,28 @@ def find_root(start=None):
     """The archive folder: START or the nearest folder above it with osheaf.json."""
     p = Path(start or Path.cwd()).resolve()
     for d in [p] + list(p.parents):
-        if (d / CONFIG_NAME).exists():
+        if any((d / n).exists() for n in CONFIG_NAMES):
             return d
     sys.exit(f"no {CONFIG_NAME} in {p} or above it (use --root)")
+
+
+def read_config(root):
+    """osheaf.json, or osheaf.yaml (read with every value as text)."""
+    for n in CONFIG_NAMES:
+        p = Path(root) / n
+        if p.exists():
+            if n.endswith(".json"):
+                return json.loads(p.read_text(encoding="utf-8"))
+            import yaml
+            return yaml.load(p.read_text(encoding="utf-8"), Loader=yaml.BaseLoader)
+    sys.exit(f"no {CONFIG_NAME} or osheaf.yaml in {root}")
 
 
 def configure(root):
     """Load the archive configuration and set the paths."""
     global ROOT, OCFL, SITE, TM_HOME, ARCHIVE, TEXMACS, INDEX, TEXMACS_VERSION
     ROOT = Path(root).resolve()
-    cfg = json.loads((ROOT / CONFIG_NAME).read_text(encoding="utf-8"))
+    cfg = read_config(ROOT)
     missing = [k for k in REQUIRED if k not in cfg]
     if missing:
         sys.exit(f"{CONFIG_NAME} lacks {', '.join(missing)}")
@@ -633,7 +646,7 @@ def deposit(args):
         "version": str(doc_version),
         "url": landing_url(obj_id),
         "dates": [],
-        "language": args.language,
+        "language": args.language or "en",
         "formats": formats,
         "rightsList": rights_list(args.rights, prev_dc),
     }
@@ -1237,8 +1250,8 @@ def init(args):
     discovery document and the pages."""
     root = Path(args.folder or ".").resolve()
     root.mkdir(parents=True, exist_ok=True)
-    if (root / CONFIG_NAME).exists():
-        sys.exit(f"{root / CONFIG_NAME} exists already")
+    if any((root / n).exists() for n in CONFIG_NAMES):
+        sys.exit(f"{root} has a configuration already")
     family, _, given = args.curator.partition(",")
     family, given = family.strip(), given.strip()
     cfg = {
