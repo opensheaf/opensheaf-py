@@ -97,9 +97,6 @@ class Zenodo:
         return f"{self.s['prefix']}/zenodo.{recid}"
 
 
-# ---------------------------------------------------------------------------
-# Metadata
-
 def zenodo_metadata(dc, archive, obj_id):
     """Zenodo deposit metadata from datacite.json (Zenodo generates its own
     DataCite record from it; datacite.json stays authoritative)."""
@@ -159,9 +156,6 @@ def zenodo_entries(obj):
             if e.get("service") == SERVICE_NAME and e.get("role") == "deposit"]
 
 
-# ---------------------------------------------------------------------------
-# Files
-
 def reproducible_zip(dest, files):
     """sources.zip as appendix A asks: entries in byte order of their names,
     fixed timestamps, no extra attributes."""
@@ -193,9 +187,6 @@ def upload_plan(P, files, obj, stage):
               "bytes": z.stat().st_size}]
     return plan, extra
 
-
-# ---------------------------------------------------------------------------
-# The deposit
 
 def notice_files(obj):
     paths = {n["path"] for n in obj.get("notices", []) if n.get("path")}

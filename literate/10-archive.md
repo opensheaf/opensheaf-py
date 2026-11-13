@@ -29,7 +29,7 @@ build.
     The command is `osheaf` (also installed as `opensheaf`); see `osheaf --help`.
     """
 
-    __version__ = "0.6.0"
+    __version__ = "0.7.0.dev0"
     SPECIFICATION = "0.1"
 
 `python -m opensheaf` runs the same command line as `osheaf`.
@@ -324,6 +324,9 @@ versions and dates are explained in the [next chapter](11-versions.md).
     <<the document version an object version holds>>
 
 
+    <<the PDF of a document version>>
+
+
     <<the history of a document without a history in object.json>>
 
 
@@ -364,9 +367,6 @@ inventories, to compare with services that report them (Zenodo reports MD5,
 appendix A). Files are read in blocks, since a PDF may be large.
 
     # in the SHA-512 digest of a file:
-    # ---------------------------------------------------------------------------
-    # Digests and OCFL
-
     def digest(path, algo="sha512"):
         h = hashlib.new(algo)
         with open(path, "rb") as f:

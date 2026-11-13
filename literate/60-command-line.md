@@ -707,22 +707,22 @@ line would have given.
 
 Three tables say how the keys of a file become options. `ALIASES` maps the
 other spellings to the name of the option (its `dest` in `argparse`):
-plurals, `relations` for `related`, `tools` for `toolchain`, and `date`
-for `available`, the name of `--date` in a deposit. `PATHS` lists the
-options that are files, to be read relative to the file of options;
+plurals, `relations` for `related`, `tools` for `toolchain`. `PATHS` lists
+the options that are files, to be read relative to the file of options;
 `LISTS` those that are repeated on the command line, and so lists, where a
 single value is accepted for a list of one.
 
     # in the names of the options in files:
     ALIASES = {"authors": "author", "keywords": "keyword", "extra_sources": "extra_source",
-               "relations": "related", "tools": "toolchain", "date": "available"}
+               "relations": "related", "tools": "toolchain"}
     PATHS = ("source", "pdf", "abstract_file", "folder")
     LISTS = ("author", "keyword", "extra_source", "related", "toolchain")
 
-Since every alias applies to every command, a key `date` in a file for
-`relicense` becomes `available`, which `relicense` does not have, and is
-refused as unknown: the date of an agreement can only be given on the
-command line.
+One more spelling depends on the command: `date` is the name of
+`--available` in a deposit (`--date` on the command line), but its own
+option, the date of the agreement, in `relicense`. It is therefore not an
+alias here; `merge`, which knows the options of the command, reads `date`
+as `available` only for a command that has `available` and no `date`.
 
 ### Loading
 
@@ -804,25 +804,36 @@ the options of the command are known.
 
 `merge` returns a new namespace, leaving the parsed command line as it is
 for the next entry. A key that is not an option of the command is an error
-(a typing mistake such as `titel` would otherwise be silently ignored).
-A value of the file is taken when the command line gave none: when the
-option is `None`, `False` (a flag not given) or an empty list. So the
-command line overrides the file, which lets one deposit from a file with,
-say, a corrected title. An option with a default other than these, such as
-`--type` of `deposit` (`Preprint`) or `--relation` of `relate`
-(`IsIdenticalTo`), always looks given, and keeps its default whatever the
-file says.
+(a typing mistake such as `titel` would otherwise be silently ignored);
+so are the names `argparse` uses for its own bookkeeping (`cmd`, `func`,
+`from_file`), which no file should set.
+
+A value of the file is taken unless the option was given on the command
+line, which is when its value differs from its default. The defaults are
+those of the command's sub-parser, found among the actions of the parser
+(`--root`, an option of the parser itself, has the default `None` for the
+sub-parser too). So the command line overrides the file, which lets one
+deposit from a file with, say, a corrected title, and an option with a
+default, such as `--type` of `deposit` (`Preprint`) or `--relation` of
+`relate` (`IsIdenticalTo`), takes the value of the file. The one case
+this cannot tell apart is an option given on the command line with its
+default value: the file then wins, which only matters when the two
+disagree.
 
     # in merging an entry with the command line:
     def merge(args, entry, parser, command):
-        """A copy of ARGS with the values of ENTRY where the command line gave none."""
+        """A copy of ARGS with the values of ENTRY for the options the command line
+        did not give."""
         import argparse
         ns = argparse.Namespace(**vars(args))
-        known = set(vars(args))
+        known = set(vars(args)) - {"cmd", "func", "from_file"}
+        if "date" in entry and "date" not in known and "available" in known:
+            entry = {("available" if k == "date" else k): v for k, v in entry.items()}
         unknown = [k for k in entry if k not in known]
         if unknown:
             parser.error(f"{command}: unknown option(s) in the file: {', '.join(sorted(unknown))}")
+        sub = next(a for a in parser._actions if isinstance(a, argparse._SubParsersAction)).choices[command]
         for k, v in entry.items():
-            if getattr(ns, k) in (None, False, []):
+            if getattr(ns, k) == sub.get_default(k):
                 setattr(ns, k, v)
         return ns

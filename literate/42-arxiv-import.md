@@ -114,22 +114,47 @@ A path containing `..` is refused, and a leading `/` is dropped; a path
 that differs only in case from one already extracted is skipped too, since
 the archive may be kept on a file system that does not distinguish them.
 
+An archive may also be made to expand to an excessive size, a few
+kilobytes of gzip giving gigabytes of zeros, or to hold a very large
+number of tiny files. The decompressed data are therefore read only up to
+a limit, `MAX_UNPACKED` (1 GiB, far more than any paper needs), and the
+tar archive may have at most `MAX_MEMBERS` members (10000) whose sizes
+add up to at most the same limit; the sizes are those the headers
+declare, which also bounds sparse files, whose data expand when
+extracted. An archive over either limit is refused as a whole, before
+anything is written. The tar archive is opened as uncompressed (`r:`),
+so that a compressed archive inside the gzip, which `tarfile` would
+otherwise decompress without limit, is kept as a single file.
+
     # in arXiv: unpacking an e-print:
+    MAX_UNPACKED = 1 << 30      # bytes, after decompression
+    MAX_MEMBERS = 10000         # members of a tar archive
+
+
     def unpack(src, dest, base_id):
         """Unpack an arXiv e-print into DEST; return (kind, [(logical, path)], notes)."""
         data = src.read_bytes()
         notes, files = [], []
         if data[:4] == b"%PDF":
             return "pdf", [], notes
-        raw = gzip.decompress(data)
+        with gzip.GzipFile(fileobj=io.BytesIO(data)) as g:
+            raw = g.read(MAX_UNPACKED + 1)
+        if len(raw) > MAX_UNPACKED:
+            sys.exit(f"{src}: expands to more than {MAX_UNPACKED >> 20} MiB; refused (section 15)")
         try:
-            tf = tarfile.open(fileobj=io.BytesIO(raw))
-            members = tf.getmembers()
+            tf = tarfile.open(fileobj=io.BytesIO(raw), mode="r:")
+            members = []
+            for m in tf:
+                members.append(m)
+                if len(members) > MAX_MEMBERS:
+                    sys.exit(f"{src}: more than {MAX_MEMBERS} files; refused (section 15)")
         except tarfile.TarError:
             name = base_id.replace("/", "-") + (".tex" if b"\\documentclass" in raw or b"\\begin" in raw else "")
             p = dest / name
             p.write_bytes(raw)
             return "single", [(f"source/{name}", p)], notes
+        if sum(m.size for m in members if m.isfile()) > MAX_UNPACKED:
+            sys.exit(f"{src}: its files add up to more than {MAX_UNPACKED >> 20} MiB; refused (section 15)")
         seen = set()
         for m in members:
             if m.isdir():
@@ -290,7 +315,7 @@ archive and of the papers imported in the same run.
     else:
         if aid not in (ids or {}):
             sys.exit(f"{aid}: no identifier in identifiers.json (proposal: \"{aid}\": \"{slug(rec['title'], taken)}\");"
-                     " identifiers are chosen by the depositor (section 5)")
+                     " identifiers are chosen by the depositor (section 6.3)")
         obj_id, present = ids[aid], set()
         if obj_id in taken:
             sys.exit(f"{aid}: identifier {obj_id} is taken")

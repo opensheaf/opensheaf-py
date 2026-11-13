@@ -37,9 +37,6 @@ document, the function returns the object version holding its
 what readers are shown. The [website](30-website.md) uses it too.
 
     # in the documents of the archive with their current versions:
-    # ---------------------------------------------------------------------------
-    # Collection
-
     def documents():
         """(obj_id, dir, inventory, current object version, its object.json and
         datacite.json) of every document."""
@@ -71,7 +68,7 @@ ties in identifier order, ascending even when the dates are descending.
 
     # in order the members of a collection by date:
     def member_order(members):
-        """Section 10: by Issued, then Available (newest first for issued-desc),
+        """Section 10.2: by Issued, then Available (newest first for issued-desc),
         members with neither last, ties broken by object identifier."""
         def key(m):
             c = m.get("cite", {})

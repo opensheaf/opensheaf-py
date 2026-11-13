@@ -295,7 +295,7 @@ main source, and the archive is valid.
 Small functions
 ---------------
 
-Four tests check functions on their own, without an archive.
+Five tests check functions on their own, without an archive.
 
 The order `issued-desc` of section 10.2 sorts the members by their
 `Issued` date, newest first, then by their `Available` date; members with
@@ -343,6 +343,43 @@ TeX accents and special letters of author names into Unicode.
     def test_tm_escape():
         assert P.tm_escape("Brzeźniak a|b <x>") == "Brze\\<#17A\\>niak a\\|b <less>x<gtr>"
         assert P.tex_text(r"H{\o}egh It\^o Pawe{\l}") == "Høegh Itô Paweł"
+
+An arXiv e-print is untrusted (section 15). `unpack` extracts a small
+tar archive, skipping a member whose path would leave the folder, and
+refuses an archive with too many members or one that expands beyond the
+limit. The limits are lowered for the test, so that the archives stay
+small: five members against a limit of three, and a hundred kilobytes of
+zeros, which gzip makes a few hundred bytes, against a limit of a
+thousand bytes.
+
+    # in test: small functions:
+    def test_unpack_limits(tmp_path, monkeypatch):
+        import gzip
+        import io
+        import tarfile
+
+        def eprint(name, members):
+            buf = io.BytesIO()
+            with tarfile.open(fileobj=buf, mode="w") as tf:
+                for n, data in members:
+                    ti = tarfile.TarInfo(n)
+                    ti.size = len(data)
+                    tf.addfile(ti, io.BytesIO(data))
+            f = tmp_path / name
+            f.write_bytes(gzip.compress(buf.getvalue()))
+            return f
+        ok = eprint("ok", [("main.tex", b"\\documentclass{article}"), ("../evil.tex", b"x")])
+        kind, files, notes = arxiv.unpack(ok, tmp_path / "out", "2611.14296")
+        assert kind == "tar" and [lp for lp, _ in files] == ["source/main.tex"]
+        assert any("unsafe path ../evil.tex" in n for n in notes)
+        monkeypatch.setattr(arxiv, "MAX_MEMBERS", 3)
+        with pytest.raises(SystemExit, match="more than 3 files"):
+            arxiv.unpack(eprint("many", [(f"f{i}.tex", b"x") for i in range(5)]), tmp_path / "out-many", "2611.14296")
+        monkeypatch.setattr(arxiv, "MAX_UNPACKED", 1000)
+        bomb = tmp_path / "bomb"
+        bomb.write_bytes(gzip.compress(b"\0" * 100000))
+        with pytest.raises(SystemExit, match="expands to more than"):
+            arxiv.unpack(bomb, tmp_path / "bomb-out", "2611.14296")
 
 Through the command line
 ------------------------
@@ -434,6 +471,26 @@ with its PDF, and a deposit of a LaTeX source alone is refused.
         src.write_text("x")
         with pytest.raises(SystemExit):
             run("--root", str(root), "deposit", "p", str(src), "--title", "T", "--author", "Doe, J")
+
+The website finds the PDF of a version among the renditions of its
+`object.json`, whatever its name. A document written by hand has its PDF
+as `article.pdf`, as an accepted copy of a document of another archive
+may; the website, written by `html.render` from the members of the main
+collection, links that file from the landing page, its tag for Google
+Scholar and the home page.
+
+    # in test: deposits through osheaf:
+    def test_pdf_found_from_renditions(archive):
+        put("paper-a", 1, {"main.tex": b"\\documentclass{article}", "article.pdf": b"%PDF article"},
+            extra_obj={"renditions": [{"path": "article.pdf", "mediaType": "application/pdf"}]})
+        assert finish() == []
+        from opensheaf import html
+        coll = P.OCFL / CONFIG["mainCollection"]
+        html.render(P.read_json(coll, P.load_inventory(coll), "members.json")["members"])
+        page = (archive / "paper" / "paper-a" / "index.html").read_text()
+        assert 'name="citation_pdf_url" content="https://example.org/archive/ocfl/paper-a/v1/content/article.pdf"' in page
+        assert 'href="../../ocfl/paper-a/v1/content/article.pdf"' in page
+        assert 'href="ocfl/paper-a/v1/content/article.pdf"' in (archive / "index.html").read_text()
 
 ### Files of options
 
@@ -529,6 +586,44 @@ found, read and verified like any other.
         assert P.ARCHIVE["archiveId"] == "tag:example.org,2026:y"
         assert P.verify_errors() == []
 
+A value of the file applies unless the option was given on the command
+line, also for an option with a default of its own: the `type` of a
+deposit (by default `Preprint`) and the `relation` of `relate` (by
+default `IsIdenticalTo`) are taken from the files, while `--type` on the
+command line still overrides the file. The key `date` means `available`
+in a file for `deposit`, and the date of the agreement in a file for
+`relicense`, which has an option of that name.
+
+    # in test: deposits through osheaf:
+    def test_yaml_options_with_defaults(tmp_path):
+        root = tmp_path / "a"
+        make_archive(root)
+        (tmp_path / "p.tex").write_text("\\documentclass{article}")
+        (tmp_path / "p.pdf").write_bytes(b"%PDF-1.4 p")
+        r = ["--root", str(root)]
+        (tmp_path / "p.yaml").write_text("id: p\nsource: p.tex\npdf: p.pdf\ntitle: P\nauthor: Doe, J\n"
+                                         "type: JournalArticle\ndate: 2025-01-02\n")
+        run(*r, "deposit", "--from", str(tmp_path / "p.yaml"))
+        (tmp_path / "q.yaml").write_text("id: q\nsource: p.tex\npdf: p.pdf\ntitle: Q\nauthor: Doe, J\n"
+                                         "type: JournalArticle\n")
+        run(*r, "deposit", "--from", str(tmp_path / "q.yaml"), "--type", "Book")
+        (tmp_path / "relate.yaml").write_text("id: p\nto: doi:10.1000/xyz\nrelation: IsVersionOf\n")
+        run(*r, "relate", "--from", str(tmp_path / "relate.yaml"))
+        (tmp_path / "licence.yaml").write_text("id: p\nrights: cc-by-4.0\nmethod: by e-mail\ndate: 2025-05-05\n")
+        run(*r, "relicense", "--from", str(tmp_path / "licence.yaml"))
+        p, q = root / "ocfl" / "p", root / "ocfl" / "q"
+        pinv, qinv = P.load_inventory(p), P.load_inventory(q)
+        dc1 = P.read_json(p, pinv, "datacite.json", "v1")
+        assert dc1["types"]["resourceTypeGeneral"] == "JournalArticle"
+        assert P.date_of(dc1, "Available") == "2025-01-02"
+        assert P.read_json(q, qinv, "datacite.json")["types"]["resourceTypeGeneral"] == "Book"
+        rel = P.read_json(p, pinv, "datacite.json")["relatedIdentifiers"]
+        assert rel[-1]["relatedIdentifier"] == "10.1000/xyz" and rel[-1]["relationType"] == "IsVersionOf"
+        assert P.read_json(p, pinv, P.OBJ)["agreement"]["date"] == "2025-05-05"
+        run(*r, "collect")
+        run(*r, "index")
+        assert P.verify_errors() == []
+
 ### Notices, withdrawal and completion
 
 This test goes through the later statements about a document. A paper is
@@ -571,10 +666,46 @@ is refused.
         with pytest.raises(SystemExit):        # a withdrawn document gets no new versions
             run(*r, "deposit", "lost", str(src), "--pdf", str(pdf2), "--title", "T", "--author", "Doe, J")
 
+The completion of an *earlier* version is the case where the head stops
+holding the current version without a history. A paper is deposited
+without sources (`v1`), then in a second version with them (`v2`), then
+withdrawn, with the reason in a file (`v3`); finally the sources of the
+first version are found and added (`v4`). The head `v4` holds document
+version 1, yet the current version is still document version 2, in its
+last object version `v3`. The completion keeps the withdrawal of the
+head: its status, its reason with the file, and the `Withdrawn` date of
+`datacite.json`.
+
+    # in test: notices, withdrawal and completion through osheaf:
+    def test_complete_an_earlier_version(tmp_path):
+        root = tmp_path / "a"
+        make_archive(root)
+        pdf, pdf2, src, why = tmp_path / "p.pdf", tmp_path / "p2.pdf", tmp_path / "p.tex", tmp_path / "why.md"
+        pdf.write_bytes(b"%PDF-1.4 p")
+        pdf2.write_bytes(b"%PDF-1.4 p2")
+        src.write_text("\\documentclass{article}")
+        why.write_text("The main result is wrong.")
+        r = ["--root", str(root)]
+        run(*r, "deposit", "early", "--pdf", str(pdf), "--no-source", "lost", "--title", "T", "--author", "Doe, J")
+        run(*r, "deposit", "early", str(src), "--pdf", str(pdf2), "--title", "T", "--author", "Doe, J")
+        run(*r, "withdraw", "early", "--reason", "wrong", "--file", str(why), "--date", "2026-03-04")
+        run(*r, "complete", "early", "--version", "1", "--source", str(src))
+        d = root / "ocfl" / "early"
+        inv = P.load_inventory(d)
+        head = P.read_json(d, inv, P.OBJ)
+        assert inv["head"] == "v4" and head["documentVersion"] == 1 and "history" not in head
+        assert P.current_version(d, inv) == "v3"
+        assert head["status"] == "withdrawn" and head["withdrawal"] == P.read_json(d, inv, P.OBJ, "v3")["withdrawal"]
+        assert P.date_of(P.read_json(d, inv, "datacite.json"), "Withdrawn") == "2026-03-04"
+        assert "withdrawal/why.md" in {p for ps in inv["versions"]["v4"]["state"].values() for p in ps}
+        run(*r, "collect")
+        run(*r, "index")
+        assert P.verify_errors() == []
+
 Across archives
 ---------------
 
-The last three tests use two archives in neighbouring folders: one of
+The last four tests use two archives in neighbouring folders: one of
 authors, and a second one that collects, mirrors or accepts their
 documents. A local folder stands for the address of an archive, so no
 network is needed.
@@ -719,6 +850,45 @@ licence of `v2`.)
             "--changes", "Corrected by the editors.")
         inv = P.load_inventory(d)
         assert P.read_json(d, inv, P.OBJ)["documentVersion"] == 2
+        run("--root", str(j), "collect")
+        run("--root", str(j), "index")
+        assert P.verify_errors() == []
+
+An accepted copy holds exactly the files of the vetted version
+(section 10.5), the files of its notices included, and names the source
+at the storage root that the source's discovery document states. Here
+the vetted version `v2` is a description-only version with a notice in a
+file, and the authors' archive keeps its storage root in `store/`
+instead of `ocfl/`.
+
+    # in test: collections, mirrors and accepted copies:
+    def test_accept_keeps_notice_files_and_storage_root(tmp_path):
+        from opensheaf import collections
+        a, j = tmp_path / "a", tmp_path / "j"
+        make_archive(a, "authors")
+        pdf, src, note = tmp_path / "p.pdf", tmp_path / "p.tex", tmp_path / "erratum.md"
+        pdf.write_bytes(b"%PDF-1.4 p")
+        src.write_text("\\documentclass{article}")
+        note.write_text("Theorem 2 is wrong.")
+        r = ["--root", str(a)]
+        run(*r, "deposit", "paper", str(src), "--pdf", str(pdf), "--title", "P", "--author", "Doe, J",
+            "--rights", "cc-by-4.0")
+        run(*r, "notice", "paper", "--about", "1", "--text", "Theorem 2 is wrong.", "--file", str(note))
+        run(*r, "collect")
+        run(*r, "index")
+        (a / "ocfl").rename(a / "store")
+        disc = json.loads((a / "opensheaf.json").read_text())
+        disc["storageRoot"] = "store/"
+        (a / "opensheaf.json").write_text(json.dumps(disc))
+        make_archive(j, "journal")
+        run("--root", str(j), "accept", str(a), "paper", "--version", "v2")
+        d = j / "ocfl" / "paper"
+        inv = P.load_inventory(d)
+        assert "notices/erratum.md" in {p for ps in inv["versions"]["v1"]["state"].values() for p in ps}
+        source = collections.norm_url(str(a)) + "store/paper/v2/"
+        assert P.read_json(d, inv, P.OBJ)["external"][0]["record"] == source
+        rel = P.read_json(d, inv, "datacite.json")["relatedIdentifiers"]
+        assert {"relatedIdentifier": source, "relatedIdentifierType": "URL", "relationType": "IsIdenticalTo"} in rel
         run("--root", str(j), "collect")
         run("--root", str(j), "index")
         assert P.verify_errors() == []

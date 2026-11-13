@@ -33,6 +33,7 @@ import json
 import sys
 import tempfile
 import shutil
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -62,7 +63,7 @@ class Remote:
     def __init__(self, url):
         self.url = norm_url(url)
         self.disc = get_json(self.url + "opensheaf.json")
-        self.root = self.url + self.disc.get("storageRoot", "ocfl/")
+        self.root = urllib.parse.urljoin(self.url, self.disc.get("storageRoot", "ocfl/"))
         self.archive_id = self.disc["archiveId"]
 
     def inventory(self, obj_id, ver=None):
@@ -78,7 +79,12 @@ class Remote:
         """The object version holding the current document version."""
         inv = self.inventory(obj_id)
         head = json.loads(self.file(obj_id, inv, inv["head"], P.OBJ))
-        return (head["history"][-1] if head.get("history") else inv["head"]), inv
+        if head.get("history"):
+            return head["history"][-1], inv
+        last = {}
+        for ver in inv["versions"]:
+            last[json.loads(self.file(obj_id, inv, ver, P.OBJ))["documentVersion"]] = ver
+        return last[max(last)], inv
 
     def pin(self, obj_id, ver):
         data = get(self.root + f"{obj_id}/{ver}/inventory.json")
@@ -89,7 +95,7 @@ class Remote:
         return dig
 
 
-def resolve(entry, here):
+def resolve(entry):
     """The member for an entry of collection.yaml (mirror: yes copies the
     object into this archive first, and lists the copy as a mirror)."""
     url = entry.get("archive", ".")
@@ -199,7 +205,7 @@ def sync(args):
     order = spec.get("order", "manual")
     members = []
     for e in spec.get("members", []):
-        m = resolve(e, P.ROOT)
+        m = resolve(e)
         print(f"  {m['id']} ({m['archive']}): {m['version']}  {m['inventorySha512'][:16]}...")
         members.append(m)
     if order != "manual":
@@ -223,12 +229,12 @@ def update(args):
         if m.get("follow") == "latest":
             local = m["archive"] == P.ARCHIVE["archiveId"]
             if head_status(m, local) == "withdrawn":
-                # section 10.3: the pin is kept, and the curator is told
+                # the pin is kept, and the curator is told (section 10.2 now follows the head)
                 print(f"  {m['id']}: withdrawn in its archive; the pin {m['version']} is kept")
                 members.append(m)
                 continue
             entry = {"archive": "." if local else m["archiveUrl"], "id": m["id"]}
-            new = resolve(entry, P.ROOT)
+            new = resolve(entry)
             if new["version"] != m["version"]:
                 print(f"  {m['id']}: {m['version']} -> {new['version']}")
             m = new

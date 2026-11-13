@@ -96,7 +96,8 @@ The landing page of a document receives, besides `{{archive_name}}`,
   are;
 - `{{title}}`, `{{authors}}`, `{{issued}}` (the date of first
   appearance) and `{{abstract}}` (paragraphs in HTML);
-- `{{pdf}}`, the address of the PDF of the current version;
+- `{{pdf}}`, the address of the PDF of the current version (for a version
+  without a PDF, its entry in the list of versions);
 - `{{withdrawn}}`, the withdrawal notice, empty for a document that is
   not withdrawn;
 - `{{versions}}`, the versions, as items of a list;

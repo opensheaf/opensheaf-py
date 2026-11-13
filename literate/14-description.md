@@ -235,13 +235,14 @@ its format, which is also added to the `formats` of `datacite.json`.
 
 The notices and the history are those of the head: the old `object.json`
 loses its own, and `carry_forward` puts back the current ones, replacing
-the history's entry for the completed version. The other parts of the
-state come from the completed version, not from the head: completing an
-earlier version of a withdrawn document would therefore lose the
-withdrawal, a case these tools do not guard against. And the new object
-version becomes the head without a history if the document had none, which
-the [current version](11-versions.md) does not handle when the completed
-version is not the latest.
+the history's entry for the completed version. The state of the object is
+also the head's, since it belongs to the object whatever version is held
+(section 11.1): completing an earlier version of a withdrawn document keeps
+the withdrawal, with its `Withdrawn` date in `datacite.json` and the file
+of its reason, if any. Everything else comes from the completed version.
+The new object version becomes the head without a history if the document
+had none; the order of the numbers stays the order of the work, and the
+[current version](11-versions.md) stays the highest document version.
 
 Completion only adds files: the PDF received is kept, and the archive does
 not typeset the added sources.
@@ -283,6 +284,14 @@ not typeset the added sources.
         obj.pop("notices", None)
         obj.pop("history", None)
         carry_forward(head, obj, inv, next_object_version(inv))
+        obj.pop("withdrawal", None)
+        obj["status"] = head["status"]           # the state of the object is the head's
+        if head.get("withdrawal"):
+            obj["withdrawal"] = head["withdrawal"]
+            set_date(dc, "Withdrawn", head["withdrawal"]["date"])
+            if head["withdrawal"]["reason"].get("path"):
+                lp = head["withdrawal"]["reason"]["path"]
+                files.setdefault(lp, read_logical(d, inv, lp))
         set_date(dc, "Updated", TODAY)
         fmt = obj["sourceFormat"]
         if fmt not in dc.get("formats", []):

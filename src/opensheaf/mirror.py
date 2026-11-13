@@ -1,5 +1,5 @@
 # Generated from literate/21-mirrors.md by tools/tangle.py: edit the document, not this file.
-"""Mirrors (section 10.2 of the specification): a copy, in this archive's
+"""Mirrors (section 10.4 of the specification): a copy, in this archive's
 storage root, of another archive's object, byte for byte and with all its
 versions, kept under its own identifier.
 
@@ -60,7 +60,7 @@ def mirror(url, obj_id, licence_checked=False):
     if have:
         here = P.read_json(d, have, P.OBJ)
         if here.get("archiveId") != r.archive_id:
-            sys.exit(f"this archive has an object {obj_id} already (section 10.2: a mirror keeps its "
+            sys.exit(f"this archive has an object {obj_id} already (section 10.4: a mirror keeps its "
                      "identifier only if no object of this archive has it)")
     tmp = Path(tempfile.mkdtemp(dir=P.OCFL))
     try:

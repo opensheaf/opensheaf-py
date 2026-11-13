@@ -46,9 +46,6 @@ DataCite wants the name as `Family, Given` and the parts separately
 also covers names that are not split this way.
 
     # in a DataCite creator from a name and an affiliation:
-    # ---------------------------------------------------------------------------
-    # Description and deposit
-
     def creator(spec):
         """'Family, Given|Affiliation' -> DataCite creator."""
         name, _, aff = spec.partition("|")
@@ -193,8 +190,7 @@ sequence of steps.
 
 The identifier is permanent and appears in every URL of the object; the
 specification limits it to 64 characters of a restricted form, and
-recommends at most 32 (section 6.3; the warning still cites section 5,
-where the rule used to be). All files are checked before anything is
+recommends at most 32 (section 6.3). All files are checked before anything is
 written, so that a mistyped name stops the deposit early.
 
     # in check the identifier and the files of a deposit:
@@ -202,7 +198,7 @@ written, so that a mistyped name stops the deposit early.
     if not ID_RE.match(obj_id) or len(obj_id) > 64:
         sys.exit("ID must match ^[a-z0-9]+(-[a-z0-9]+)*$ and have at most 64 characters")
     if len(obj_id) > 32:
-        print(f"warning: {obj_id} is longer than 32 characters (section 5: SHOULD be short)")
+        print(f"warning: {obj_id} is longer than 32 characters (section 6.3: SHOULD be short)")
     init_storage_root()
     source = Path(args.source) if args.source else None
     for f in [source, args.pdf and Path(args.pdf)] + [Path(x.partition("=")[0]) for x in args.extra_source or []]:

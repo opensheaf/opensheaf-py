@@ -64,7 +64,6 @@ def accept(args):
     files = {}
     base = r.root + args.id + "/"
     state = {p: dg for dg, ps in inv["versions"][ver]["state"].items() for p in ps}
-    received = []
     for logical, dg in sorted(state.items()):
         if logical in ("datacite.json", P.OBJ):
             continue
@@ -75,9 +74,6 @@ def accept(args):
         f.parent.mkdir(parents=True, exist_ok=True)
         f.write_bytes(data)
         files[logical] = f
-    for n in src_obj.get("notices", []):      # notices of the source are its archive's, not ours
-        if n.get("path"):
-            files.pop(n["path"], None)
     available = args.available or P.TODAY
     dc = {k: v for k, v in src_dc.items() if k not in ("doi", "url", "dates", "relatedIdentifiers", "version")}
     dc["publisher"] = {"name": P.ARCHIVE["name"]}
@@ -92,7 +88,7 @@ def accept(args):
     P.set_date(dc, "Available", available)
     # the files are those of the source version: its relations stay true
     rel = list(src_dc.get("relatedIdentifiers", []))
-    rel.append({"relatedIdentifier": f"{r.url}ocfl/{args.id}/{ver}/", "relatedIdentifierType": "URL",
+    rel.append({"relatedIdentifier": f"{r.root}{args.id}/{ver}/", "relatedIdentifierType": "URL",
                 "relationType": "IsIdenticalTo"})
     dc["relatedIdentifiers"] = rel
     obj = {"format": P.OBJ_FORMAT, "specification": P.SPEC, "kind": "document",
@@ -109,12 +105,14 @@ def accept(args):
     if args.agreement:
         obj["agreement"] = {"by": [c["name"] for c in src_dc["creators"]], "date": available,
                             "method": args.agreement}
-    obj["external"] = [{"role": "source", "service": "OpenSheaf", "record": f"{r.url}ocfl/{args.id}/{ver}/",
+    obj["external"] = [{"role": "source", "service": "OpenSheaf", "record": f"{r.root}{args.id}/{ver}/",
                         "label": f"{args.id} {ver}",
                         "files": [{"name": "inventory.json", "sha512": pin}]}]
     obj["status"] = "active"
     P.carry_forward(prev_obj, obj, have, P.next_object_version(have))
     for lp, f in P.carried_files(obj_id, have).items():
+        if lp in files and P.digest(files[lp]) != P.digest(f):
+            sys.exit(f"{obj_id}: the file {lp} of a notice here differs from that of {args.id} {ver}")
         files.setdefault(lp, f)
     P.write_json(tmp / "datacite.json", dc)
     P.write_json(tmp / P.OBJ, obj)

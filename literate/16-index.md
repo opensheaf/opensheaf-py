@@ -32,9 +32,6 @@ mirrors like the archive's own objects. The optional parts (`mirrors`,
 `tombstones`, `keys`, `feed`) are not written either.
 
     # in write the discovery document of the archive:
-    # ---------------------------------------------------------------------------
-    # Discovery document and index
-
     def discovery():
         objs = []
         for obj_id, d, inv in objects():
@@ -265,7 +262,8 @@ the current version of the document. A TeXmacs document has an HTML
 version, and its source is linked twice: TeXmacs' HTML export rewrites
 links to `.tm` files into links to `.html` files, so the web gets a link
 to a `.texmacs` name, which the export turns back into `.tm`. A LaTeX
-source is linked as such. An arXiv identifier, from the record the
+source is linked as such, and the PDF is the one named among the
+renditions, if any. An arXiv identifier, from the record the
 version was imported from or else from the relations, gives a link to
 arXiv. The change note of the version follows the dates.
 
@@ -276,13 +274,13 @@ arXiv. The change note of the version follows the dates.
         inv = load_inventory(d)
         obj = read_json(d, inv, OBJ, ver)
         dc = read_json(d, inv, "datacite.json", ver)
-        pdf = f"ocfl/{obj_id}/" + content_path(inv, ver, "paper.pdf")
+        pdf = content_path(inv, ver, pdf_of(obj)) if pdf_of(obj) else None
         src = f"ocfl/{obj_id}/" + content_path(inv, ver, obj["mainSource"]) if obj.get("mainSource") else None
         html = f"site/{obj_id}/{obj_id}.html"
         texmacs = obj.get("sourceFormat") == "application/x-texmacs"
         title = tm_with_math(dc["titles"][0]["title"])
         authors = tm_escape(", ".join(display_name(c) for c in dc["creators"]))
-        links = [f"<hlink|PDF|{pdf}>"]
+        links = [f"<hlink|PDF|ocfl/{obj_id}/{pdf}>"] if pdf else []
         if texmacs:
             # links to .tm files become .html links in the HTML export; the source
             # is linked once for TeXmacs and once (.texmacs, exported as .tm) for HTML

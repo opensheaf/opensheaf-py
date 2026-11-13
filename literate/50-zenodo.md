@@ -86,26 +86,17 @@ sandbox safe, as we shall see.
     <<Zenodo: talking to the API>>
 
 
-    # ---------------------------------------------------------------------------
-    # Metadata
-
     <<Zenodo: deposit metadata from datacite.json>>
 
 
     <<Zenodo: deposits recorded in object.json>>
 
 
-    # ---------------------------------------------------------------------------
-    # Files
-
     <<Zenodo: a reproducible sources.zip>>
 
 
     <<Zenodo: what is uploaded>>
 
-
-    # ---------------------------------------------------------------------------
-    # The deposit
 
     <<Zenodo: files of notices>>
 

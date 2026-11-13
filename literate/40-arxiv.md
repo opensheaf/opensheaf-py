@@ -210,9 +210,6 @@ kept in a list, so that the function can change it without a `global`
 statement.
 
     # in arXiv: downloading politely:
-    # ---------------------------------------------------------------------------
-    # Downloading from arXiv (politely: one request every 3 seconds)
-
     UA = {"User-Agent": "opensheaf-py (https://github.com/opensheaf/opensheaf-py)"}
     _last = [0.0]
 

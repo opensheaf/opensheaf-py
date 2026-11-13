@@ -172,10 +172,10 @@ not checked.
 The descriptions are checked against each other and against sections 8 and
 9. `object.json` must name its object, and its archive, except in a mirror:
 an object whose head names another archive is a copy of that archive's
-object (the comment cites section 10.2; mirrors are now section 10.4, and
-the specification now identifies them by `mirrorOf` in the discovery
-document, which this check does not read yet). The two files must agree on
-the document version and the date of a withdrawal. `datacite.json` must
+object (section 10.4; the specification now also identifies a mirror by
+`mirrorOf` in the discovery document, which this check does not read
+yet). The two files must agree on the document version and the date of a
+withdrawal. `datacite.json` must
 have the required properties; a Creative Commons or arXiv licence must be
 identified, by SPDX or by URL, so that archives record the same licence the
 same way (section 8). Every note with a file must find that file in the
@@ -190,7 +190,7 @@ version.
     elif obj.get("archiveId") != disc.get("archiveId") and \
             read_json(d, inv, OBJ).get("archiveId") == disc.get("archiveId"):
         errors.append(f"{where}: {ver} object.json names another archive")
-    # an object whose head names another archive is a mirror (section 10.2)
+    # an object whose head names another archive is a mirror (section 10.4)
     if str(obj.get("documentVersion")) != dc.get("version"):
         errors.append(f"{where}: {ver} datacite.json and object.json disagree on the version")
     if obj.get("status") == "withdrawn" and date_of(dc, "Withdrawn") != obj.get("withdrawal", {}).get("date"):
@@ -249,9 +249,6 @@ document version its own files, its change note, and whether its sources
 were missing.
 
     # in check the document versions of a document:
-    # ---------------------------------------------------------------------------
-    # Verification (section 14 of the specification)
-
     def document_version_errors(obj_id, d, inv):
         """Section 7.3: numbering without gaps, the same files for the same
         document version (a version with sourcesMissing may be completed by adding

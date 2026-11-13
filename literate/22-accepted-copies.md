@@ -161,12 +161,16 @@ first content path the manifest gives for its digest, checked against
 the digest, and written into a temporary folder under its logical path.
 `datacite.json` and `object.json` are not copied: the copy has its own,
 written below. A file that does not match stops everything before
-anything is deposited. The list `received` is not used.
+anything is deposited. The notice files of the source version are copied
+too: section 10.5 asks for exactly the files of the vetted version, every
+file but the two descriptions. In the copy they are files of its first
+document version like the others, since the copy does not take over the
+source's `notices` (a statement of the source's archive, not of this
+one); the source version, which the copy links, explains them.
 
     # in copy the files of the vetted version, checking each:
     base = r.root + args.id + "/"
     state = {p: dg for dg, ps in inv["versions"][ver]["state"].items() for p in ps}
-    received = []
     for logical, dg in sorted(state.items()):
         if logical in ("datacite.json", P.OBJ):
             continue
@@ -177,20 +181,6 @@ anything is deposited. The list `received` is not used.
         f.parent.mkdir(parents=True, exist_ok=True)
         f.write_bytes(data)
         files[logical] = f
-    <<leave out the notice files of the source>>
-
-The files of the source's notices are left out. A notice is a statement
-of the source's archive about the source version (section 7.3); the copy
-does not take over the source's `notices`, and the files would be left
-without the notice that explains them. The amended specification asks
-instead for exactly the files of the vetted version, every file but the
-two descriptions; the two differ only for a version that carries notice
-files.
-
-    # in leave out the notice files of the source:
-    for n in src_obj.get("notices", []):      # notices of the source are its archive's, not ours
-        if n.get("path"):
-            files.pop(n["path"], None)
 
 ### The description
 
@@ -224,15 +214,13 @@ became public here: `--available`, or today.
     P.set_date(dc, "Available", available)
 
 The relations of the source remain true of the copy, whose files are the
-same; to them is added the link to the source object version itself.
-Its address is built with the storage root at `ocfl/`, where these tools
-put it, rather than with the root the source's discovery document
-states.
+same; to them is added the link to the source object version itself,
+at the storage root that the source's discovery document states.
 
     # in the relations of an accepted copy:
     # the files are those of the source version: its relations stay true
     rel = list(src_dc.get("relatedIdentifiers", []))
-    rel.append({"relatedIdentifier": f"{r.url}ocfl/{args.id}/{ver}/", "relatedIdentifierType": "URL",
+    rel.append({"relatedIdentifier": f"{r.root}{args.id}/{ver}/", "relatedIdentifierType": "URL",
                 "relationType": "IsIdenticalTo"})
     dc["relatedIdentifiers"] = rel
 
@@ -276,7 +264,7 @@ source version, its label, and its pin. The website shows the label in
 the heading of the version ([the website](30-website.md)).
 
     # in the source record of an accepted copy:
-    obj["external"] = [{"role": "source", "service": "OpenSheaf", "record": f"{r.url}ocfl/{args.id}/{ver}/",
+    obj["external"] = [{"role": "source", "service": "OpenSheaf", "record": f"{r.root}{args.id}/{ver}/",
                         "label": f"{args.id} {ver}",
                         "files": [{"name": "inventory.json", "sha512": pin}]}]
     obj["status"] = "active"
@@ -286,12 +274,17 @@ the heading of the version ([the website](30-website.md)).
 The copy is deposited with the functions of the core. For a correction,
 `carry_forward` keeps the notices of the document accepted before, which
 persist unchanged in every later version, and its history if it has one;
-`carried_files` keeps the files of those notices. The message of the
-OCFL version names the source and the beginning of its pin.
+`carried_files` keeps the files of those notices. Since the vetted
+version may have notice files of its own, a file of a notice of this
+archive at the same logical path as a different file of the vetted
+version stops the command: one of the two would be lost. The message of
+the OCFL version names the source and the beginning of its pin.
 
     # in deposit the accepted copy:
     P.carry_forward(prev_obj, obj, have, P.next_object_version(have))
     for lp, f in P.carried_files(obj_id, have).items():
+        if lp in files and P.digest(files[lp]) != P.digest(f):
+            sys.exit(f"{obj_id}: the file {lp} of a notice here differs from that of {args.id} {ver}")
         files.setdefault(lp, f)
     P.write_json(tmp / "datacite.json", dc)
     P.write_json(tmp / P.OBJ, obj)

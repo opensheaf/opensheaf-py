@@ -96,9 +96,6 @@ def configure(root):
     return ROOT
 
 
-# ---------------------------------------------------------------------------
-# Digests and OCFL
-
 def digest(path, algo="sha512"):
     h = hashlib.new(algo)
     with open(path, "rb") as f:
@@ -164,6 +161,14 @@ def doc_version_of(obj_dir, inv, version):
     return read_json(obj_dir, inv, OBJ, version)["documentVersion"]
 
 
+def pdf_of(obj):
+    """The logical path of the PDF of a document version, from the renditions
+    in its object.json, or None."""
+    rs = obj.get("renditions", [])
+    return next((r["path"] for r in rs if r.get("mediaType") == "application/pdf"),
+                next((r["path"] for r in rs if r["path"].lower().endswith(".pdf")), None))
+
+
 def default_history(obj_dir, inv):
     """Without `history`: the last object version holding each document
     version, in the order of the numbers (section 7.3)."""
@@ -181,9 +186,9 @@ def history_of(obj_dir, inv):
 
 def current_version(obj_dir, inv):
     """The object version holding the current document version: the last
-    entry of the history of the head (section 7.3)."""
-    head = read_json(obj_dir, inv, OBJ)
-    return head["history"][-1] if head.get("history") else inv["head"]
+    entry of the history of the head, or without one the last object
+    version holding the highest document version (section 7.3)."""
+    return history_of(obj_dir, inv)[-1]
 
 
 def next_object_version(inv):
@@ -299,9 +304,6 @@ def add_version(obj_id, files, message):
     return inv
 
 
-# ---------------------------------------------------------------------------
-# TeXmacs
-
 def run_texmacs(calls):
     """Run Scheme CALLS in a headless TeXmacs with the private profile."""
     tm = os.environ.get("TEXMACS_BIN", "/Applications/TeXmacs.app/Contents/MacOS/TeXmacs")
@@ -406,15 +408,6 @@ def tm_balanced(s, i):
     return j
 
 
-def tm_title(source):
-    s = source.read_text(encoding="latin-1")
-    i = s.find("<doc-title|")
-    if i < 0:
-        return None
-    i += len("<doc-title|")
-    return " ".join(s[i:tm_balanced(s, i)].split())
-
-
 def tm_abstract(source):
     """The paragraphs of the abstract of a TeXmacs document, as markup."""
     s = source.read_text(encoding="latin-1")
@@ -510,9 +503,6 @@ def tm_to_text(markup):
     return re.sub(r"[ \t]+", " ", _render(_parse(markup)[0], False)).strip()
 
 
-# ---------------------------------------------------------------------------
-# Description and deposit
-
 def creator(spec):
     """'Family, Given|Affiliation' -> DataCite creator."""
     name, _, aff = spec.partition("|")
@@ -583,7 +573,7 @@ def deposit(args):
     if not ID_RE.match(obj_id) or len(obj_id) > 64:
         sys.exit("ID must match ^[a-z0-9]+(-[a-z0-9]+)*$ and have at most 64 characters")
     if len(obj_id) > 32:
-        print(f"warning: {obj_id} is longer than 32 characters (section 5: SHOULD be short)")
+        print(f"warning: {obj_id} is longer than 32 characters (section 6.3: SHOULD be short)")
     init_storage_root()
     source = Path(args.source) if args.source else None
     for f in [source, args.pdf and Path(args.pdf)] + [Path(x.partition("=")[0]) for x in args.extra_source or []]:
@@ -718,9 +708,6 @@ def deposit(args):
     shutil.rmtree(tmp, ignore_errors=True)
     print(f"{obj_id}: {inv['head']} (document version {doc_version})")
 
-
-# ---------------------------------------------------------------------------
-# Collection
 
 def documents():
     """(obj_id, dir, inventory, current object version, its object.json and
@@ -876,6 +863,14 @@ def complete(args):
     obj.pop("notices", None)
     obj.pop("history", None)
     carry_forward(head, obj, inv, next_object_version(inv))
+    obj.pop("withdrawal", None)
+    obj["status"] = head["status"]           # the state of the object is the head's
+    if head.get("withdrawal"):
+        obj["withdrawal"] = head["withdrawal"]
+        set_date(dc, "Withdrawn", head["withdrawal"]["date"])
+        if head["withdrawal"]["reason"].get("path"):
+            lp = head["withdrawal"]["reason"]["path"]
+            files.setdefault(lp, read_logical(d, inv, lp))
     set_date(dc, "Updated", TODAY)
     fmt = obj["sourceFormat"]
     if fmt not in dc.get("formats", []):
@@ -933,7 +928,7 @@ ORDER = "issued-desc"
 
 
 def member_order(members):
-    """Section 10: by Issued, then Available (newest first for issued-desc),
+    """Section 10.2: by Issued, then Available (newest first for issued-desc),
     members with neither last, ties broken by object identifier."""
     def key(m):
         c = m.get("cite", {})
@@ -1007,9 +1002,6 @@ def collect(args):
     shutil.rmtree(tmp, ignore_errors=True)
     print(f"{coll_id}: {inv['head']} ({len(members)} members)")
 
-
-# ---------------------------------------------------------------------------
-# Discovery document and index
 
 def discovery():
     objs = []
@@ -1118,13 +1110,13 @@ def index_entry(member):
     inv = load_inventory(d)
     obj = read_json(d, inv, OBJ, ver)
     dc = read_json(d, inv, "datacite.json", ver)
-    pdf = f"ocfl/{obj_id}/" + content_path(inv, ver, "paper.pdf")
+    pdf = content_path(inv, ver, pdf_of(obj)) if pdf_of(obj) else None
     src = f"ocfl/{obj_id}/" + content_path(inv, ver, obj["mainSource"]) if obj.get("mainSource") else None
     html = f"site/{obj_id}/{obj_id}.html"
     texmacs = obj.get("sourceFormat") == "application/x-texmacs"
     title = tm_with_math(dc["titles"][0]["title"])
     authors = tm_escape(", ".join(display_name(c) for c in dc["creators"]))
-    links = [f"<hlink|PDF|{pdf}>"]
+    links = [f"<hlink|PDF|ocfl/{obj_id}/{pdf}>"] if pdf else []
     if texmacs:
         # links to .tm files become .html links in the HTML export; the source
         # is linked once for TeXmacs and once (.texmacs, exported as .tm) for HTML
@@ -1196,9 +1188,6 @@ def index(args):
         shutil.rmtree(scratch, ignore_errors=True)
     print("opensheaf.json, index.tm" + ("" if args.no_html else " and index.html") + " written")
 
-
-# ---------------------------------------------------------------------------
-# Verification (section 14 of the specification)
 
 def document_version_errors(obj_id, d, inv):
     """Section 7.3: numbering without gaps, the same files for the same
@@ -1324,7 +1313,7 @@ def verify_errors():
             elif obj.get("archiveId") != disc.get("archiveId") and \
                     read_json(d, inv, OBJ).get("archiveId") == disc.get("archiveId"):
                 errors.append(f"{where}: {ver} object.json names another archive")
-            # an object whose head names another archive is a mirror (section 10.2)
+            # an object whose head names another archive is a mirror (section 10.4)
             if str(obj.get("documentVersion")) != dc.get("version"):
                 errors.append(f"{where}: {ver} datacite.json and object.json disagree on the version")
             if obj.get("status") == "withdrawn" and date_of(dc, "Withdrawn") != obj.get("withdrawal", {}).get("date"):

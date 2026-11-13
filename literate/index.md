@@ -101,28 +101,10 @@ dealt with in the code:
   written, the discovery document has no `mirrorOf`, the main collection
   pins the object version holding the current document version instead of
   the head, `collection update` keeps the old pin of a withdrawn member
-  instead of following the head, and `verify` knows none of this. Some
-  comments and messages still cite the old section numbers (5 for
-  identifiers, 10.2 for mirrors).
-- Without a `history`, `current_version` takes the head as current; after
-  `osheaf complete` on an earlier version the head holds that earlier
-  version, so the wrong one is current.
-- `complete` takes the status from the version it completes, so
-  completing an earlier version of a withdrawn document would lose the
-  withdrawal.
-- `accept` leaves out the notice files of the vetted version, where the
-  specification asks for exactly its files, and builds the source's URL
-  with `ocfl/` instead of the source's `storageRoot`.
+  instead of following the head, and `verify` knows none of this.
 - `collection update` does not copy new versions into a mirror held here,
   and the website then fails to render the member until `osheaf mirror` is
   run again.
 - `check_remote` does not try the mirrors listed in an archive's discovery
   document.
-- Unpacking arXiv source archives does not guard against archives that
-  expand to excessive sizes (section 15).
-- With `--from`, options with a non-empty default (`deposit --type`,
-  `relate --relation`) cannot be set from the file, and the alias
-  `date` for `available` makes `date:` unusable in a relicensing file.
-- Small things: `tm_title`, `is_mirror` and a variable in `accept` are
-  unused; `resolve` ignores its `here` argument; the pages assume the PDF
-  is called `paper.pdf`.
+- `is_mirror` is unused.

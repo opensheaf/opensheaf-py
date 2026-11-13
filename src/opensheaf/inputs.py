@@ -37,7 +37,7 @@ import sys
 from pathlib import Path
 
 ALIASES = {"authors": "author", "keywords": "keyword", "extra_sources": "extra_source",
-           "relations": "related", "tools": "toolchain", "date": "available"}
+           "relations": "related", "tools": "toolchain"}
 PATHS = ("source", "pdf", "abstract_file", "folder")
 LISTS = ("author", "keyword", "extra_source", "related", "toolchain")
 
@@ -90,14 +90,18 @@ def normalise(entry, base):
 
 
 def merge(args, entry, parser, command):
-    """A copy of ARGS with the values of ENTRY where the command line gave none."""
+    """A copy of ARGS with the values of ENTRY for the options the command line
+    did not give."""
     import argparse
     ns = argparse.Namespace(**vars(args))
-    known = set(vars(args))
+    known = set(vars(args)) - {"cmd", "func", "from_file"}
+    if "date" in entry and "date" not in known and "available" in known:
+        entry = {("available" if k == "date" else k): v for k, v in entry.items()}
     unknown = [k for k in entry if k not in known]
     if unknown:
         parser.error(f"{command}: unknown option(s) in the file: {', '.join(sorted(unknown))}")
+    sub = next(a for a in parser._actions if isinstance(a, argparse._SubParsersAction)).choices[command]
     for k, v in entry.items():
-        if getattr(ns, k) in (None, False, []):
+        if getattr(ns, k) == sub.get_default(k):
             setattr(ns, k, v)
     return ns

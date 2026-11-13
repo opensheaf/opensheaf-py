@@ -34,8 +34,7 @@ is redistribution, which the licence of every version copied must allow.
 The specification now also asks the discovery document to list a mirror
 with `mirrorOf`, the identifier of the original archive (section 6.1).
 The discovery document written by these tools (in the chapters on the
-core) does not do so yet. The docstring below still calls the section on
-mirrors 10.2, its number before the amendment.
+core) does not do so yet.
 
 The module
 ----------
@@ -60,7 +59,7 @@ module reuses `Remote` and `get` from the collections module, so that
 mirrors read other archives exactly as collections do.
 
     # in the documentation of mirror.py:
-    """Mirrors (section 10.2 of the specification): a copy, in this archive's
+    """Mirrors (section 10.4 of the specification): a copy, in this archive's
     storage root, of another archive's object, byte for byte and with all its
     versions, kept under its own identifier.
 
@@ -177,7 +176,7 @@ is left alone.
     if have:
         here = P.read_json(d, have, P.OBJ)
         if here.get("archiveId") != r.archive_id:
-            sys.exit(f"this archive has an object {obj_id} already (section 10.2: a mirror keeps its "
+            sys.exit(f"this archive has an object {obj_id} already (section 10.4: a mirror keeps its "
                      "identifier only if no object of this archive has it)")
 
 ### Copying through a staging folder

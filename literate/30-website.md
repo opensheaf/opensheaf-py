@@ -141,7 +141,9 @@ Authors are shown by their display names, given name first. A link to a
 file of a version goes through the inventory: the logical path is
 translated into the content path where OCFL stores the file, which may
 lie in the folder of an earlier version. A file the version does not
-have gives no link.
+have gives no link. The PDF of a version is the one its `object.json`
+names among the renditions ([document versions](11-versions.md)), and
+its address is `None` when there is none.
 
     # in dates, authors and file links on the website:
     def fmt_date(d):
@@ -155,6 +157,12 @@ have gives no link.
     def file_link(root, obj_id, inv, ver, logical, label):
         cp = P.content_path(inv, ver, logical)
         return f'<a href="{root}ocfl/{obj_id}/{esc(cp)}">{esc(label)}</a>' if cp else ""
+
+
+    def pdf_address(root, obj_id, inv, ver, obj):
+        lp = P.pdf_of(obj)
+        cp = P.content_path(inv, ver, lp) if lp else None
+        return f"{root}ocfl/{obj_id}/{cp}" if cp else None
 
 An abstract may have several paragraphs, separated by blank lines in
 `datacite.json`; the line breaks inside a paragraph are only those of the
@@ -198,8 +206,9 @@ page.
         <<write the sitemap>>
         <<remove the landing pages of former members>>
 
-The pages assume, as deposits by these tools ensure, that the PDF of a
-document has the logical path `paper.pdf`.
+The PDF of a document is found from its renditions, whatever its name:
+deposits by these tools call it `paper.pdf`, but an accepted copy keeps
+the name its source gave it.
 
 ### The landing page of a document
 
@@ -237,7 +246,7 @@ the base URL.
         "title": esc(dc["titles"][0]["title"]), "authors": esc(authors(dc)),
         "issued": esc(fmt_date(issued)), "abstract": abstract_html(dc),
         "withdrawn": withdrawn, "versions": versions, "licence": licence,
-        "pdf": f'{root}ocfl/{obj_id}/{P.content_path(inv, cur, "paper.pdf")}',
+        "pdf": esc(pdf_address(root, obj_id, inv, cur, obj) or f"#v{obj['documentVersion']}"),
         "cite": esc(cite), "pin": m["inventorySha512"], "pin_url": f"{root}ocfl/{obj_id}/{cur}/inventory.json",
     })
     out = root_out / "paper" / obj_id / "index.html"
@@ -364,7 +373,7 @@ work, `Issued`, or else the date the version became public.
         """Google Scholar's citation_* tags, schema.org JSON-LD and FAIR Signposting."""
         base = P.ARCHIVE["baseUrl"]
         landing = f"{base}paper/{obj_id}/"
-        pdf = f"{base}ocfl/{obj_id}/{P.content_path(inv, cur, 'paper.pdf')}"
+        pdf = pdf_address(base, obj_id, inv, cur, obj)
         date = P.date_of(dc, "Issued") or P.date_of(dc, "Available") or P.date_of(dc, "Created") or ""
         <<the citation tags of Google Scholar>>
         abstract = next((x["description"] for x in dc.get("descriptions", [])
@@ -376,14 +385,16 @@ work, `Issued`, or else the date the version became public.
         return "\n".join(tags)
 
 The PDF is the one of this archive, on the same host as the page, as
-Google Scholar requires.
+Google Scholar requires. A version without a PDF gets no tag for it, here
+and in the links and the record below.
 
     # in the citation tags of Google Scholar:
     tags = [f'<meta name="citation_title" content="{esc(dc["titles"][0]["title"])}">']
     tags += [f'<meta name="citation_author" content="{esc(c["name"])}">' for c in dc["creators"]]
     if date:
         tags.append(f'<meta name="citation_publication_date" content="{esc(date.replace("-", "/"))}">')
-    tags.append(f'<meta name="citation_pdf_url" content="{esc(pdf)}">')
+    if pdf:
+        tags.append(f'<meta name="citation_pdf_url" content="{esc(pdf)}">')
     if dc.get("doi"):
         tags.append(f'<meta name="citation_doi" content="{esc(dc["doi"])}">')
 
@@ -400,8 +411,9 @@ the page.
     tags += [f'<link rel="canonical" href="{esc(landing)}">',
              f'<link rel="cite-as" href="{esc(cite)}">',
              f'<link rel="describedby" href="{base}ocfl/{obj_id}/{P.content_path(inv, cur, "datacite.json")}"'
-             ' type="application/vnd.datacite.datacite+json">',
-             f'<link rel="item" href="{esc(pdf)}" type="application/pdf">']
+             ' type="application/vnd.datacite.datacite+json">']
+    if pdf:
+        tags.append(f'<link rel="item" href="{esc(pdf)}" type="application/pdf">')
     if rights.get("rightsUri"):
         tags.append(f'<link rel="license" href="{esc(rights["rightsUri"])}">')
 
@@ -414,8 +426,9 @@ which JSON reads as the same string.
     ld = {"@context": "https://schema.org", "@type": "ScholarlyArticle",
           "name": dc["titles"][0]["title"], "url": landing,
           "author": [{"@type": "Person", "name": P.display_name(c)} for c in dc["creators"]],
-          "datePublished": date, "version": dc["version"],
-          "encoding": {"@type": "MediaObject", "contentUrl": pdf, "encodingFormat": "application/pdf"}}
+          "datePublished": date, "version": dc["version"]}
+    if pdf:
+        ld["encoding"] = {"@type": "MediaObject", "contentUrl": pdf, "encodingFormat": "application/pdf"}
     if abstract:
         ld["abstract"] = abstract
     if dc.get("doi"):
@@ -437,14 +450,15 @@ the home page shows the pin of every member. The abstract is folded in a
 `<details>` element, so that the list stays short.
 
     # in the home-page entry of a document of this archive:
-    pdf = f'ocfl/{obj_id}/{P.content_path(inv, cur, "paper.pdf")}'
+    pdf = pdf_address("", obj_id, inv, cur, obj)
     abstract = abstract_html(dc)
     entries.append("\n".join([
         f'<li class="paper{" withdrawn" if withdrawn else ""}">',
         f'<a class="paper-title" href="paper/{obj_id}/">{esc(dc["titles"][0]["title"])}</a>',
         f'<div class="paper-authors">{esc(authors(dc))}</div>',
         f'<div class="paper-meta">{esc((issued or "")[:4])} · version {obj["documentVersion"]}'
-        f' · <a href="{pdf}">PDF</a> · <span class="pin" title="{m["inventorySha512"]}">'
+        + (f' · <a href="{esc(pdf)}">PDF</a>' if pdf else "")
+        + f' · <span class="pin" title="{m["inventorySha512"]}">'
         f'pin {m["inventorySha512"][:32]}…</span></div>',
         f"<details><summary>Abstract</summary>{abstract}</details>" if abstract else "",
         "</li>"]))
@@ -548,9 +562,9 @@ pages are written.
     inv = P.load_inventory(P.OCFL / m["id"])
     dc = P.read_json(P.OCFL / m["id"], inv, "datacite.json", m["version"])
     title, by, abstract = dc["titles"][0]["title"], authors(dc), abstract_html(dc)
-    cp = P.content_path(inv, m["version"], "paper.pdf")
-    if cp:
-        links.append(f'<a href="ocfl/{m["id"]}/{esc(cp)}">PDF (mirrored here)</a>')
+    pdf = pdf_address("", m["id"], inv, m["version"], P.read_json(P.OCFL / m["id"], inv, P.OBJ, m["version"]))
+    if pdf:
+        links.append(f'<a href="{esc(pdf)}">PDF (mirrored here)</a>')
 
 The member's archive is read with the `Remote` of the collections
 module, at the pinned version. Any failure, from the network to a
@@ -563,7 +577,8 @@ missing file, falls back on what is already known.
     rdc = json.loads(r.file(m["id"], rinv, m["version"], "datacite.json"))
     if not here:
         title, by, abstract = rdc["titles"][0]["title"], authors(rdc), abstract_html(rdc)
-        cp = P.content_path(rinv, m["version"], "paper.pdf")
+        lp = P.pdf_of(json.loads(r.file(m["id"], rinv, m["version"], P.OBJ)))
+        cp = P.content_path(rinv, m["version"], lp) if lp else None
         if cp:
             links.append(f'<a href="{esc(r.root + m["id"] + "/" + cp)}">PDF</a>')
     if rdc.get("url"):

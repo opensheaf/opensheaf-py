@@ -32,6 +32,22 @@ The document version an object version holds is written in its
     def doc_version_of(obj_dir, inv, version):
         return read_json(obj_dir, inv, OBJ, version)["documentVersion"]
 
+`object.json` also names the renditions of a document version, with their
+media types (section 9). The PDF, which landing pages, the home page and
+the index link, is the first rendition of type `application/pdf`, or else
+the first whose logical path ends in `.pdf`; a document version may have
+none. Its logical path depends on how the version was deposited: these
+tools call it `paper.pdf`, but an [accepted copy](22-accepted-copies.md)
+or a mirror keeps the name its source gave it.
+
+    # in the PDF of a document version:
+    def pdf_of(obj):
+        """The logical path of the PDF of a document version, from the renditions
+        in its object.json, or None."""
+        rs = obj.get("renditions", [])
+        return next((r["path"] for r in rs if r.get("mediaType") == "application/pdf"),
+                    next((r["path"] for r in rs if r["path"].lower().endswith(".pdf")), None))
+
 The two numberings diverge for three reasons. A *description-only version*
 changes the description of an object (a DOI, a link to the published
 article, a licence, a notice, a withdrawal) but not the files of the work,
@@ -94,20 +110,20 @@ found later, or one just described).
     # in the object version holding the current version of a document:
     def current_version(obj_dir, inv):
         """The object version holding the current document version: the last
-        entry of the history of the head (section 7.3)."""
-        head = read_json(obj_dir, inv, OBJ)
-        return head["history"][-1] if head.get("history") else inv["head"]
+        entry of the history of the head, or without one the last object
+        version holding the highest document version (section 7.3)."""
+        return history_of(obj_dir, inv)[-1]
 
-Without `history`, this takes the head, which is the object version of the
-highest document version as long as the head holds the current version:
-true after a deposit and after the description-only versions of
-[chapter 14](14-description.md), which describe the head. A completion of an
-*earlier* version without sources is the exception: its object version
-becomes the head without writing a history, and this function then returns
-it, where the specification (the highest document version) and
-`default_history` would give the later version. The case is rare (it needs
-a version imported without sources, then a later version, then the
-sources of the first) but these tools do not handle it yet.
+Without `history`, the head is not always the answer. It holds the
+highest document version after a deposit and after the description-only
+versions of [chapter 14](14-description.md) that describe it; but a
+[completion](14-description.md) of an *earlier* version without sources
+becomes the head without writing a history, since the order of the
+numbers is still the order of the work. The head then holds the earlier
+version, and the current version is still the later one: the last entry
+of `default_history`, as the specification says. Without a history this
+reads the `object.json` of every object version, which for a document
+means a few small files.
 
 ### Carrying the history and the notices forward
 

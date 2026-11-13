@@ -64,10 +64,7 @@ whose members are pinned as above, and *selections*, which vet particular
 revisions and pin them in a list `revisions`, with `type` in
 `members.json` saying which kind a collection is. These tools do not yet
 make that distinction: they write no `type`, and every collection they
-make has members in the form above, that of an archive collection. The
-section numbers in the comments of the code also predate the amended
-specification: what they call section 10.2 (mirrors) and 10.3 (members
-of other archives) are now sections 10.4 and 10.3.
+make has members in the form above, that of an archive collection.
 
 The module
 ----------
@@ -87,6 +84,7 @@ other archives.
     import sys
     import tempfile
     import shutil
+    import urllib.parse
     import urllib.request
     from pathlib import Path
 
@@ -218,8 +216,9 @@ Most files read are JSON.
         return json.loads(get(url))
 
 A `Remote` is an archive opened at an address: its discovery document is
-read once, and gives the storage root (by default `ocfl/`, relative to the
-base URL) and the archive identifier, which is what names the archive in
+read once, and gives the storage root (by default `ocfl/`; a relative
+address is relative to the base URL, an absolute one is taken as it is)
+and the archive identifier, which is what names the archive in
 collections. An inventory is read from the object's root (the head) or
 from a version's folder; a file of a version is found through its logical
 path, as in the chapters on the core.
@@ -231,7 +230,7 @@ path, as in the chapters on the core.
         def __init__(self, url):
             self.url = norm_url(url)
             self.disc = get_json(self.url + "opensheaf.json")
-            self.root = self.url + self.disc.get("storageRoot", "ocfl/")
+            self.root = urllib.parse.urljoin(self.url, self.disc.get("storageRoot", "ocfl/"))
             self.archive_id = self.disc["archiveId"]
 
         def inventory(self, obj_id, ver=None):
@@ -252,14 +251,22 @@ found later (an old preprint deposited after a newer one) is placed in
 the history before the current version, and a description-only version
 changes the head without changing which document version is current
 (section 7.3). The current version is the last entry of `history` in the
-head's `object.json`, or the head when there is no history.
+head's `object.json`; without a history, it is the last object version
+holding the highest document version, as for the objects of this archive
+([document versions](11-versions.md)), which needs the `object.json` of
+every version.
 
     # in the current version of a remote object:
     def current(self, obj_id):
         """The object version holding the current document version."""
         inv = self.inventory(obj_id)
         head = json.loads(self.file(obj_id, inv, inv["head"], P.OBJ))
-        return (head["history"][-1] if head.get("history") else inv["head"]), inv
+        if head.get("history"):
+            return head["history"][-1], inv
+        last = {}
+        for ver in inv["versions"]:
+            last[json.loads(self.file(obj_id, inv, ver, P.OBJ))["documentVersion"]] = ver
+        return last[max(last)], inv
 
 A pin is the SHA-512 of the bytes of an inventory. OCFL keeps next to
 each inventory a *sidecar*, `inventory.json.sha512`, with its digest.
@@ -282,11 +289,11 @@ Resolving a member
 Resolving turns an entry of `collection.yaml` into a member of
 `members.json`. It reads the pinned version of the object, here or in its
 archive, and builds the member record from its `object.json` and
-`datacite.json`. The second argument, the root of this archive, is not
-used: the archive is known from the configuration.
+`datacite.json`. This archive, against which the entry's address is
+compared, is the one configured.
 
     # in resolving a member of a collection:
-    def resolve(entry, here):
+    def resolve(entry):
         """The member for an entry of collection.yaml (mirror: yes copies the
         object into this archive first, and lists the copy as a mirror)."""
         url = entry.get("archive", ".")
@@ -488,7 +495,7 @@ by `Issued` alone, those without a date last.
         order = spec.get("order", "manual")
         members = []
         for e in spec.get("members", []):
-            m = resolve(e, P.ROOT)
+            m = resolve(e)
             print(f"  {m['id']} ({m['archive']}): {m['version']}  {m['inventorySha512'][:16]}...")
             members.append(m)
         if order != "manual":
@@ -535,12 +542,12 @@ tools keep the earlier behaviour.
     # in move a followed member to its current version:
     local = m["archive"] == P.ARCHIVE["archiveId"]
     if head_status(m, local) == "withdrawn":
-        # section 10.3: the pin is kept, and the curator is told
+        # the pin is kept, and the curator is told (section 10.2 now follows the head)
         print(f"  {m['id']}: withdrawn in its archive; the pin {m['version']} is kept")
         members.append(m)
         continue
     entry = {"archive": "." if local else m["archiveUrl"], "id": m["id"]}
-    new = resolve(entry, P.ROOT)
+    new = resolve(entry)
     if new["version"] != m["version"]:
         print(f"  {m['id']}: {m['version']} -> {new['version']}")
     m = new

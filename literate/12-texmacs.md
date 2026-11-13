@@ -26,9 +26,6 @@ extracts titles and abstracts for `datacite.json`. It is used by the
     <<find the end of the arguments of a TeXmacs tag>>
 
 
-    <<the title of a TeXmacs document>>
-
-
     <<the paragraphs of the abstract of a TeXmacs document>>
 
 
@@ -62,9 +59,6 @@ helpers may leave files in the current folder, which is often the
 archive.
 
     # in run Scheme code in a headless TeXmacs:
-    # ---------------------------------------------------------------------------
-    # TeXmacs
-
     def run_texmacs(calls):
         """Run Scheme CALLS in a headless TeXmacs with the private profile."""
         <<prepare the private TeXmacs profile of the archive>>
@@ -200,13 +194,14 @@ the copy is the same bytes as the source but for the style line.
 Reading TeXmacs markup
 ----------------------
 
-The title and abstract in `datacite.json` are plain text, with
-mathematics in LaTeX between dollars (section 8, appendix B), converted
-from the TeXmacs document. TeXmacs files are a markup of their own:
+The abstract in `datacite.json` is plain text, with mathematics in LaTeX
+between dollars (section 8, appendix B), converted from the TeXmacs
+document; the title is given by the depositor, who may want it different
+from the one in the document. TeXmacs files are a markup of their own:
 `<tag|arg1|arg2>` for inline tags, `<\tag>...</tag>` for tags whose last
 argument is long, `\<alpha\>` for symbols, `\|`, `\\` and so on for escaped
-characters. A complete parser is not needed: titles and abstracts use a
-small part of the markup.
+characters. A complete parser is not needed: abstracts use a small part
+of the markup.
 
 The arguments of a tag end at the `>` that balances its `<`, skipping
 escaped characters.
@@ -227,19 +222,6 @@ escaped characters.
                 depth -= 1
             j += 1
         return j
-
-The title is the argument of `doc-title`, with its spaces normalised, as
-markup. No command uses it at present: the title of a deposit is given by
-the depositor, who may want it different from the one in the document.
-
-    # in the title of a TeXmacs document:
-    def tm_title(source):
-        s = source.read_text(encoding="latin-1")
-        i = s.find("<doc-title|")
-        if i < 0:
-            return None
-        i += len("<doc-title|")
-        return " ".join(s[i:tm_balanced(s, i)].split())
 
 An abstract may be written either way, as `<\abstract>` with paragraphs on
 separate lines, or as `<abstract|...>`. Paragraphs are separated by blank
