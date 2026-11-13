@@ -21,7 +21,7 @@ Python tools for [OpenSheaf](https://opensheaf.org) archives: archives of
 scholarly documents kept as plain files (an OCFL 1.1 storage root with
 DataCite metadata), checkable by anyone and combinable into collections. This
 is the reference implementation of the
-[specification](https://github.com/opensheaf/opensheaf), version 0.1 (draft).
+[specification](https://github.com/opensheaf/opensheaf.github.io), version 0.1 (draft).
 
 The package is `opensheaf`; its command is `osheaf` (also installed as
 `opensheaf`).
