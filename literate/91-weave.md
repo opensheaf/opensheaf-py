@@ -278,9 +278,15 @@ The page template filled
 
 Every page has the same frame, a template with placeholders in double
 braces: a header, the list of chapters at the side, and links to the
-chapters before and after at the end.
+chapters before and after at the end. The title of the front page has the
+OpenSheaf symbol on its left, the dot mark of the logo without its
+lettering, as tall as the letters; so does the name in the header bar of
+every page.
 
     # in the page template filled:
+    SYMBOL = '<img class="symbol" src="opensheaf-symbol.svg" alt="">'
+
+
     def fill(template, **values):
         return re.sub(r"\{\{(\w+)\}\}", lambda m: values[m.group(1)], template)
 
@@ -289,6 +295,8 @@ chapters before and after at the end.
         pages = [(page_of(d), title_of(d)) for d in web.docs] + [("chunks.html", "Files and chunks")]
         for k, (page, title) in enumerate(pages):
             body = web.index_html() if page == "chunks.html" else web.document_html(web.docs[k])
+            if page == "index.html":
+                body = re.sub(r"(<h1[^>]*>)", lambda m: m.group(1) + SYMBOL, body, count=1)
             nav = "".join(f'<li{" class=current" if p == page else ""}><a href="{p}">{esc(t)}</a></li>'
                           for p, t in pages)
             turn = ""
@@ -299,9 +307,10 @@ chapters before and after at the end.
             (out / page).write_text(fill(template, title=esc(title), nav=f"<ol>{nav}</ol>", body=body,
                                          turn=turn, repository=REPOSITORY), encoding="utf-8")
 
-The weaver writes the pages and the stylesheet into a folder, `site/` by
-default, which is not kept in the repository; the template and the
-stylesheet sit next to the weaver.
+The weaver writes the pages, the stylesheet and the symbol into a folder,
+`site/` by default, which is not kept in the repository; the template, the
+stylesheet and the symbol (a copy of `resources/brand/opensheaf-symbol.svg`
+of the specification's repository) sit next to the weaver.
 
     # in the command line of the weaver:
     def main(argv=None):
@@ -316,6 +325,7 @@ stylesheet sit next to the weaver.
         args.out.mkdir(parents=True, exist_ok=True)
         write_pages(web, args.out, (tools / "weave.html").read_text(encoding="utf-8"))
         <<write the stylesheet>>
+        (args.out / "opensheaf-symbol.svg").write_bytes((tools / "opensheaf-symbol.svg").read_bytes())
         print(f"wove {len(web.docs) + 1} pages into {args.out}")
 
 The stylesheet is ours followed by the colours of Pygments, a light style
@@ -342,7 +352,7 @@ The template and the stylesheet
     </head>
     <body>
     <header class="site">
-      <a class="home" href="index.html">opensheaf-py</a>
+      <a class="home" href="index.html"><img class="symbol" src="opensheaf-symbol.svg" alt="">opensheaf-py</a>
       <span>the tools of <a href="https://opensheaf.org">OpenSheaf</a>, a literate program</span>
       <span class="links"><a href="chunks.html">chunks</a> · <a href="{{repository}}">source</a></span>
     </header>
@@ -411,6 +421,9 @@ chunk name above it as a caption.
     blockquote.alert > p:first-child::before { content: "Warning. "; font-weight: 600; }
     blockquote.note > p:first-child::before { content: "Note. "; }
     ul.chunks { padding-left: 1.2em; }
+    h1 img.symbol { height: 1.1em; width: auto; vertical-align: -0.12em; margin-right: 0.35em; }
+    header.site img.symbol { height: 1.15em; width: auto; vertical-align: -0.2em; margin-right: 0.4em; }
+    @media (prefers-color-scheme: dark) { img.symbol { filter: invert(1); } }
     nav.turn { display: flex; justify-content: space-between; gap: 1em; margin-top: 3em;
       padding-top: 1em; border-top: 1px solid var(--rule); font: 14px system-ui, sans-serif; }
     nav.turn .next { margin-left: auto; text-align: right; }

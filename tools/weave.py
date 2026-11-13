@@ -170,6 +170,9 @@ class Web:
                 f'<h2>Chunks</h2><ul class="chunks">{"".join(items)}</ul>')
 
 
+SYMBOL = '<img class="symbol" src="opensheaf-symbol.svg" alt="">'
+
+
 def fill(template, **values):
     return re.sub(r"\{\{(\w+)\}\}", lambda m: values[m.group(1)], template)
 
@@ -178,6 +181,8 @@ def write_pages(web, out, template):
     pages = [(page_of(d), title_of(d)) for d in web.docs] + [("chunks.html", "Files and chunks")]
     for k, (page, title) in enumerate(pages):
         body = web.index_html() if page == "chunks.html" else web.document_html(web.docs[k])
+        if page == "index.html":
+            body = re.sub(r"(<h1[^>]*>)", lambda m: m.group(1) + SYMBOL, body, count=1)
         nav = "".join(f'<li{" class=current" if p == page else ""}><a href="{p}">{esc(t)}</a></li>'
                       for p, t in pages)
         turn = ""
@@ -205,6 +210,7 @@ def main(argv=None):
     css = (tools / "weave.css").read_text(encoding="utf-8")
     (args.out / "style.css").write_text(
         f"{light}\n@media (prefers-color-scheme: dark) {{\n{dark}\n}}\n{css}", encoding="utf-8")
+    (args.out / "opensheaf-symbol.svg").write_bytes((tools / "opensheaf-symbol.svg").read_bytes())
     print(f"wove {len(web.docs) + 1} pages into {args.out}")
 
 
