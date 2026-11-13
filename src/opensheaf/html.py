@@ -205,8 +205,18 @@ def render(members):
             f'pin {m["inventorySha512"][:32]}…</span></div>',
             f"<details><summary>Abstract</summary>{abstract}</details>" if abstract else "",
             "</li>"]))
+    lead = ('Papers with their sources, every version, fixed by digests. An '
+            '<a href="https://opensheaf.org">OpenSheaf</a> archive: programs start from '
+            '<a href="opensheaf.json">opensheaf.json</a>.')
+    cdir = P.OCFL / P.ARCHIVE["mainCollection"]
+    cinv = P.load_inventory(cdir)
+    if cinv and P.read_json(cdir, cinv, "members.json").get("order") == "manual":
+        desc = next((x["description"] for x in P.read_json(cdir, cinv, "datacite.json").get("descriptions", [])), "")
+        lead = (esc(desc) + ' A collection in the <a href="https://opensheaf.org">OpenSheaf</a> format: each '
+                'member is kept in its own archive and pinned by a digest; programs start from '
+                '<a href="opensheaf.json">opensheaf.json</a>.')
     index = fill(template("index.html"), {
-        "root": "", "archive_name": esc(P.ARCHIVE["name"]), "base_url": esc(base),
+        "root": "", "archive_name": esc(P.ARCHIVE["name"]), "base_url": esc(base), "lead": lead,
         "papers": "\n".join(entries) if entries else '<li class="empty">No documents yet.</li>',
         "count": str(len(entries)), "updated": esc(fmt_date(datetime.date.today().isoformat())),
     })

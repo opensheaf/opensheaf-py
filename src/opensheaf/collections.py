@@ -131,7 +131,10 @@ def resolve(entry, here):
 def load_spec(path):
     import yaml
     text = Path(path).read_text(encoding="utf-8")
-    spec = json.loads(text) if str(path).endswith(".json") else yaml.load(text, Loader=yaml.BaseLoader)
+    try:
+        spec = json.loads(text) if str(path).endswith(".json") else yaml.load(text, Loader=yaml.BaseLoader)
+    except (yaml.YAMLError, ValueError) as e:
+        sys.exit(f"{path}: not valid: {e}")
     if not isinstance(spec, dict) or not isinstance(spec.get("members", []), list):
         sys.exit(f"{path}: expected a mapping with members: [...]")
     return spec
@@ -208,7 +211,13 @@ def update(args):
     members = []
     for m in doc["members"]:
         if m.get("follow") == "latest":
-            entry = {"archive": "." if m["archive"] == P.ARCHIVE["archiveId"] else m["archiveUrl"], "id": m["id"]}
+            local = m["archive"] == P.ARCHIVE["archiveId"]
+            if head_status(m, local) == "withdrawn":
+                # section 10.3: the pin is kept, and the curator is told
+                print(f"  {m['id']}: withdrawn in its archive; the pin {m['version']} is kept")
+                members.append(m)
+                continue
+            entry = {"archive": "." if local else m["archiveUrl"], "id": m["id"]}
             new = resolve(entry, P.ROOT)
             if new["version"] != m["version"]:
                 print(f"  {m['id']}: {m['version']} -> {new['version']}")
@@ -216,6 +225,16 @@ def update(args):
         members.append(m)
     desc = next((x["description"] for x in dc.get("descriptions", [])), "")
     write(coll_id, members, dc["titles"][0]["title"], desc, doc.get("order", "manual"), args.message)
+
+
+def head_status(m, local):
+    """The status of a member's object, read from its head."""
+    if local:
+        d = P.OCFL / m["id"]
+        return P.read_json(d, P.load_inventory(d), P.OBJ).get("status")
+    r = Remote(m["archiveUrl"])
+    inv = r.inventory(m["id"])
+    return json.loads(r.file(m["id"], inv, inv["head"], P.OBJ)).get("status")
 
 
 def check_remote(members):

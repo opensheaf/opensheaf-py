@@ -3,5 +3,5 @@
 The command is `osheaf` (also installed as `opensheaf`); see `osheaf --help`.
 """
 
-__version__ = "0.4.0"
+__version__ = "0.4.1"
 SPECIFICATION = "0.1"

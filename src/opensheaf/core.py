@@ -737,6 +737,15 @@ RIGHTS = {
     "cc0-1.0": {"rights": "Creative Commons Zero v1.0 Universal",
                 "rightsUri": "https://creativecommons.org/publicdomain/zero/1.0/",
                 "rightsIdentifier": "cc0-1.0", "rightsIdentifierScheme": "SPDX"},
+    "cc-by-sa-4.0": {"rights": "Creative Commons Attribution Share Alike 4.0 International",
+                     "rightsUri": "https://creativecommons.org/licenses/by-sa/4.0/",
+                     "rightsIdentifier": "cc-by-sa-4.0", "rightsIdentifierScheme": "SPDX"},
+    "gpl-3.0-only": {"rights": "GNU General Public License v3.0 only",
+                     "rightsUri": "https://www.gnu.org/licenses/gpl-3.0.html",
+                     "rightsIdentifier": "gpl-3.0-only", "rightsIdentifierScheme": "SPDX"},
+    "gpl-3.0-or-later": {"rights": "GNU General Public License v3.0 or later",
+                         "rightsUri": "https://www.gnu.org/licenses/gpl-3.0.html",
+                         "rightsIdentifier": "gpl-3.0-or-later", "rightsIdentifierScheme": "SPDX"},
 }
 
 

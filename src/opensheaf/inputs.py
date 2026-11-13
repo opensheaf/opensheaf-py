@@ -52,7 +52,11 @@ def load(path):
             import yaml
         except ImportError:
             sys.exit("reading YAML needs PyYAML: pip install pyyaml")
-        data = yaml.load(text, Loader=yaml.BaseLoader)
+        try:
+            data = yaml.load(text, Loader=yaml.BaseLoader)
+        except yaml.YAMLError as e:
+            sys.exit(f"{path}: not valid YAML: {e}\n(texts with ': ' or starting with a"
+                     " special character need quotes)")
     if isinstance(data, dict):
         data = [data]
     if not isinstance(data, list) or not all(isinstance(x, dict) for x in data):
