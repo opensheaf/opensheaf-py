@@ -221,4 +221,7 @@ integration checks that the files are exactly what the documents say.
 
 GNU General Public License, version 3 or later. The JSON Schemas in
 `src/opensheaf/schemas/` are those of the specification, dedicated to the
-public domain under CC0 1.0.
+public domain under CC0 1.0. The OpenSheaf symbol in `tools/` (used by the
+woven website) is licensed under CC BY 4.0, and its use as a mark follows
+the OpenSheaf
+[trademark policy](https://github.com/opensheaf/opensheaf.github.io/blob/main/TRADEMARKS.md).

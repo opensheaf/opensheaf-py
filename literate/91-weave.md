@@ -310,7 +310,10 @@ every page.
 The weaver writes the pages, the stylesheet and the symbol into a folder,
 `site/` by default, which is not kept in the repository; the template, the
 stylesheet and the symbol (a copy of `resources/brand/opensheaf-symbol.svg`
-of the specification's repository) sit next to the weaver.
+of the specification's repository) sit next to the weaver. The symbol is not
+under the GPL of this program: it is licensed under CC BY 4.0, and its use
+as a mark follows the OpenSheaf
+[trademark policy](https://github.com/opensheaf/opensheaf.github.io/blob/main/TRADEMARKS.md).
 
     # in the command line of the weaver:
     def main(argv=None):
