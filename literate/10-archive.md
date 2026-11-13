@@ -29,7 +29,7 @@ build.
     The command is `osheaf` (also installed as `opensheaf`); see `osheaf --help`.
     """
 
-    __version__ = "0.7.0.dev0"
+    __version__ = "0.7.0"
     SPECIFICATION = "0.1"
 
 `python -m opensheaf` runs the same command line as `osheaf`.
