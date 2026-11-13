@@ -74,12 +74,14 @@ osheaf init FOLDER --archive-id URI --name NAME --base-url URL --curator "Family
 osheaf deposit ID SOURCE --pdf PAPER.pdf --title T --author "Family, Given|Affiliation" ...
 osheaf deposit ID SOURCE.tm --title T --author ...           (TeXmacs: typeset by the archive)
 osheaf deposit ID --pdf PAPER.pdf --no-source REASON ...
+osheaf deposit ... --stage VoR --agreement "the journal's publication terms"
 osheaf notice ID --about N --text "..." [--file erratum.pdf]
 osheaf withdraw ID --reason "..."
 osheaf complete ID --version N --source paper.tex [--extra-source ...]
 osheaf relicense ID --rights cc-by-4.0 --method "..."
 osheaf relate ID --to arxiv:ID|doi:DOI [--relation IsIdenticalTo]
 osheaf collect
+osheaf mirror ARCHIVE-URL ID [--licence-checked]
 osheaf collection sync [ID] --from collection.yaml
 osheaf collection update [ID]
 osheaf index
@@ -134,6 +136,15 @@ osheaf arxiv import DOWNLOADS [ARXIV-ID ...] [--update] [--versions v1,v3]
   whose main collection is curated; `osheaf verify --remote` fetches every
   member and checks its pin. See `osheaf collection --help` and the template
   [opensheaf/collection-template](https://github.com/opensheaf/collection-template).
+- **mirror**: copies another archive's object (every version, each file
+  checked against its digest) into this archive, which then serves it too;
+  refused unless every version is under an open licence (CC BY, CC BY-SA,
+  CC0, GPL), or `--licence-checked` says that redistribution is allowed.
+  `mirror: yes` on a member of `collection.yaml` mirrors it and lists the
+  copy in the member's `mirrors`; `verify --remote` checks a member on its
+  mirrors when its archive fails. A journal can thus keep copies of the
+  papers of its issues; or publish its own versions of record as documents of
+  its archive (`deposit` with `--stage VoR`, its licence and `--agreement`).
 - **relicense**, **relate**: description-only versions (a new licence with the
   authors' agreement; a link to the same work elsewhere).
 - **collect**: a new version of the main collection when a document has a new

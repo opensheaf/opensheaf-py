@@ -248,20 +248,31 @@ def remote_entry(m):
     cite = m.get("cite", {})
     title, by, year = cite.get("title", m["id"]), ", ".join(cite.get("creators", [])), cite.get("year", "")
     links, abstract, archive_name = [], "", m.get("archiveUrl", "")
+    here = P.ARCHIVE["baseUrl"] in m.get("mirrors", []) and (P.OCFL / m["id"]).exists()
+    if here:
+        # a mirror in this archive: its copy is read and linked locally
+        inv = P.load_inventory(P.OCFL / m["id"])
+        dc = P.read_json(P.OCFL / m["id"], inv, "datacite.json", m["version"])
+        title, by, abstract = dc["titles"][0]["title"], authors(dc), abstract_html(dc)
+        cp = P.content_path(inv, m["version"], "paper.pdf")
+        if cp:
+            links.append(f'<a href="ocfl/{m["id"]}/{esc(cp)}">PDF (mirrored here)</a>')
     try:
         r = collections.Remote(m["archiveUrl"])
         archive_name = r.disc.get("name", archive_name)
-        inv = r.inventory(m["id"])
-        dc = json.loads(r.file(m["id"], inv, m["version"], "datacite.json"))
-        title, by = dc["titles"][0]["title"], authors(dc)
-        if dc.get("url"):
-            links.append(f'<a href="{esc(dc["url"])}">landing page</a>')
-        cp = P.content_path(inv, m["version"], "paper.pdf")
-        if cp:
-            links.append(f'<a href="{esc(r.root + m["id"] + "/" + cp)}">PDF</a>')
-        abstract = abstract_html(dc)
-    except Exception:  # noqa: BLE001 - the cached citation is shown
-        links.append('<span class="missing">archive unavailable: cached citation</span>')
+        rinv = r.inventory(m["id"])
+        rdc = json.loads(r.file(m["id"], rinv, m["version"], "datacite.json"))
+        if not here:
+            title, by, abstract = rdc["titles"][0]["title"], authors(rdc), abstract_html(rdc)
+            cp = P.content_path(rinv, m["version"], "paper.pdf")
+            if cp:
+                links.append(f'<a href="{esc(r.root + m["id"] + "/" + cp)}">PDF</a>')
+        if rdc.get("url"):
+            links.insert(0, f'<a href="{esc(rdc["url"])}">landing page</a>')
+    except Exception:  # noqa: BLE001 - the copy or the cached citation is shown
+        links.append('<span class="missing">'
+                     + ("its archive is unavailable" if here else "archive unavailable: cached citation")
+                     + "</span>")
     return "\n".join([
         '<li class="paper member">',
         f'<span class="paper-title">{esc(title)}</span>',

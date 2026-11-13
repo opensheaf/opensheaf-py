@@ -361,3 +361,36 @@ def test_curated_collection_across_archives(tmp_path):
                       "members.json")["members"]
     assert new[0]["version"] == "v2" and new[1]["version"] == "v1"
     assert collections.check_remote(new) == []
+
+
+def test_mirror(tmp_path):
+    """Open objects are mirrored (every version, checked), closed ones refused;
+    a collection checks a mirrored member on the copy when its archive is gone."""
+    a, j = tmp_path / "a", tmp_path / "j"
+    make_archive(a, "authors")
+    pdf = tmp_path / "p.pdf"
+    pdf.write_bytes(b"%PDF-1.4 p")
+    r = ["--root", str(a)]
+    run(*r, "deposit", "open", "--pdf", str(pdf), "--no-source", "x", "--title", "Open", "--author", "Doe, J",
+        "--rights", "cc-by-4.0")
+    run(*r, "deposit", "open", "--pdf", str(pdf), "--no-source", "x", "--title", "Open", "--author", "Doe, J",
+        "--changes", "v2")
+    run(*r, "deposit", "closed", "--pdf", str(pdf), "--no-source", "x", "--title", "Closed", "--author", "Doe, J")
+    run(*r, "collect")
+    run(*r, "index")
+    make_archive(j, "journal", curated=True)
+    with pytest.raises(SystemExit):
+        run("--root", str(j), "mirror", str(a), "closed")
+    (tmp_path / "issue.yaml").write_text(
+        f"title: Issue\nmembers:\n  - {{archive: {a}, id: open, mirror: yes}}\n  - {{archive: {a}, id: closed}}\n")
+    run("--root", str(j), "collection", "sync", "--from", str(tmp_path / "issue.yaml"))
+    run("--root", str(j), "index")
+    assert P.verify_errors() == []
+    assert (j / "ocfl" / "open" / "v2").exists() and not (j / "ocfl" / "closed").exists()
+    members = P.read_json(j / "ocfl" / "collection-main", P.load_inventory(j / "ocfl" / "collection-main"),
+                          "members.json")["members"]
+    assert members[0]["mirrors"] == ["https://example.org/journal/"] and "mirrors" not in members[1]
+    from opensheaf import collections
+    shutil.move(str(a), str(tmp_path / "gone"))
+    errors = collections.check_remote(members)
+    assert len(errors) == 1 and "closed" in errors[0]          # the mirrored member is checked on the copy

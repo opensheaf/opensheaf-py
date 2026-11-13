@@ -11,6 +11,7 @@ Commands:
   notice ID              a notice about a document version
   withdraw ID            withdraw a document (the content stays)
   complete ID            add the sources of a version deposited without them
+  mirror URL ID          copy another archive's object (open licences only)
   collection sync|update curated collections, with members from any archive
   collect                new version of the main collection when needed
   index                  write opensheaf.json and the readable index
@@ -76,6 +77,8 @@ def build_parser():
     d.add_argument("--extra-source", action="append",
                    help="FILE[=LOGICAL/PATH], another source at the path the main source refers to")
     d.add_argument("--message")
+    d.add_argument("--agreement", metavar="METHOD",
+                   help="record the authors' agreement (object.json), e.g. a journal's publication terms")
     d.add_argument("--from", dest="from_file", metavar="FILE",
                     help="take the options from a YAML or JSON file (a list: several, in order)")
     d.set_defaults(func=core.deposit)
@@ -124,6 +127,12 @@ def build_parser():
     c.add_argument("--source-format")
     c.add_argument("--message")
     c.set_defaults(func=core.complete)
+    mi = sub.add_parser("mirror", help="copy another archive's object (with open licences) into this archive")
+    mi.add_argument("url", help="the archive's base URL (or a local folder)")
+    mi.add_argument("id")
+    mi.add_argument("--licence-checked", action="store_true",
+                    help="redistribution is allowed although a licence is not an open one")
+    mi.set_defaults(func=None)
     co = sub.add_parser("collection", help="curated collections, with members from any archive")
     co.add_argument("action", choices=["sync", "update"])
     co.add_argument("collection", nargs="?", help="the collection object (default: the main collection)")
@@ -208,6 +217,10 @@ def main(argv=None):
     if args.cmd == "arxiv":
         from . import arxiv
         return arxiv.main(args.rest)
+    if args.cmd == "mirror":
+        from . import mirror
+        core.configure(core.find_root(args.root))
+        return mirror.main(args)
     if args.cmd == "collection":
         from . import collections
         if args.action == "sync":

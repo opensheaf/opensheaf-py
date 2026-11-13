@@ -701,6 +701,9 @@ def deposit(args):
     obj["status"] = "active"
     if args.changes:
         obj["changes"] = {"text": args.changes}
+    if getattr(args, "agreement", None):
+        obj["agreement"] = {"by": [c["name"] for c in datacite["creators"]],
+                            "date": available or args.created or TODAY, "method": args.agreement}
     if args.stage:
         obj["stage"] = {"scheme": "NISO-JAV", "value": args.stage}
     carry_forward(prev_obj, obj, inv, next_object_version(inv), args.after)
@@ -723,8 +726,9 @@ def documents():
     datacite.json) of every document."""
     out = []
     for obj_id, d, inv in objects():
-        if read_json(d, inv, OBJ)["kind"] != "document":
-            continue
+        head = read_json(d, inv, OBJ)
+        if head["kind"] != "document" or head.get("archiveId") != ARCHIVE["archiveId"]:
+            continue  # collections, and mirrors of other archives' objects
         cur = current_version(d, inv)
         out.append((obj_id, d, inv, cur, read_json(d, inv, OBJ, cur), read_json(d, inv, "datacite.json", cur)))
     return out
@@ -1314,8 +1318,12 @@ def verify_errors():
             obj = read_json(d, inv, OBJ, ver)
             dc = read_json(d, inv, "datacite.json", ver)
             check_schema(f"{where}/{ver}/{OBJ}", obj, "opensheaf-object-0.1.schema.json")
-            if obj.get("objectId") != obj_id or obj.get("archiveId") != disc.get("archiveId"):
-                errors.append(f"{where}: {ver} object.json names another object or archive")
+            if obj.get("objectId") != obj_id:
+                errors.append(f"{where}: {ver} object.json names another object")
+            elif obj.get("archiveId") != disc.get("archiveId") and \
+                    read_json(d, inv, OBJ).get("archiveId") == disc.get("archiveId"):
+                errors.append(f"{where}: {ver} object.json names another archive")
+            # an object whose head names another archive is a mirror (section 10.2)
             if str(obj.get("documentVersion")) != dc.get("version"):
                 errors.append(f"{where}: {ver} datacite.json and object.json disagree on the version")
             if obj.get("status") == "withdrawn" and date_of(dc, "Withdrawn") != obj.get("withdrawal", {}).get("date"):

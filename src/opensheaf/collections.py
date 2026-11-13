@@ -89,9 +89,14 @@ class Remote:
 
 
 def resolve(entry, here):
-    """The member for an entry of collection.yaml."""
+    """The member for an entry of collection.yaml (mirror: yes copies the
+    object into this archive first, and lists the copy as a mirror)."""
     url = entry.get("archive", ".")
     obj_id = entry["id"]
+    mirrored = str(entry.get("mirror", "")).lower() in ("yes", "true", "1")
+    if mirrored:
+        from . import mirror
+        mirror.mirror(url, obj_id, str(entry.get("licence-checked", "")).lower() in ("yes", "true", "1"))
     local = url in (".", "", P.ARCHIVE["baseUrl"]) or norm_url(url) == norm_url(str(P.ROOT))
     if local:
         d = P.OCFL / obj_id
@@ -124,6 +129,10 @@ def resolve(entry, here):
     if str(entry.get("follow", "latest")).lower() not in ("no", "false", "none", "fixed") \
             and not entry.get("version"):
         m["follow"] = "latest"
+    if mirrored or (not local and (P.OCFL / obj_id).exists()
+                    and P.read_json(P.OCFL / obj_id, P.load_inventory(P.OCFL / obj_id), P.OBJ)
+                    .get("archiveId") == archive_id):
+        m["mirrors"] = [P.ARCHIVE["baseUrl"]]
     m["cite"] = cite
     return m
 
@@ -243,12 +252,25 @@ def check_remote(members):
     for m in members:
         if m.get("archive") == P.ARCHIVE["archiveId"]:
             continue
-        try:
-            r = Remote(m["archiveUrl"])
-            if r.archive_id != m["archive"]:
-                errors.append(f"member {m['id']}: {m['archiveUrl']} is now the archive {r.archive_id}")
-            elif r.pin(m["id"], m["version"]) != m["inventorySha512"]:
-                errors.append(f"member {m['id']} {m['version']}: the pin does not match")
-        except Exception as e:  # noqa: BLE001 - reported
-            errors.append(f"member {m['id']} ({m['archiveUrl']}): unavailable: {e}")
+        problems = []
+        for src in [m["archiveUrl"]] + list(m.get("mirrors", [])):
+            try:
+                if src == P.ARCHIVE["baseUrl"]:        # our own mirror: read it from disk
+                    dig = P.digest(P.OCFL / m["id"] / m["version"] / "inventory.json")
+                else:
+                    r = Remote(src)
+                    if src == m["archiveUrl"] and r.archive_id != m["archive"]:
+                        problems.append(f"{src} is now the archive {r.archive_id}")
+                        continue
+                    dig = r.pin(m["id"], m["version"])
+                if dig != m["inventorySha512"]:
+                    problems.append(f"{src}: the pin does not match")
+                    continue
+                if src != m["archiveUrl"]:
+                    print(f"  {m['id']}: its archive failed; checked on the mirror {src}")
+                break
+            except Exception as e:  # noqa: BLE001 - reported
+                problems.append(f"{src}: unavailable: {str(e)[:120]}")
+        else:
+            errors.append(f"member {m['id']} {m['version']}: " + "; ".join(problems))
     return errors
