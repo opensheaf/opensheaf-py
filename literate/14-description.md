@@ -11,7 +11,7 @@ the same document version, with the same files, and change only
 `datacite.json`, the state of the object, or its notices.
 
 This chapter defines the general mechanism and the commands built on it:
-`osheaf notice`, `withdraw`, `relate` and `relicense`. It ends with
+`osheaf notice`, `withdraw`, `relate`, `relicense` and `describe`. It ends with
 `osheaf complete`, which is not description-only (it adds files) but is
 the other way a document version changes without getting a new number.
 The functions rely on the [history and notices](11-versions.md) being
@@ -38,6 +38,9 @@ carried forward, as in a [deposit](13-deposit.md).
 
     <<change the licence of a document>>
 
+
+    <<correct the title, abstract, keywords or authors of a document>>
+
 The mechanism
 -------------
 
@@ -48,7 +51,8 @@ through a function `change(dc, obj)` it passes in, which may also stop with
 a message (a document withdrawn twice). The document version stays, and
 the `Updated` date says when its description last changed (section 8).
 Files may be added, but only new ones: the file of a notice, the statement
-of a withdrawal.
+of a withdrawal. The message of the inventory may be a function, called
+after the change, for a command whose message depends on what changed.
 
 The head holds the current version except after an earlier version was
 deposited later, or completed; the specification allows a description-only
@@ -83,7 +87,7 @@ version of any document version, and tools otherwise hold the current one
                 sys.exit(f"{obj_id} has a file {lp} already")
             files[lp] = Path(f)
         files["datacite.json"], files[OBJ] = tmp / "datacite.json", tmp / OBJ
-        inv = add_version(obj_id, files, message)
+        inv = add_version(obj_id, files, message() if callable(message) else message)
         shutil.rmtree(tmp, ignore_errors=True)
         return inv
 
@@ -220,6 +224,79 @@ licences known by name may be chosen here.
         inv = description_version(args.id, change, args.message or
                                   f"Licence: {new['rights']} (description-only version; content unchanged)")
         print(f"{args.id}: {inv['head']} ({new['rights']})")
+
+### Corrections of the description
+
+A title with a typing mistake, an abstract whose TeX the arXiv import did
+not understand, a name recorded with initials only: the description of a
+version may be wrong where its files are right. Section 7.3 allows exactly
+this: a description-only version that changes `datacite.json` and nothing
+else. `osheaf describe` writes one, with the fields given replaced and
+every other field kept:
+
+- `--title`: the main title (the first of `titles`; other titles, such
+  as a subtitle, stay);
+- `--abstract` or `--abstract-file`: the description of type `Abstract`,
+  plain text with mathematics between dollars (section 8), paragraphs
+  separated by blank lines; the other descriptions, such as the journal
+  reference of an arXiv import (`SeriesInformation`), stay;
+- `--keyword`, repeated: the keywords, which replace the subjects without
+  a scheme, those a deposit writes; subjects with a scheme (the arXiv
+  categories of an import) are not keywords of the depositor's, and stay;
+- `--author`, repeated: the creators, as in a deposit (`"Family,
+  Given|Affiliation"`), replacing the list whole, so that an affiliation
+  not given again is dropped.
+
+The message of the inventory says what was corrected, which is known
+only once `change` has compared the fields: it is passed as a function,
+called by `description_version` after the change. A correction that
+corrects nothing is refused, so that the history of the
+object does not fill with versions that say nothing: each field given is
+compared with the one recorded. The text is taken exactly as given, with
+no conversion from TeX: what the depositor writes is what readers see.
+
+    # in correct the title, abstract, keywords or authors of a document:
+    def describe(args):
+        """Correct the description of a document (title, abstract, keywords,
+        authors) by a description-only version (section 7.3)."""
+        if args.abstract is not None and args.abstract_file:
+            sys.exit("describe: give --abstract or --abstract-file, not both")
+        abstract = (Path(args.abstract_file).read_text(encoding="utf-8") if args.abstract_file
+                    else args.abstract)
+        abstract = abstract.strip() if abstract is not None else None
+        if args.title is not None and not args.title.strip() or abstract == "":
+            sys.exit("describe: a title or an abstract cannot be empty")
+        changed = []
+
+        def change(dc, obj):
+            if args.title is not None and args.title.strip() != dc["titles"][0]["title"]:
+                dc["titles"][0]["title"] = args.title.strip()
+                changed.append("title")
+            if abstract is not None:
+                descs = dc.setdefault("descriptions", [])
+                old = next((x for x in descs if x["descriptionType"] == "Abstract"), None)
+                if old is None:
+                    descs.insert(0, {"description": abstract, "descriptionType": "Abstract"})
+                    changed.append("abstract")
+                elif old["description"] != abstract:
+                    old["description"] = abstract
+                    changed.append("abstract")
+            if args.keyword:
+                subjects = dc.get("subjects", [])
+                if [x["subject"] for x in subjects if not x.get("subjectScheme")] != args.keyword:
+                    dc["subjects"] = [{"subject": k} for k in args.keyword] + \
+                        [x for x in subjects if x.get("subjectScheme")]
+                    changed.append("keywords")
+            if args.author:
+                creators = [creator(a) for a in args.author]
+                if creators != dc["creators"]:
+                    dc["creators"] = creators
+                    changed.append("authors")
+            if not changed:
+                sys.exit(f"{args.id}: nothing to change in the description")
+        inv = description_version(args.id, change, args.message or (
+            lambda: f"Description corrected: {', '.join(changed)} (description-only version)"))
+        print(f"{args.id}: {inv['head']} ({', '.join(changed)} corrected)")
 
 Completing a version without sources
 ------------------------------------

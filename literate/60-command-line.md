@@ -65,6 +65,7 @@ core.
       deposit ID [SOURCE]    deposit a document (TeXmacs, or any source with --pdf)
       relicense ID           description-only version with a new licence
       relate ID              description-only version linking the same work elsewhere
+      describe ID            description-only version correcting title, abstract, keywords, authors
       notice ID              a notice about a document version
       withdraw ID            withdraw a document (the content stays)
       complete ID            add the sources of a version deposited without them
@@ -79,8 +80,8 @@ core.
       arxiv import           import downloaded arXiv papers into the archive
       help-config            describe osheaf.json
 
-    deposit, relicense, relate and init also take their options from a YAML or
-    JSON file: --from FILE (a list of entries: several, in order).
+    deposit, relicense, relate, describe and init also take their options from a
+    YAML or JSON file: --from FILE (a list of entries: several, in order).
 
     Warning: OpenSheaf 0.1 is a draft. Until version 1.0, a revision may change
     the format in incompatible ways, and archives may have to be rebuilt.
@@ -123,6 +124,8 @@ the order in which `osheaf --help` lists them.
         <<the options of osheaf relicense>>
 
         <<the options of osheaf relate>>
+
+        <<the options of osheaf describe>>
 
         <<the options of osheaf notice>>
         <<the options of osheaf withdraw>>
@@ -249,9 +252,9 @@ command is `core.deposit`.
                     help="take the options from a YAML or JSON file (a list: several, in order)")
     d.set_defaults(func=core.deposit)
 
-### Changing the description: `relicense` and `relate`
+### Changing the description: `relicense`, `relate` and `describe`
 
-Two commands write description-only versions (section 7.3): versions that
+Three commands write description-only versions (section 7.3): versions that
 hold the same files and change only the description. `relicense` gives the
 document a new licence, which needs the authors' agreement: `--method`
 records how they agreed, and `--date` when.
@@ -295,6 +298,40 @@ osheaf relate kpz-uniqueness --to arxiv:1508.07764 --issued 2015-08-31
     rl.add_argument("--from", dest="from_file", metavar="FILE",
                     help="take the options from a YAML or JSON file (a list: several, in order)")
     rl.set_defaults(func=core.relate)
+
+`describe` corrects the description itself: the title, the abstract, the
+keywords or the authors, each replaced by what is given, the rest kept
+(the [description-only versions](14-description.md) explain the rules).
+At least one must be given, and must differ from what is recorded.
+
+```
+osheaf describe phi43-pde-construction --abstract-file abstract.txt \
+    --message "Abstract: \\emph removed (import of arXiv 1810.01700)"
+osheaf describe fractional-phi42-mass-gap \
+    --author "Duch, Paweł|Institute of Mathematics, Polish Academy of Sciences" \
+    --author "Gubinelli, Massimiliano|Mathematical Institute, University of Oxford"
+```
+
+The options are those of a deposit, with the same names, so that a file of
+options of a deposit can be cut down to a correction. `--abstract` and
+`--abstract-file` exclude each other, which `argparse` checks on the
+command line and the core again after a file is merged.
+
+    # in the options of osheaf describe:
+    ds = sub.add_parser("describe", help="description-only version correcting the title, abstract,"
+                        " keywords or authors")
+    ds.add_argument("id", nargs="?")
+    ds.add_argument("--title", help="the corrected title (plain text, mathematics in $...$)")
+    abstract = ds.add_mutually_exclusive_group()
+    abstract.add_argument("--abstract", help="the corrected abstract (plain text, mathematics in $...$)")
+    abstract.add_argument("--abstract-file", help="a UTF-8 file with the corrected abstract")
+    ds.add_argument("--keyword", action="append", help="a keyword (repeatable): replaces the keywords")
+    ds.add_argument("--author", action="append",
+                    help='"Family, Given|Affiliation" (repeatable): replaces the authors')
+    ds.add_argument("--message")
+    ds.add_argument("--from", dest="from_file", metavar="FILE",
+                    help="take the options from a YAML or JSON file (a list: several, in order)")
+    ds.set_defaults(func=core.describe)
 
 ### Later statements: `notice`, `withdraw` and `complete`
 
@@ -530,15 +567,16 @@ Running a command
 
 ### Required options and files of options
 
-Four commands take a file of options with `--from`: `deposit`,
-`relicense`, `relate` and `init`. For them an option may be given on the
+Five commands take a file of options with `--from`: `deposit`,
+`relicense`, `relate`, `describe` and `init`. For them an option may be given on the
 command line or in the file, so `argparse` cannot require it. The table
 `REQUIRED` lists, for each, the options that must have a value once the
 two are merged; its keys are also how `main` recognises these commands.
 
     # in the options a command needs, from the command line or a file:
     REQUIRED = {"deposit": ("id", "title", "author"), "relicense": ("id", "rights", "method"),
-                "relate": ("id", "to"), "init": ("archive_id", "name", "base_url", "curator")}
+                "relate": ("id", "to"), "describe": ("id",),
+                "init": ("archive_id", "name", "base_url", "curator")}
 
 A file may hold a list of entries, each making one run of the command:
 several deposits, in order, from one file. `runs` turns the parsed command

@@ -6,7 +6,9 @@ templates, kept in the package under `src/opensheaf/templates/`: the
 home page, the landing page of a document, and the style sheet. `osheaf
 init` copies them into the new archive's `templates` folder, where the
 curator may change them freely; the copies, not these files, are then
-used. This chapter shows the defaults, and the placeholders each
+used. An archive whose home page is a [TeXmacs index](16-index.md) uses
+only the last two, and may put its own `paper.html` in its `templates`
+folder to give the landing pages the look of its other pages. This chapter shows the defaults, and the placeholders each
 template receives.
 
 The templates are plain HTML and CSS, with placeholders `{{name}}` that
@@ -99,6 +101,8 @@ The landing page of a document receives, besides `{{archive_name}}`,
 - `{{pdf}}`, the address of the PDF of the version presented: the current
   version, or for a member of a selection the last revision vetted (for a
   version without a PDF, its entry in the list of versions);
+- `{{html_link}}`, the link to the HTML version of a TeXmacs document,
+  preceded by its separator (` · <a href="...">HTML</a>`), or nothing;
 - `{{withdrawn}}`, the withdrawal notice, empty for a document that is
   not withdrawn;
 - `{{versions}}`, the versions, as items of a list;
@@ -151,7 +155,7 @@ section 11.1 requires.
     <!-- in the document on its landing page: -->
     <h1>{{title}}</h1>
     <p class="paper-authors">{{authors}}</p>
-    <p class="paper-meta">First issued {{issued}} · <a href="{{pdf}}">PDF</a></p>
+    <p class="paper-meta">First issued {{issued}} · <a href="{{pdf}}">PDF</a>{{html_link}}</p>
     {{withdrawn}}
     <section class="abstract">
       <h2>Abstract</h2>

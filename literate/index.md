@@ -49,7 +49,8 @@ The archive
 3. [TeXmacs: typesetting and reading markup](12-texmacs.md).
 4. [Depositing a document](13-deposit.md).
 5. [Description-only versions and completions](14-description.md):
-   notices, withdrawals, relations, licences; sources found later.
+   notices, withdrawals, relations, licences, corrections of the
+   description; sources found later.
 6. [The main collection](15-main-collection.md).
 7. [The discovery document and the index](16-index.md).
 8. [Verifying an archive](17-verify.md).
@@ -65,7 +66,8 @@ Across archives
 The website
 -----------
 
-13. [The website](30-website.md).
+13. [The website](30-website.md): the home page, and the landing pages
+    and sitemap, also written beside a TeXmacs index.
 14. [The templates of the website](31-templates.md).
 
 Services

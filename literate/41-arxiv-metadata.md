@@ -25,7 +25,7 @@ The abstract is the exception: it keeps its line breaks, which separate
 paragraphs, but loses the spaces around them. The dates of the versions are
 written as in e-mail (`Mon, 3 Apr 2023 17:59:58 GMT`) and become ISO 8601
 in UTC. The authors are one string, `A. Author, B. Author and C. Author`,
-split at the commas and at the word "and". The field `doi` holds the DOIs
+split by `author_names` (below). The field `doi` holds the DOIs
 of the published article, if the authors gave any, separated by spaces;
 `journal-ref` is the reference of that article as text.
 
@@ -45,12 +45,31 @@ of the published article, if the authors gave any, separated by spaces;
             date = email.utils.parsedate_to_datetime(v.find("r:date", NS).text)
             versions.append({"v": v.get("version"), "date": date.strftime("%Y-%m-%dT%H:%M:%SZ"),
                              "source_type": (v.findtext("r:source_type", default="", namespaces=NS) or "").strip()})
-        authors = re.split(r",\s*|\s+and\s+", text("authors"))
+        authors = author_names(text("authors"))
         abstract = r.find("r:abstract", NS).text.strip()
         return {"id": text("id"), "title": text("title"), "authors": [detex(a) for a in authors if a.strip()],
                 "abstract": re.sub(r"[ \t]*\n[ \t]*", "\n", abstract), "license": text("license"),
                 "doi": text("doi"), "journal": text("journal-ref"), "categories": (text("categories") or "").split(),
                 "comments": text("comments"), "versions": versions}
+
+The list of authors is split at the commas and at the word "and", also
+when the two come together, as in `A, B, and C`: the comma alone would
+leave a name `and C`, recorded with the given name `and C`. Some authors
+add their affiliations in parentheses, `A (Paris), B (INRIA / IECN,
+IECL)`, whose commas are not separators; affiliations are removed first,
+innermost parentheses first, since arXiv's own field for them is the name
+and nothing else is reliable. Both mistakes were in the archive that
+first used these tools (`and Tadahiro Oh`, `IECL)`).
+
+    # in arXiv: the names in the list of authors:
+    def author_names(s):
+        """'A, B (Univ. X, Y), and C' -> ['A', 'B', 'C']."""
+        while True:
+            t = re.sub(r"\s*\([^()]*\)", "", s)
+            if t == s:
+                break
+            s = t
+        return [a for a in re.split(r",\s*(?:and\s+)?|\s+and\s+", s) if a.strip()]
 
 Names
 -----
@@ -121,8 +140,11 @@ imported sources, and never to invent definitions.
 
 So `clean_text` first brings all mathematics between single dollars, then
 treats text and mathematics separately. In the text, accents become
-Unicode, TeX quotes become typographic quotes, `\&` becomes `&`, and braces
-around plain words are dropped. In the mathematics, each command that is a
+Unicode, TeX quotes become typographic quotes, `\&` becomes `&`, changes of
+font become their plain argument (`plain_markup`, below), and braces
+around plain words are dropped; then the TeX ways of writing
+spaces and dashes become characters (`typographic_text`, below). In the
+mathematics, each command that is a
 macro of the authors, defined in the preamble and not a standard command,
 is replaced by its definition, in braces so that `\R^2` stays
 `{\mathbb{R}}^2`. Definitions may use other macros, so the replacement is
@@ -142,7 +164,10 @@ itself.
         for is_math, part in split_math(s):
             if not is_math:
                 part = P.tex_text(part).replace("``", "\u201c").replace("''", "\u201d").replace("\\&", "&")
-                part = re.sub(r"\{([^{}\\$]*)\}", r"\1", part)
+                part = plain_markup(part)
+                part = re.sub(r"(\\[A-Za-z]+\s*)?\{([^{}\\$]*)\}",
+                              lambda m: m.group(0) if m.group(1) else m.group(2), part)
+                part = typographic_text(part)
             elif macros:
                 for _ in range(4):
                     new = re.sub(r"\\([A-Za-z]+)(?![A-Za-z])",
@@ -153,6 +178,52 @@ itself.
                     part = new
             out.append(("$" + part + "$") if is_math else part)
         return "".join(out)
+
+A description is plain text (section 8): emphasis and other changes of
+font cannot be kept, so they give their argument. Both forms of LaTeX are
+recognised, the commands with an argument (`\emph{x}`, `\textit{x}`,
+`\textbf{x}`, ..., and those of TeXmacs' LaTeX export, `\tmtextit{x}`,
+`\tmem{x}`, ...) and the old declarations inside a group (`{\it x}`,
+`{\em x}`, `{\bf x}`). The arguments may contain other groups or
+commands, so the replacement is repeated from the innermost outwards
+until nothing changes.
+
+Braces right after a command are not removed by the step that drops the
+braces around plain words: a command we do not know keeps its argument,
+`\url{...}` stays `\url{...}`. Removing the braces alone, as the import
+once did, glued the two together: `\emph{distribution}` (arXiv
+1810.01700) became `\emphdistribution`.
+
+    # in arXiv: changes of font as plain text:
+    FONT_COMMANDS = ("emph|textit|textbf|textsl|textsc|textrm|textsf|texttt|textup|textmd|textnormal|"
+                     "tmtextit|tmtextbf|tmtextsl|tmtextsc|tmtextrm|tmtextsf|tmtexttt|tmtextup|tmtextmd|"
+                     "tmem|tmstrong|tmname|tmsamp")
+    FONT_DECLARATIONS = "it|em|bf|sl|sc|rm|sf|tt|itshape|bfseries|slshape|scshape|upshape|mdseries|normalfont"
+
+
+    def plain_markup(s):
+        """Text with \\emph{x}, \\textbf{x}, \\tmtextit{x}, {\\it x}, ... as its plain text."""
+        while True:
+            t = re.sub(r"\\(?:" + FONT_COMMANDS + r")\s*\{([^{}]*)\}", r"\1", s)
+            t = re.sub(r"\{\\(?:" + FONT_DECLARATIONS + r")(?![A-Za-z])\s*([^{}]*)\}", r"\1", t)
+            if t == s:
+                return s
+            s = t
+
+TeX writes some characters with others: a tie `~` is a space that does not
+break (`Korteweg-de~Vries`, arXiv 2505.24270), `--` an en dash
+(`Osterwalder--Schrader`, arXiv 1810.01700) and `---` an em dash. In plain
+text they become a space and the dashes themselves. The tie becomes an
+ordinary space, as in the names of authors: how the text is broken into
+lines is up to whoever displays it. A tilde after a slash or a backslash is not a tie but
+part of an address (`https://example.org/~user`) or an accent, and is
+left alone; accents are converted before, by `tex_text`, anyway.
+
+    # in arXiv: spaces and dashes written the TeX way:
+    def typographic_text(s):
+        """Ties as spaces, --- and -- as em and en dashes."""
+        s = re.sub(r"(?<![/\\])~", " ", s)
+        return s.replace("---", "\u2014").replace("--", "\u2013")
 
 Text and mathematics alternate at the dollar signs not preceded by a
 backslash: in the list of parts, the odd ones are mathematics.

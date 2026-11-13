@@ -64,7 +64,9 @@ or from `--root`. They maintain:
   Signposting links) and `sitemap.xml`, from the templates in `templates/`
   (`{{name}}` placeholders; MathJax renders `$...$`);
 - or, with the TeXmacs profile, `site/<id>/` (HTML versions of TeXmacs
-  documents) and an index made from a TeXmacs template.
+  documents) and an index made from a TeXmacs template, with the same
+  landing pages `paper/<id>/` and `sitemap.xml` as the website (from the
+  archive's own `templates/paper.html`, if it has one).
 
 ## Commands
 
@@ -79,6 +81,7 @@ osheaf withdraw ID --reason "..."
 osheaf complete ID --version N --source paper.tex [--extra-source ...]
 osheaf relicense ID --rights cc-by-4.0 --method "..."
 osheaf relate ID --to arxiv:ID|doi:DOI [--relation IsIdenticalTo]
+osheaf describe ID [--title T] [--abstract TEXT | --abstract-file F] [--keyword K ...] [--author A ...]
 osheaf collect
 osheaf accept ARCHIVE-URL ID --version vN [--as ID] [--stage VoR] [--agreement ...]
 osheaf mirror ARCHIVE-URL ID [--licence-checked]
@@ -100,7 +103,7 @@ osheaf arxiv import DOWNLOADS [ARXIV-ID ...] [--update] [--versions v1,v3]
   `--stage` (NISO-JAV), `--changes`, and `--after N` for a version found
   later, which writes the history. A new version keeps the abstract, keywords
   and licence of the previous one unless they are given.
-- **--from FILE.yaml** (deposit, relicense, relate, init): the options from a
+- **--from FILE.yaml** (deposit, relicense, relate, describe, init): the options from a
   YAML or JSON file, with the same names (`title`, `authors`, `abstract`,
   `extra-sources`, `available`, ...; paths relative to the file); a list
   makes several deposits in order, and the command line overrides the file.
@@ -168,11 +171,20 @@ osheaf arxiv import DOWNLOADS [ARXIV-ID ...] [--update] [--versions v1,v3]
   checks a member on its mirrors when its archive fails.
 - **relicense**, **relate**: description-only versions (a new licence with the
   authors' agreement; a link to the same work elsewhere).
+- **describe**: a description-only version correcting the title, the abstract
+  (`--abstract` or `--abstract-file`), the keywords (`--keyword`, repeated,
+  replacing the keywords; arXiv categories stay) or the authors (`--author`,
+  repeated, as in a deposit, replacing the list); the other fields are kept,
+  and a correction that changes nothing is refused.
 - **collect**: a new version of the main collection, an archive collection,
   when a document has a new object version; members are ordered
   `issued-desc`, pin the head of their object and follow it, and the index
   shows their current versions.
-- **index**: the discovery document and the readable index.
+- **index**: the discovery document and the readable index: the website, or
+  the TeXmacs index (`index.tm`, exported to `index.html`) with the landing
+  pages and the sitemap of the website. No `robots.txt` is written: an archive
+  in a folder of a larger site adds `Sitemap: <baseUrl>sitemap.xml` to the
+  site's own.
 - **verify**: the checks of section 14 of the specification (identifiers,
   inventories and digests, `object.json` and `datacite.json`, numbering of
   document versions, history and notices, collections, their kinds and their

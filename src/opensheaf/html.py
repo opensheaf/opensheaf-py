@@ -7,8 +7,11 @@ Scholar and other services), and a sitemap.
 
 Pages are made from templates with {{name}} placeholders: templates/index.html,
 templates/paper.html and templates/style.css of the archive (osheaf.json:
-index.html.templates), or the package's defaults. Mathematics in titles and
-abstracts ($...$) is left to MathJax, loaded by the templates.
+index.html.templates or index.templates, else the folder templates/ if there
+is one), or the package's defaults. Mathematics in titles and abstracts
+($...$) is left to MathJax, loaded by the templates. With a TeXmacs index
+the home page is TeXmacs', and only the landing pages and the sitemap are
+written here.
 """
 
 import datetime
@@ -27,9 +30,7 @@ def esc(s):
 
 
 def template(name):
-    d = P.INDEX.get("html", {}).get("templates")
-    p = P.ROOT / d / name if d else None
-    return (p if p and p.exists() else DEFAULTS / name).read_text(encoding="utf-8")
+    return template_path(name).read_text(encoding="utf-8")
 
 
 def fill(text, values):
@@ -43,7 +44,7 @@ def fmt_date(d):
 
 
 def authors(dc):
-    return ", ".join(P.display_name(c) for c in dc["creators"])
+    return P.authors_of(dc)
 
 
 def file_link(root, obj_id, inv, ver, logical, label):
@@ -94,17 +95,21 @@ def version_block(obj_id, d, inv, ver, shown, notices, root, vetted=None):
         files.append(f'<span class="missing">sources not available: '
                      f'{esc(obj["sourcesMissing"].get("text", ""))}</span>')
     files.append(f'<a href="{root}ocfl/{obj_id}/{ver}/inventory.json">files and digests</a>')
+    arxiv = P.arxiv_id(obj, dc)
     for e in obj.get("external", []):
         if e.get("record"):
-            files.append(f'<a href="{esc(e["record"])}">{esc(e["service"])}</a>')
+            label = f"arXiv:{arxiv}" if e.get("service") == "arXiv" and arxiv else e["service"]
+            files.append(f'<a href="{esc(e["record"])}">{esc(label)}</a>')
+    if arxiv and not any(e.get("service") == "arXiv" for e in obj.get("external", [])):
+        files.append(f'<a href="https://arxiv.org/abs/{esc(arxiv)}">arXiv:{esc(arxiv)}</a>')
     if dc.get("doi"):
         files.append(f'<a href="https://doi.org/{esc(dc["doi"])}">doi:{esc(dc["doi"])}</a>')
     out = [f'<li class="version{" is-current" if n == shown else ""}" id="v{n}">',
            f'<div class="version-head">{head}</div>']
     if when:
         out.append(f'<div class="version-date">{esc(when)}</div>')
-    if obj.get("changes", {}).get("text"):
-        out.append(f'<div class="changes">{esc(obj["changes"]["text"])}</div>')
+    if P.changes_note(obj):
+        out.append(f'<div class="changes">{esc(P.changes_note(obj))}</div>')
     out.append(f'<div class="files">{" · ".join(f for f in files if f)}</div>')
     for x in notices:
         if x["documentVersion"] == n:
@@ -167,16 +172,18 @@ def abstract_html(dc):
     return ""
 
 
-def render(members):
+def render(members, home=True):
     """Write index.html, paper/<id>/index.html for every member, style.css
-    and sitemap.xml."""
+    and sitemap.xml; with home=False (a TeXmacs index is the home page),
+    everything but index.html."""
     root_out = P.ROOT
     base = P.ARCHIVE["baseUrl"]
-    entries, urls = [], [(base, None)]
+    entries, urls, written = [], [(base, None)], []
     page_t = template("paper.html")
     for m in members:
         if m.get("archive") != P.ARCHIVE["archiveId"]:
-            entries.append(remote_entry(m))
+            if home:
+                entries.append(remote_entry(m))
             continue
         obj_id = m["id"]
         d = P.OCFL / obj_id
@@ -204,6 +211,9 @@ def render(members):
         cite = f"{authors(dc)}. {dc['titles'][0]['title']}. {P.ARCHIVE['name']}, " \
                f"{(issued or '')[:4]}, version {obj['documentVersion']}. " \
                + (f"https://doi.org/{dc['doi']}" if dc.get("doi") else f"{base}paper/{obj_id}/")
+        html_link = ""
+        if (P.SITE / obj_id / f"{obj_id}.html").exists():
+            html_link = f' · <a href="{root}site/{obj_id}/{obj_id}.html">HTML</a>'
         page = fill(page_t, {
             "root": root, "archive_name": esc(P.ARCHIVE["name"]), "base_url": esc(base),
             "head": meta_tags(obj_id, d, inv, cur, obj, dc),
@@ -212,11 +222,15 @@ def render(members):
             "withdrawn": withdrawn, "versions": versions, "licence": licence,
             "pdf": esc(pdf_address(root, obj_id, inv, cur, obj) or f"#v{obj['documentVersion']}"),
             "cite": esc(cite), "pin": pin, "pin_url": f"{root}ocfl/{obj_id}/{pin_ver}/inventory.json",
+            "html_link": html_link,
         })
         out = root_out / "paper" / obj_id / "index.html"
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(page, encoding="utf-8")
+        written.append(obj_id)
         urls.append((f"{base}paper/{obj_id}/", inv["versions"][inv["head"]]["created"][:10]))
+        if html_link:
+            urls.append((f"{base}site/{obj_id}/{obj_id}.html", inv["versions"][inv["head"]]["created"][:10]))
         pdf = pdf_address("", obj_id, inv, cur, obj)
         abstract = abstract_html(dc)
         entries.append("\n".join([
@@ -228,26 +242,30 @@ def render(members):
             + f' · <span class="pin" title="{pin}">pin {pin[:32]}…</span></div>',
             f"<details><summary>Abstract</summary>{abstract}</details>" if abstract else "",
             "</li>"]))
-    lead = ('Papers with their sources, every version, fixed by digests. An '
-            '<a href="https://opensheaf.org">OpenSheaf</a> archive: programs start from '
-            '<a href="opensheaf.json">opensheaf.json</a>.')
-    cdir = P.OCFL / P.ARCHIVE["mainCollection"]
-    cinv = P.load_inventory(cdir)
-    cmem = P.read_json(cdir, cinv, "members.json") if cinv else {}
-    if cmem.get("order") == "manual":
-        desc = next((x["description"] for x in P.read_json(cdir, cinv, "datacite.json").get("descriptions", [])), "")
-        lead = (esc(desc) + ' A collection in the <a href="https://opensheaf.org">OpenSheaf</a> format: each '
-                'member is kept in its own archive and pinned by a digest'
-                + (', in the versions its curator vetted' if cmem.get("type") == "selection" else '')
-                + '; programs start from <a href="opensheaf.json">opensheaf.json</a>.')
-    index = fill(template("index.html"), {
-        "root": "", "archive_name": esc(P.ARCHIVE["name"]), "base_url": esc(base), "lead": lead,
-        "papers": "\n".join(entries) if entries else '<li class="empty">No documents yet.</li>',
-        "count": str(len(entries)), "updated": esc(fmt_date(datetime.date.today().isoformat())),
-    })
-    (root_out / "index.html").write_text(index, encoding="utf-8")
-    shutil.copyfile(template_path("style.css"), root_out / "style.css")
-    (root_out / ".nojekyll").touch()
+    if home:
+        lead = ('Papers with their sources, every version, fixed by digests. An '
+                '<a href="https://opensheaf.org">OpenSheaf</a> archive: programs start from '
+                '<a href="opensheaf.json">opensheaf.json</a>.')
+        cdir = P.OCFL / P.ARCHIVE["mainCollection"]
+        cinv = P.load_inventory(cdir)
+        cmem = P.read_json(cdir, cinv, "members.json") if cinv else {}
+        if cmem.get("order") == "manual":
+            cdc = P.read_json(cdir, cinv, "datacite.json")
+            desc = next((x["description"] for x in cdc.get("descriptions", [])), "")
+            lead = (esc(desc) + ' A collection in the <a href="https://opensheaf.org">OpenSheaf</a> format: each '
+                    'member is kept in its own archive and pinned by a digest'
+                    + (', in the versions its curator vetted' if cmem.get("type") == "selection" else '')
+                    + '; programs start from <a href="opensheaf.json">opensheaf.json</a>.')
+        index = fill(template("index.html"), {
+            "root": "", "archive_name": esc(P.ARCHIVE["name"]), "base_url": esc(base), "lead": lead,
+            "papers": "\n".join(entries) if entries else '<li class="empty">No documents yet.</li>',
+            "count": str(len(entries)), "updated": esc(fmt_date(datetime.date.today().isoformat())),
+        })
+        (root_out / "index.html").write_text(index, encoding="utf-8")
+        shutil.copyfile(template_path("style.css"), root_out / "style.css")
+        (root_out / ".nojekyll").touch()
+    elif "style.css" in page_t:
+        shutil.copyfile(template_path("style.css"), root_out / "style.css")
     sm = ['<?xml version="1.0" encoding="UTF-8"?>',
           '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">']
     for url, last in urls:
@@ -258,12 +276,13 @@ def render(members):
     for p in (root_out / "paper").glob("*") if (root_out / "paper").exists() else []:
         if p.name not in {m["id"] for m in members if m.get("archive") == P.ARCHIVE["archiveId"]}:
             shutil.rmtree(p)
+    return len(written)
 
 
 def template_path(name):
-    d = P.INDEX.get("html", {}).get("templates")
-    p = P.ROOT / d / name if d else None
-    return p if p and p.exists() else DEFAULTS / name
+    d = P.INDEX.get("html", {}).get("templates") or P.INDEX.get("templates") or "templates"
+    p = P.ROOT / d / name
+    return p if p.exists() else DEFAULTS / name
 
 
 def remote_entry(m):
@@ -271,7 +290,7 @@ def remote_entry(m):
     from that archive, or else the cached citation."""
     from . import collections
     cite = m.get("cite", {})
-    title, by, year = cite.get("title", m["id"]), ", ".join(cite.get("creators", [])), cite.get("year", "")
+    title, by, year = cite.get("title", m["id"]), P.names_joined(cite.get("creators", [])), cite.get("year", "")
     links, abstract, archive_name, status = [], "", m.get("archiveUrl", ""), {}
     pin = P.member_pins(m)[-1][1]
     minv = P.load_inventory(P.OCFL / m["id"])

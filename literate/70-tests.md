@@ -349,7 +349,7 @@ main source, and the archive is valid.
 Small functions
 ---------------
 
-Five tests check functions on their own, without an archive.
+Seven tests check functions on their own, without an archive.
 
 The order `issued-desc` of section 10.2 sorts the members by their
 `Issued` date, newest first, then by their `Available` date; members with
@@ -378,6 +378,41 @@ not know.
         assert out == "Comment on “Dynamic behavior” of Hölder drift, Itô, " \
                       "${\\mathbb{R}}^3$ and ${\\beta}^2<4\\pi$"
         assert arxiv.unknown_macros(r"$\FF L^p$ and $\alpha$") == ["FF"]
+
+Changes of font, ties and dashes are plain text too. The cases are real,
+from the abstracts of arXiv 1810.01700, 2505.24270 and 1205.1735, which the
+import once left as `\emphdistribution`, `{\it without}`, `de~Vries` and
+`--`: the font changes give their argument, in both forms of LaTeX and in
+that of TeXmacs' export, a tie becomes a space, `--` an en dash and `---`
+an em dash. Mathematics is left alone (`a--b` in `$...$` stays), and a
+command the import does not know keeps its argument rather than being
+glued to it. A tilde in an address is not a tie.
+
+    # in test: small functions:
+    def test_clean_text_markup():
+        assert arxiv.clean_text(r"a \emph{distribution} in the Osterwalder--Schrader sense") == \
+            "a distribution in the Osterwalder–Schrader sense"
+        assert arxiv.clean_text(r"{\it without} the Korteweg-de~Vries equation --- or Dyson--Schwinger") == \
+            "without the Korteweg-de Vries equation — or Dyson–Schwinger"
+        assert arxiv.clean_text(r"$\rho$-\tmtextit{irregularity}") == r"$\rho$-irregularity"
+        assert arxiv.clean_text(r"{\em x}, {\bf y}, \textit{z}, \textbf{\textsl{w}}, \tmtextbf{u}, \tmem{v}") == \
+            "x, y, z, w, u, v"
+        assert arxiv.clean_text(r"$a--b$ and \url{https://example.org/~user}") == \
+            r"$a--b$ and \url{https://example.org/~user}"
+
+The list of authors on arXiv is one string. It is split at the commas and
+at "and", also both together (`A, B, and C`), and the affiliations some
+authors write in parentheses, with commas of their own, are dropped: the
+names of arXiv 2505.24270 and 1403.2832 once came out as `and Tadahiro Oh`
+and `IECL)`.
+
+    # in test: small functions:
+    def test_arxiv_author_names():
+        assert arxiv.author_names("Andreia Chapouto, Jiawei Li, and Tadahiro Oh") == \
+            ["Andreia Chapouto", "Jiawei Li", "Tadahiro Oh"]
+        assert arxiv.author_names("Massimiliano Gubinelli (CEREMADE), Samy Tindel (INRIA Nancy - Grand Est / "
+                                  "IECN, IECL) and Iv\\'an Torrecilla (IECN (Nancy))") == \
+            ["Massimiliano Gubinelli", "Samy Tindel", "Iv\\'an Torrecilla"]
 
 The definitions come from the preamble of the source, by
 `preamble_macros`: only macros without arguments, and only those defined
@@ -545,6 +580,67 @@ Scholar and the home page.
         assert 'name="citation_pdf_url" content="https://example.org/archive/ocfl/paper-a/v1/content/article.pdf"' in page
         assert 'href="../../ocfl/paper-a/v1/content/article.pdf"' in page
         assert 'href="ocfl/paper-a/v1/content/article.pdf"' in (archive / "index.html").read_text()
+
+An archive whose home page is a TeXmacs index gets the landing pages and
+the sitemap of the website too. The test needs no TeXmacs: `--no-html`
+writes `index.tm` and stops before the export. The archive's own
+template of the landing page, in its `templates` folder, is used without
+any setting, and, since it does not use the default style sheet, no
+`style.css` is written. A document with an HTML version in
+`site/<id>/` gets a link to it, and an entry in the sitemap.
+
+The entries of the index follow the rules shared with the website: the
+title links the landing page; the authors are written `A, B and C.`; the
+arXiv identifier is shown and linked without its version, even when the
+relation was recorded with one; and a change note says what it is
+(`changes: ...`, or `arXiv comments: ...` for a version from arXiv).
+
+    # in test: deposits through osheaf:
+    def test_texmacs_index_with_landing_pages(tmp_path):
+        """A TeXmacs index: index.tm with uniform entries, and the landing pages,
+        from the archive's own template, and the sitemap of the website."""
+        root = tmp_path / "a"
+        make_archive(root)
+        cfg = json.loads((root / "osheaf.json").read_text())
+        cfg["index"] = {"template": "index-template.tm"}
+        (root / "osheaf.json").write_text(json.dumps(cfg))
+        for f in ("index.html", "style.css", "sitemap.xml"):    # written by init, for the website
+            (root / f).unlink()
+        shutil.rmtree(root / "templates")
+        (root / "templates").mkdir()
+        (root / "templates" / "paper.html").write_text(
+            "<html><head>{{head}}<link rel=stylesheet href='{{root}}resources/notes-base.css'></head>"
+            "<body class=house>{{title}} by {{authors}}{{html_link}}<ol>{{versions}}</ol></body></html>")
+        (root / "index-template.tm").write_text("<TeXmacs|2.1.5>\n\n<\\body>\n  <paper-index>\n</body>\n")
+        src, pdf = tmp_path / "p.tex", tmp_path / "p.pdf"
+        src.write_text("\\documentclass{article}")
+        pdf.write_bytes(b"%PDF-1.4 p")
+        r = ["--root", str(root)]
+        run(*r, "deposit", "p", str(src), "--pdf", str(pdf), "--title", "On $x$", "--author", "Doe, Jane",
+            "--author", "Roe, Richard", "--author", "Poe, Ann", "--changes", "Typos.", "--available", "2025-01-02")
+        run(*r, "relate", "p", "--to", "arxiv:2607.08385v1")
+        (root / "site" / "p").mkdir(parents=True)
+        (root / "site" / "p" / "p.html").write_text("<html>the paper</html>")
+        run(*r, "collect")
+        run(*r, "index", "--no-html")
+        tm = (root / "index.tm").read_text(encoding="latin-1")
+        assert "<hlink|On <specific|texmacs|<verbatim|x>><specific|html*|\\\\(x\\\\)>|paper/p/>" in tm
+        assert "By Jane Doe, Richard Roe and Ann Poe." in tm
+        assert "<hlink|arXiv:2607.08385|https://arxiv.org/abs/2607.08385>" in tm and "v1|" not in tm
+        assert "changes: Typos." in tm
+        page = (root / "paper" / "p" / "index.html").read_text()
+        assert "class=house" in page and "Jane Doe, Richard Roe and Ann Poe" in page
+        assert 'name="citation_author" content="Roe, Richard"' in page
+        assert 'href="../../site/p/p.html">HTML</a>' in page
+        assert '>arXiv:2607.08385</a>' in page and "changes: Typos." in page
+        sitemap = (root / "sitemap.xml").read_text()
+        assert "https://example.org/T/paper/p/" in sitemap and "https://example.org/T/site/p/p.html" in sitemap
+        assert not (root / "index.html").exists() and not (root / "style.css").exists()
+        assert P.read_json(root / "ocfl" / "p", P.load_inventory(root / "ocfl" / "p"),
+                           "datacite.json")["url"] == "https://example.org/T/paper/p/"
+        assert P.changes_note({"changes": {"text": "61 pages"},
+                               "external": [{"role": "source", "service": "arXiv"}]}) == "arXiv comments: 61 pages"
+        assert P.verify_errors() == []
 
 ### Files of options
 
@@ -752,6 +848,56 @@ head: its status, its reason with the file, and the `Withdrawn` date of
         assert head["status"] == "withdrawn" and head["withdrawal"] == P.read_json(d, inv, P.OBJ, "v3")["withdrawal"]
         assert P.date_of(P.read_json(d, inv, "datacite.json"), "Withdrawn") == "2026-03-04"
         assert "withdrawal/why.md" in {p for ps in inv["versions"]["v4"]["state"].values() for p in ps}
+        run(*r, "collect")
+        run(*r, "index")
+        assert P.verify_errors() == []
+
+### Corrections of the description
+
+`osheaf describe` corrects the title, the abstract, the keywords and the
+authors by a description-only version: the files and the document version
+stay, the fields given are replaced, and the others (a subject with a
+scheme, the licence) are kept. The message of the inventory names what
+was corrected. A correction that changes nothing is refused, and the
+command also reads its options from a file, here a corrected abstract
+from a file named relative to it.
+
+    # in test: notices, withdrawal and completion through osheaf:
+    def test_describe(tmp_path):
+        root = tmp_path / "a"
+        make_archive(root)
+        src, pdf = tmp_path / "p.tex", tmp_path / "p.pdf"
+        src.write_text("\\documentclass{article}")
+        pdf.write_bytes(b"%PDF-1.4 p")
+        r = ["--root", str(root)]
+        run(*r, "deposit", "p", str(src), "--pdf", str(pdf), "--title", "Tpyo", "--author", "Duch, P.",
+            "--abstract", "A \\emphdistribution.", "--keyword", "old", "--rights", "cc-by-4.0")
+        d = root / "ocfl" / "p"
+        inv = P.load_inventory(d)
+        dc = P.read_json(d, inv, "datacite.json")
+        dc["subjects"].append({"subject": "math.PR", "subjectScheme": "arXiv"})
+        P.write_json(tmp_path / "dc.json", dc)
+        files = {lp: d / inv["manifest"][dg][0] for dg, lps in inv["versions"]["v1"]["state"].items() for lp in lps}
+        files["datacite.json"] = tmp_path / "dc.json"
+        P.add_version("p", files, "a subject with a scheme")
+        run(*r, "describe", "p", "--title", "Typo", "--author", "Duch, Paweł|IMPAN", "--keyword", "new")
+        (tmp_path / "abstract.txt").write_text("A distribution.\n")
+        (tmp_path / "describe.yaml").write_text("id: p\nabstract-file: abstract.txt\n")
+        run(*r, "describe", "--from", str(tmp_path / "describe.yaml"))
+        with pytest.raises(SystemExit):
+            run(*r, "describe", "p", "--title", "Typo")
+        inv = P.load_inventory(d)
+        dc = P.read_json(d, inv, "datacite.json")
+        assert inv["head"] == "v4" and P.read_json(d, inv, P.OBJ)["documentVersion"] == 1
+        assert dc["titles"][0]["title"] == "Typo"
+        assert dc["creators"] == [{"name": "Duch, Paweł", "nameType": "Personal", "familyName": "Duch",
+                                   "givenName": "Paweł", "affiliation": [{"name": "IMPAN"}]}]
+        assert dc["descriptions"][0]["description"] == "A distribution."
+        assert dc["subjects"] == [{"subject": "new"}, {"subject": "math.PR", "subjectScheme": "arXiv"}]
+        assert dc["rightsList"][0]["rightsIdentifier"] == "cc-by-4.0"
+        assert inv["versions"]["v3"]["message"] == \
+            "Description corrected: title, keywords, authors (description-only version)"
+        assert inv["versions"]["v4"]["message"] == "Description corrected: abstract (description-only version)"
         run(*r, "collect")
         run(*r, "index")
         assert P.verify_errors() == []

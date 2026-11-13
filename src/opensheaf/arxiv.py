@@ -97,12 +97,22 @@ def record(folder):
         date = email.utils.parsedate_to_datetime(v.find("r:date", NS).text)
         versions.append({"v": v.get("version"), "date": date.strftime("%Y-%m-%dT%H:%M:%SZ"),
                          "source_type": (v.findtext("r:source_type", default="", namespaces=NS) or "").strip()})
-    authors = re.split(r",\s*|\s+and\s+", text("authors"))
+    authors = author_names(text("authors"))
     abstract = r.find("r:abstract", NS).text.strip()
     return {"id": text("id"), "title": text("title"), "authors": [detex(a) for a in authors if a.strip()],
             "abstract": re.sub(r"[ \t]*\n[ \t]*", "\n", abstract), "license": text("license"),
             "doi": text("doi"), "journal": text("journal-ref"), "categories": (text("categories") or "").split(),
             "comments": text("comments"), "versions": versions}
+
+
+def author_names(s):
+    """'A, B (Univ. X, Y), and C' -> ['A', 'B', 'C']."""
+    while True:
+        t = re.sub(r"\s*\([^()]*\)", "", s)
+        if t == s:
+            break
+        s = t
+    return [a for a in re.split(r",\s*(?:and\s+)?|\s+and\s+", s) if a.strip()]
 
 
 STANDARD = set("""alpha beta gamma delta epsilon varepsilon zeta eta theta vartheta iota kappa lambda mu nu xi
@@ -168,7 +178,10 @@ def clean_text(s, macros=None):
     for is_math, part in split_math(s):
         if not is_math:
             part = P.tex_text(part).replace("``", "\u201c").replace("''", "\u201d").replace("\\&", "&")
-            part = re.sub(r"\{([^{}\\$]*)\}", r"\1", part)
+            part = plain_markup(part)
+            part = re.sub(r"(\\[A-Za-z]+\s*)?\{([^{}\\$]*)\}",
+                          lambda m: m.group(0) if m.group(1) else m.group(2), part)
+            part = typographic_text(part)
         elif macros:
             for _ in range(4):
                 new = re.sub(r"\\([A-Za-z]+)(?![A-Za-z])",
@@ -179,6 +192,28 @@ def clean_text(s, macros=None):
                 part = new
         out.append(("$" + part + "$") if is_math else part)
     return "".join(out)
+
+
+FONT_COMMANDS = ("emph|textit|textbf|textsl|textsc|textrm|textsf|texttt|textup|textmd|textnormal|"
+                 "tmtextit|tmtextbf|tmtextsl|tmtextsc|tmtextrm|tmtextsf|tmtexttt|tmtextup|tmtextmd|"
+                 "tmem|tmstrong|tmname|tmsamp")
+FONT_DECLARATIONS = "it|em|bf|sl|sc|rm|sf|tt|itshape|bfseries|slshape|scshape|upshape|mdseries|normalfont"
+
+
+def plain_markup(s):
+    """Text with \\emph{x}, \\textbf{x}, \\tmtextit{x}, {\\it x}, ... as its plain text."""
+    while True:
+        t = re.sub(r"\\(?:" + FONT_COMMANDS + r")\s*\{([^{}]*)\}", r"\1", s)
+        t = re.sub(r"\{\\(?:" + FONT_DECLARATIONS + r")(?![A-Za-z])\s*([^{}]*)\}", r"\1", t)
+        if t == s:
+            return s
+        s = t
+
+
+def typographic_text(s):
+    """Ties as spaces, --- and -- as em and en dashes."""
+    s = re.sub(r"(?<![/\\])~", " ", s)
+    return s.replace("---", "\u2014").replace("--", "\u2013")
 
 
 def unknown_macros(s):

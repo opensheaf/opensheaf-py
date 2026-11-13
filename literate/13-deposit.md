@@ -67,6 +67,25 @@ every presentation and by the cached citations of collections.
         return (f"{c.get('givenName', '')} {c['familyName']}".strip()
                 if "familyName" in c else c["name"])
 
+A list of authors is written as in English prose, `A, B and C`, without a
+comma before the last name. Both presentations, the website and the
+TeXmacs index, use this one rule, so that a reader sees the same authors
+written the same way wherever the archive shows them. The names are shown
+as recorded: initials recorded in `datacite.json` stay initials, and the
+remedy is a correction of the description (`osheaf describe`), not a
+presentation that guesses.
+
+    # in the name of a creator as readers write it:
+    def names_joined(names):
+        """['A', 'B', 'C'] -> 'A, B and C'."""
+        names = list(names)
+        return " and ".join([", ".join(names[:-1]), names[-1]]) if len(names) > 1 else "".join(names)
+
+
+    def authors_of(dc):
+        """The creators of a description as readers write them: 'A, B and C'."""
+        return names_joined(display_name(c) for c in dc["creators"])
+
 Relations (section 8.1) link the document to the same work elsewhere. The
 common case, a paper also on arXiv, is written `arxiv=ID` and gives
 `IsVariantFormOf` (the same work, possibly different in form); any other
@@ -148,14 +167,16 @@ access, not reuse.
 ### The landing address
 
 The `url` of `datacite.json` is where readers are sent: the landing page,
-if the archive has a [website](30-website.md), or else the HTML version of
-the TeXmacs document. The [accepted copies](22-accepted-copies.md) use it too.
+if the archive has one, or else the HTML version of the TeXmacs document.
+Landing pages are written by `osheaf index` with either kind of index:
+with the [website](30-website.md), and also beside a
+[TeXmacs index](16-index.md), which has no landing pages of its own. The [accepted copies](22-accepted-copies.md) use it too.
 
     # in the landing address of a document:
     def landing_url(obj_id):
-        """The address readers are sent to: the landing page of the HTML website,
-        or else the HTML version of a TeXmacs document."""
-        if INDEX.get("html"):
+        """The address readers are sent to: the landing page, written with either
+        kind of index, or else the HTML version of a TeXmacs document."""
+        if INDEX.get("html") or INDEX.get("template"):
             return f"{ARCHIVE['baseUrl']}paper/{obj_id}/"
         return f"{ARCHIVE['baseUrl']}site/{obj_id}/{obj_id}.html"
 

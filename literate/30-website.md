@@ -10,6 +10,12 @@ the members of the main collection, one landing page for each document
 of the archive, and a sitemap. The pages are filled into templates,
 which are described in the [next chapter](31-templates.md).
 
+An archive whose home page is a [TeXmacs index](16-index.md) gets the
+same landing pages and sitemap from this module, without the home page:
+`render` is then called with `home=False`. The landing pages are what
+appendix C asks for, and what search engines read, whatever makes the
+home page.
+
 The pages are a presentation, never a source of truth. They are
 regenerated from the archive by `osheaf index` (in the chapters on the
 core), whenever the archive changes, and never edited by hand; a
@@ -82,8 +88,11 @@ The documentation of the module is a summary of this chapter.
 
     Pages are made from templates with {{name}} placeholders: templates/index.html,
     templates/paper.html and templates/style.css of the archive (osheaf.json:
-    index.html.templates), or the package's defaults. Mathematics in titles and
-    abstracts ($...$) is left to MathJax, loaded by the templates.
+    index.html.templates or index.templates, else the folder templates/ if there
+    is one), or the package's defaults. Mathematics in titles and abstracts
+    ($...$) is left to MathJax, loaded by the templates. With a TeXmacs index
+    the home page is TeXmacs', and only the landing pages and the sitemap are
+    written here.
     """
 
 Templates
@@ -92,24 +101,27 @@ Templates
 The look of the pages belongs to the archive, not to the tools: each
 archive has its own templates, in the folder named by
 `index.html.templates` in `osheaf.json` (`osheaf init` copies the
-defaults there, to be edited). A template missing from that folder is
-taken from the package's defaults, `DEFAULTS`, the folder `templates`
-next to the module.
-
-    # in reading and filling the templates:
-    def template(name):
-        d = P.INDEX.get("html", {}).get("templates")
-        p = P.ROOT / d / name if d else None
-        return (p if p and p.exists() else DEFAULTS / name).read_text(encoding="utf-8")
-
-The style sheet is copied rather than filled, so its path is needed
-rather than its text. The lookup is the same.
+defaults there, to be edited). An archive with a TeXmacs index has no
+`index.html` settings, and names the folder `index.templates`; without
+either setting, the folder `templates` of the archive is used if it
+exists, so that an archive needs no setting to give its landing pages
+its own look. A template missing from that folder is taken from the
+package's defaults, `DEFAULTS`, the folder `templates` next to the
+module. The style sheet is copied rather than filled, so its path is
+needed rather than its text; `template` reads the file `template_path`
+finds.
 
     # in the path of a template:
     def template_path(name):
-        d = P.INDEX.get("html", {}).get("templates")
-        p = P.ROOT / d / name if d else None
-        return p if p and p.exists() else DEFAULTS / name
+        d = P.INDEX.get("html", {}).get("templates") or P.INDEX.get("templates") or "templates"
+        p = P.ROOT / d / name
+        return p if p.exists() else DEFAULTS / name
+
+A template to be filled is read as UTF-8 text.
+
+    # in reading and filling the templates:
+    def template(name):
+        return template_path(name).read_text(encoding="utf-8")
 
 A template is HTML with placeholders `{{name}}`, replaced by plain
 string substitution. There is no template language, and no package to
@@ -141,7 +153,10 @@ Small pieces
 
 Dates are shown in words (`3 June 2026`), by the function of the core,
 which also understands approximate dates; a missing date shows nothing.
-Authors are shown by their display names, given name first. A link to a
+Authors are shown by their display names, given name first, joined as
+in prose, `A, B and C`, by the rule the TeXmacs index follows too
+(`authors_of`, with the names of creators in the
+[deposit](13-deposit.md)). A link to a
 file of a version goes through the inventory: the logical path is
 translated into the content path where OCFL stores the file, which may
 lie in the folder of an earlier version. A file the version does not
@@ -155,7 +170,7 @@ its address is `None` when there is none.
 
 
     def authors(dc):
-        return ", ".join(P.display_name(c) for c in dc["creators"])
+        return P.authors_of(dc)
 
 
     def file_link(root, obj_id, inv, ver, logical, label):
@@ -189,26 +204,40 @@ on the home page; a document of this archive gets a landing page and an
 entry. Then come the home page, the style sheet and the sitemap, and the
 landing pages of documents that are no longer members are removed. The
 list `urls` collects the pages for the sitemap, starting with the home
-page.
+page; `written` the documents that got a landing page, whose number
+`render` returns.
+
+With `home=False`, for an archive whose home page is a TeXmacs index,
+the members of other archives are skipped (their entries would be read
+over the network for nothing), and the home page is not written; the
+style sheet is copied only if the landing page refers to it, as the
+default one does, so that an archive whose template uses its own style
+sheets gets no stray `style.css`.
 
     # in writing the website:
-    def render(members):
+    def render(members, home=True):
         """Write index.html, paper/<id>/index.html for every member, style.css
-        and sitemap.xml."""
+        and sitemap.xml; with home=False (a TeXmacs index is the home page),
+        everything but index.html."""
         root_out = P.ROOT
         base = P.ARCHIVE["baseUrl"]
-        entries, urls = [], [(base, None)]
+        entries, urls, written = [], [(base, None)], []
         page_t = template("paper.html")
         for m in members:
             if m.get("archive") != P.ARCHIVE["archiveId"]:
-                entries.append(remote_entry(m))
+                if home:
+                    entries.append(remote_entry(m))
                 continue
             <<write the landing page of a document of this archive>>
             <<the home-page entry of a document of this archive>>
-        <<the lead paragraph of the home page>>
-        <<write the home page and the style sheet>>
+        if home:
+            <<the lead paragraph of the home page>>
+            <<write the home page and the style sheet>>
+        elif "style.css" in page_t:
+            shutil.copyfile(template_path("style.css"), root_out / "style.css")
         <<write the sitemap>>
         <<remove the landing pages of former members>>
+        return len(written)
 
 The PDF of a document is found from its renditions, whatever its name:
 deposits by these tools call it `paper.pdf`, but an accepted copy keeps
@@ -251,6 +280,7 @@ the base URL.
     issued = P.date_of(dc, "Issued")
     <<the withdrawal notice of a landing page>>
     <<the licence and citation of a landing page>>
+    <<the HTML version of a document, if any>>
     page = fill(page_t, {
         "root": root, "archive_name": esc(P.ARCHIVE["name"]), "base_url": esc(base),
         "head": meta_tags(obj_id, d, inv, cur, obj, dc),
@@ -259,11 +289,29 @@ the base URL.
         "withdrawn": withdrawn, "versions": versions, "licence": licence,
         "pdf": esc(pdf_address(root, obj_id, inv, cur, obj) or f"#v{obj['documentVersion']}"),
         "cite": esc(cite), "pin": pin, "pin_url": f"{root}ocfl/{obj_id}/{pin_ver}/inventory.json",
+        "html_link": html_link,
     })
     out = root_out / "paper" / obj_id / "index.html"
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(page, encoding="utf-8")
+    written.append(obj_id)
     urls.append((f"{base}paper/{obj_id}/", inv["versions"][inv["head"]]["created"][:10]))
+    if html_link:
+        urls.append((f"{base}site/{obj_id}/{obj_id}.html", inv["versions"][inv["head"]]["created"][:10]))
+
+A TeXmacs document deposited here has an HTML version, made by TeXmacs at
+the deposit (appendix B) and kept outside the storage root, in
+`site/<id>/<id>.html`. The landing page links it, next to the PDF, and
+the sitemap lists it after the landing page: it is the full text, which
+search engines index. The landing pages are in `paper/<id>/`, so the two
+never meet. The link is the placeholder `{{html_link}}`, empty for a
+document without an HTML version; a template written before it existed
+simply does not show the link.
+
+    # in the HTML version of a document, if any:
+    html_link = ""
+    if (P.SITE / obj_id / f"{obj_id}.html").exists():
+        html_link = f' · <a href="{root}site/{obj_id}/{obj_id}.html">HTML</a>'
 
 A withdrawn document keeps its page, its files and its history (section
 11.1); the page shows the withdrawal notice, with its date and reason,
@@ -295,6 +343,9 @@ page otherwise.
 Every document version gets an item in the list of versions, as
 appendix C asks: its number and the labels services gave it, its stage,
 its date, its change note, its files, its DOI and the notices about it.
+The change note is labelled as in the TeXmacs index (`changes_note`):
+`arXiv comments: 61 pages` for a version imported from arXiv, whose
+comments are not always about a change, `changes: ...` otherwise.
 The version presented, the document version `shown`, is marked, and has
 an anchor `#vN` like the others. For a member of a selection, `vetted` is
 the set of the document versions vetted, each marked as such; the version
@@ -314,8 +365,8 @@ current version, and is not called current.
                f'<div class="version-head">{head}</div>']
         if when:
             out.append(f'<div class="version-date">{esc(when)}</div>')
-        if obj.get("changes", {}).get("text"):
-            out.append(f'<div class="changes">{esc(obj["changes"]["text"])}</div>')
+        if P.changes_note(obj):
+            out.append(f'<div class="changes">{esc(P.changes_note(obj))}</div>')
         out.append(f'<div class="files">{" · ".join(f for f in files if f)}</div>')
         <<the notices about a version>>
         out.append("</li>")
@@ -348,7 +399,11 @@ The links are the renditions (PDF), the main source named by its
 format, or the reason why the sources are missing, never a rendition
 passed off as a source (section 9); then the inventory of the version,
 which lists every file with its digest; then the external records and
-the DOI.
+the DOI. A record of arXiv is shown as the TeXmacs index shows it, by its
+identifier without version (`arXiv:2607.08385`), since the heading
+already names arXiv's version (`Version 1 (arXiv v1)`); the link goes to
+the record of that very version. A version not imported from arXiv but
+related to it (section 8.1) links arXiv's abstract page the same way.
 
     # in the links of a version:
     files = [file_link(root, obj_id, inv, ver, r["path"], "PDF") for r in obj.get("renditions", [])]
@@ -360,9 +415,13 @@ the DOI.
         files.append(f'<span class="missing">sources not available: '
                      f'{esc(obj["sourcesMissing"].get("text", ""))}</span>')
     files.append(f'<a href="{root}ocfl/{obj_id}/{ver}/inventory.json">files and digests</a>')
+    arxiv = P.arxiv_id(obj, dc)
     for e in obj.get("external", []):
         if e.get("record"):
-            files.append(f'<a href="{esc(e["record"])}">{esc(e["service"])}</a>')
+            label = f"arXiv:{arxiv}" if e.get("service") == "arXiv" and arxiv else e["service"]
+            files.append(f'<a href="{esc(e["record"])}">{esc(label)}</a>')
+    if arxiv and not any(e.get("service") == "arXiv" for e in obj.get("external", [])):
+        files.append(f'<a href="https://arxiv.org/abs/{esc(arxiv)}">arXiv:{esc(arxiv)}</a>')
     if dc.get("doi"):
         files.append(f'<a href="https://doi.org/{esc(dc["doi"])}">doi:{esc(dc["doi"])}</a>')
 
@@ -504,7 +563,8 @@ is shown in the version its curator vetted.
     cinv = P.load_inventory(cdir)
     cmem = P.read_json(cdir, cinv, "members.json") if cinv else {}
     if cmem.get("order") == "manual":
-        desc = next((x["description"] for x in P.read_json(cdir, cinv, "datacite.json").get("descriptions", [])), "")
+        cdc = P.read_json(cdir, cinv, "datacite.json")
+        desc = next((x["description"] for x in cdc.get("descriptions", [])), "")
         lead = (esc(desc) + ' A collection in the <a href="https://opensheaf.org">OpenSheaf</a> format: each '
                 'member is kept in its own archive and pinned by a digest'
                 + (', in the versions its curator vetted' if cmem.get("type") == "selection" else '')
@@ -527,9 +587,15 @@ Jekyll.
 
 ### The sitemap and the removed pages
 
-The sitemap lists the home page and the landing pages, each with the
-date of the last object version of its document, so that a harvester
-revisits only what changed.
+The sitemap lists the home page, the landing pages and the HTML versions,
+each with the date of the last object version of its document, so that a
+harvester revisits only what changed. No `robots.txt` is written: it
+names the sitemap for a whole host, and only counts at the root of the
+host (`https://example.org/robots.txt`), which is the archive's only when
+the archive is the whole site. An archive served in a folder of a larger
+site, as `https://mgubi.org/papers/`, has the line
+`Sitemap: https://mgubi.org/papers/sitemap.xml` added to the site's
+`robots.txt`, or submits the sitemap to the search engines directly.
 
     # in write the sitemap:
     sm = ['<?xml version="1.0" encoding="UTF-8"?>',
@@ -569,7 +635,7 @@ answer, the entry says so, and shows the copy or the cached citation.
         from that archive, or else the cached citation."""
         from . import collections
         cite = m.get("cite", {})
-        title, by, year = cite.get("title", m["id"]), ", ".join(cite.get("creators", [])), cite.get("year", "")
+        title, by, year = cite.get("title", m["id"]), P.names_joined(cite.get("creators", [])), cite.get("year", "")
         links, abstract, archive_name, status = [], "", m.get("archiveUrl", ""), {}
         pin = P.member_pins(m)[-1][1]
         minv = P.load_inventory(P.OCFL / m["id"])

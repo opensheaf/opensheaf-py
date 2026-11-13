@@ -25,6 +25,12 @@ and, next to it, `ocfl/` (the OCFL 1.1 storage root), `opensheaf.json` (the
 discovery document, generated), `site/` (HTML versions) and `index.tm`,
 `index.html` (generated). TeXmacs runs headless with a private profile in
 `texmacs_home/` (not committed).
+
+The index is either a TeXmacs document made from a template, as above, or
+the website: "index": {"html": {"templates": "templates"}}. Both get landing
+pages `paper/<id>/` and `sitemap.xml`, from the templates in the folder
+`index.html.templates`, or `index.templates`, or else `templates/` if it
+exists, or else the package's defaults.
 """
 
 import datetime
@@ -526,6 +532,17 @@ def display_name(c):
             if "familyName" in c else c["name"])
 
 
+def names_joined(names):
+    """['A', 'B', 'C'] -> 'A, B and C'."""
+    names = list(names)
+    return " and ".join([", ".join(names[:-1]), names[-1]]) if len(names) > 1 else "".join(names)
+
+
+def authors_of(dc):
+    """The creators of a description as readers write them: 'A, B and C'."""
+    return names_joined(display_name(c) for c in dc["creators"])
+
+
 def related_from_args(specs):
     related = []
     for kv in specs or []:
@@ -562,9 +579,9 @@ def rights_list(rights, prev_dc=None):
 
 
 def landing_url(obj_id):
-    """The address readers are sent to: the landing page of the HTML website,
-    or else the HTML version of a TeXmacs document."""
-    if INDEX.get("html"):
+    """The address readers are sent to: the landing page, written with either
+    kind of index, or else the HTML version of a TeXmacs document."""
+    if INDEX.get("html") or INDEX.get("template"):
         return f"{ARCHIVE['baseUrl']}paper/{obj_id}/"
     return f"{ARCHIVE['baseUrl']}site/{obj_id}/{obj_id}.html"
 
@@ -777,7 +794,7 @@ def description_version(obj_id, change, message, add_files=None):
             sys.exit(f"{obj_id} has a file {lp} already")
         files[lp] = Path(f)
     files["datacite.json"], files[OBJ] = tmp / "datacite.json", tmp / OBJ
-    inv = add_version(obj_id, files, message)
+    inv = add_version(obj_id, files, message() if callable(message) else message)
     shutil.rmtree(tmp, ignore_errors=True)
     return inv
 
@@ -931,6 +948,49 @@ def relicense(args):
     inv = description_version(args.id, change, args.message or
                               f"Licence: {new['rights']} (description-only version; content unchanged)")
     print(f"{args.id}: {inv['head']} ({new['rights']})")
+
+
+def describe(args):
+    """Correct the description of a document (title, abstract, keywords,
+    authors) by a description-only version (section 7.3)."""
+    if args.abstract is not None and args.abstract_file:
+        sys.exit("describe: give --abstract or --abstract-file, not both")
+    abstract = (Path(args.abstract_file).read_text(encoding="utf-8") if args.abstract_file
+                else args.abstract)
+    abstract = abstract.strip() if abstract is not None else None
+    if args.title is not None and not args.title.strip() or abstract == "":
+        sys.exit("describe: a title or an abstract cannot be empty")
+    changed = []
+
+    def change(dc, obj):
+        if args.title is not None and args.title.strip() != dc["titles"][0]["title"]:
+            dc["titles"][0]["title"] = args.title.strip()
+            changed.append("title")
+        if abstract is not None:
+            descs = dc.setdefault("descriptions", [])
+            old = next((x for x in descs if x["descriptionType"] == "Abstract"), None)
+            if old is None:
+                descs.insert(0, {"description": abstract, "descriptionType": "Abstract"})
+                changed.append("abstract")
+            elif old["description"] != abstract:
+                old["description"] = abstract
+                changed.append("abstract")
+        if args.keyword:
+            subjects = dc.get("subjects", [])
+            if [x["subject"] for x in subjects if not x.get("subjectScheme")] != args.keyword:
+                dc["subjects"] = [{"subject": k} for k in args.keyword] + \
+                    [x for x in subjects if x.get("subjectScheme")]
+                changed.append("keywords")
+        if args.author:
+            creators = [creator(a) for a in args.author]
+            if creators != dc["creators"]:
+                dc["creators"] = creators
+                changed.append("authors")
+        if not changed:
+            sys.exit(f"{args.id}: nothing to change in the description")
+    inv = description_version(args.id, change, args.message or (
+        lambda: f"Description corrected: {', '.join(changed)} (description-only version)"))
+    print(f"{args.id}: {inv['head']} ({', '.join(changed)} corrected)")
 
 
 ORDER = "issued-desc"
@@ -1124,6 +1184,26 @@ def version_line(obj, dc, inv, ver):
     return line
 
 
+def arxiv_id(obj, dc):
+    """The arXiv identifier of a version, without version: '2607.08385'."""
+    for e in obj.get("external", []):
+        if e.get("service") == "arXiv" and "/abs/" in e.get("record", ""):
+            return re.sub(r"v\d+$", "", e["record"].rsplit("/abs/", 1)[1])
+    for r in dc.get("relatedIdentifiers", []):
+        if r["relatedIdentifierType"] == "arXiv":
+            return re.sub(r"v\d+$", "", r["relatedIdentifier"].split(":", 1)[1])
+    return None
+
+
+def changes_note(obj):
+    """'arXiv comments: 61 pages', 'changes: typos corrected', or None."""
+    text = obj.get("changes", {}).get("text")
+    if not text:
+        return None
+    arxiv = any(e.get("role") == "source" and e.get("service") == "arXiv" for e in obj.get("external", []))
+    return f"{'arXiv comments' if arxiv else 'changes'}: {text}"
+
+
 def abstract_block(paras):
     # a fold in TeXmacs, a details element in HTML (the exporter has no
     # rendering of folded text)
@@ -1147,7 +1227,9 @@ def index_entry(member):
     html = f"site/{obj_id}/{obj_id}.html"
     texmacs = obj.get("sourceFormat") == "application/x-texmacs"
     title = tm_with_math(dc["titles"][0]["title"])
-    authors = tm_escape(", ".join(display_name(c) for c in dc["creators"]))
+    authors = tm_escape(authors_of(dc))
+    if not authors.endswith("."):
+        authors += "."
     links = [f"<hlink|PDF|ocfl/{obj_id}/{pdf}>"] if pdf else []
     if texmacs:
         # links to .tm files become .html links in the HTML export; the source
@@ -1157,13 +1239,7 @@ def index_entry(member):
             f" source|{src[:-3]}.texmacs>>"]
     elif src:
         links.append(f"<hlink|LaTeX source|{src}>")
-    arxiv = None
-    for e in obj.get("external", []):
-        if e.get("service") == "arXiv":
-            arxiv = e["record"].rsplit("/abs/", 1)[1]
-    for r in dc.get("relatedIdentifiers", []):
-        if not arxiv and r["relatedIdentifierType"] == "arXiv":
-            arxiv = r["relatedIdentifier"].split(":", 1)[1]
+    arxiv = arxiv_id(obj, dc)
     if arxiv:
         links.append(f"<hlink|arXiv:{arxiv}|https://arxiv.org/abs/{arxiv}>")
     paras = []
@@ -1173,15 +1249,14 @@ def index_entry(member):
     abstract = abstract_block(paras) if paras else ""
     first = date_of(dc, "Issued")
     when = (f"first issued {fmt_date(first)}; " if first else "") + version_line(obj, dc, inv, ver)
-    if obj.get("changes", {}).get("text"):
-        when += f"<next-line>{tm_escape(obj['changes']['text'])}"
+    if changes_note(obj):
+        when += f"<next-line>{tm_escape(changes_note(obj))}"
     sep = " \\<cdot\\> "
-    head = (f"<specific|texmacs|<hlink|{title}|{src}>><specific|html*|<hlink|{title}|{html}>>"
-            if texmacs else title)
+    head = f"<hlink|{title}|paper/{obj_id}/>"
     return f"""  <\\notes-news-item>
     <with|font-series|bold|{head}>
 
-    By {authors}.
+    By {authors}
 
     {sep.join(links)}
 
@@ -1208,6 +1283,8 @@ def index(args):
     line = "  <paper-index>\n"
     if template.count(line) != 1:
         sys.exit(f"{INDEX['template']} must contain one paragraph <paper-index>")
+    from . import html
+    pages = html.render(members, home=False)
     entries = "\n\n".join(index_entry(m) for m in members)
     with open(ROOT / "index.tm", "w", encoding="latin-1", newline="") as f:
         f.write(template.replace(line, entries + "\n"))
@@ -1217,7 +1294,8 @@ def index(args):
         run_texmacs(export_calls(ROOT / "index.tm", pdf=scratch / "index.pdf",
                                  html=ROOT / "index.html"))
         shutil.rmtree(scratch, ignore_errors=True)
-    print("opensheaf.json, index.tm" + ("" if args.no_html else " and index.html") + " written")
+    print("opensheaf.json, index.tm" + ("" if args.no_html else ", index.html")
+          + f", {pages} landing pages and sitemap.xml written")
 
 
 def document_version_errors(obj_id, d, inv):

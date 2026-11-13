@@ -123,6 +123,9 @@ definitions grouped by subject, in the order in which they are used.
     <<arXiv: reading the arXivRaw record>>
 
 
+    <<arXiv: the names in the list of authors>>
+
+
     <<arXiv: the standard mathematical commands>>
 
 
@@ -136,6 +139,12 @@ definitions grouped by subject, in the order in which they are used.
 
 
     <<arXiv: titles and abstracts as plain text>>
+
+
+    <<arXiv: changes of font as plain text>>
+
+
+    <<arXiv: spaces and dashes written the TeX way>>
 
 
     <<arXiv: macros left unknown>>

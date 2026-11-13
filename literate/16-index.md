@@ -58,11 +58,15 @@ of the archive (`index.template` in the configuration) by replacing its
 paragraph `<paper-index>` with one entry per member of the main
 collection, in the order of the collection. The entries use the `notes`
 plugin's news items, so the template must use that style. Each entry shows
-the title (linking the TeXmacs source in TeXmacs, the HTML version on the
-web), the authors, the links to the renditions and sources, the abstract,
-the dates, and the pin: the beginning of the digest of the inventory,
-linked to that inventory, so that a reader can check what the collection
-pins.
+the title, linking the landing page of the document, the authors, the
+links to the renditions and sources, the abstract, the dates, and the pin:
+the beginning of the digest of the inventory, linked to that inventory, so
+that a reader can check what the collection pins.
+
+The landing pages, with the tags read by search engines, and the sitemap
+are those of the [website](30-website.md), written by the same code: a
+TeXmacs index is a home page, nothing more, and the website profile
+(appendix C) asks for the rest whatever makes the home page.
 
     # in write the TeXmacs index of the archive:
     <<TeX accents and special letters as Unicode>>
@@ -83,6 +87,12 @@ pins.
     <<the line saying which version of a document readers see>>
 
 
+    <<the arXiv identifier of a document version>>
+
+
+    <<the change note of a version, with what it is>>
+
+
     <<a foldable abstract in TeXmacs and HTML>>
 
 
@@ -95,10 +105,14 @@ pins.
 
 `osheaf index` always writes the discovery document. Then, with a website
 configured, it hands the members to the [website](30-website.md); with a
-TeXmacs template, it writes `index.tm` and, unless `--no-html`, exports it
-to `index.html` with TeXmacs (the PDF export, needed to typeset it, goes to
-a scratch folder). The empty file `.texmacs-noconvert` tells TeXmacs'
-website converter not to touch the archive's files (appendix B).
+TeXmacs template, it has the website write the landing pages and the
+sitemap without a home page (`home=False`), writes `index.tm` and, unless
+`--no-html`, exports it to `index.html` with TeXmacs (the PDF export,
+needed to typeset it, goes to a scratch folder). The landing pages are at
+`paper/<id>/`, apart from the HTML versions of TeXmacs documents in
+`site/<id>/`, and the `index.html` of TeXmacs is never overwritten. The
+empty file `.texmacs-noconvert` tells TeXmacs' website converter not to
+touch the archive's files (appendix B).
 
 Only members of the archive itself can be shown this way: the entries are
 read from the local storage root. A curated main collection with members
@@ -123,6 +137,8 @@ of other archives needs the website.
         line = "  <paper-index>\n"
         if template.count(line) != 1:
             sys.exit(f"{INDEX['template']} must contain one paragraph <paper-index>")
+        from . import html
+        pages = html.render(members, home=False)
         entries = "\n\n".join(index_entry(m) for m in members)
         with open(ROOT / "index.tm", "w", encoding="latin-1", newline="") as f:
             f.write(template.replace(line, entries + "\n"))
@@ -132,7 +148,8 @@ of other archives needs the website.
             run_texmacs(export_calls(ROOT / "index.tm", pdf=scratch / "index.pdf",
                                      html=ROOT / "index.html"))
             shutil.rmtree(scratch, ignore_errors=True)
-        print("opensheaf.json, index.tm" + ("" if args.no_html else " and index.html") + " written")
+        print("opensheaf.json, index.tm" + ("" if args.no_html else ", index.html")
+              + f", {pages} landing pages and sitemap.xml written")
 
 ### Text in TeXmacs
 
@@ -247,6 +264,43 @@ was deposited, from the inventory.
             line += f", deposited {fmt_date(inv['versions'][ver]['created'][:10])}"
         return line
 
+Both presentations link a document to arXiv by one identifier, without
+version: `arXiv:2607.08385`, linking arXiv's abstract page, which lists
+every version. The arXiv version a document version comes from is named
+by the version line (`version 1 (arXiv v1)`), so the identifier needs no
+version of its own; before, the index showed `arXiv:2607.08385v1` for an
+imported paper next to `arXiv:2611.17119` for a related one. The
+identifier is that of the record the version was imported from, or else
+of a relation to arXiv (section 8.1), as for a paper deposited here and
+also posted on arXiv.
+
+    # in the arXiv identifier of a document version:
+    def arxiv_id(obj, dc):
+        """The arXiv identifier of a version, without version: '2607.08385'."""
+        for e in obj.get("external", []):
+            if e.get("service") == "arXiv" and "/abs/" in e.get("record", ""):
+                return re.sub(r"v\d+$", "", e["record"].rsplit("/abs/", 1)[1])
+        for r in dc.get("relatedIdentifiers", []):
+            if r["relatedIdentifierType"] == "arXiv":
+                return re.sub(r"v\d+$", "", r["relatedIdentifier"].split(":", 1)[1])
+        return None
+
+The change note of a version (section 9, `changes`) is what the authors
+wrote about it. For a version imported from arXiv it is arXiv's comments
+on the version, which are often not about a change at all (`61 pages`):
+shown bare, they read as a change note. So the note is labelled by what it
+is, `arXiv comments: 61 pages`, or `changes: ...` for a note written with
+a deposit, in both presentations.
+
+    # in the change note of a version, with what it is:
+    def changes_note(obj):
+        """'arXiv comments: 61 pages', 'changes: typos corrected', or None."""
+        text = obj.get("changes", {}).get("text")
+        if not text:
+            return None
+        arxiv = any(e.get("role") == "source" and e.get("service") == "arXiv" for e in obj.get("external", []))
+        return f"{'arXiv comments' if arxiv else 'changes'}: {text}"
+
 The abstract is folded: in TeXmacs a fold, on the web an HTML `details`
 element, since the HTML export does not render folds.
 
@@ -266,14 +320,19 @@ An entry is made from the version the collection presents
 (section 10.2): the current version as of the pinned head, for a member of
 an archive collection, or the last revision, for a member of a selection.
 The pin shown is that of the presented version for a selection, and the
-member's own pin (the head) for an archive collection. A TeXmacs document has an HTML
+member's own pin (the head) for an archive collection. The title links
+the landing page, for every document; before, the title of a TeXmacs
+document linked its HTML version and the others linked nothing. The
+authors are written by the rule of every presentation, `A, B and C`
+(`authors_of`, with the names of creators in the
+[deposit](13-deposit.md)), and end with a full stop, unless the last
+name already ends with one. A TeXmacs document has an HTML
 version, and its source is linked twice: TeXmacs' HTML export rewrites
 links to `.tm` files into links to `.html` files, so the web gets a link
 to a `.texmacs` name, which the export turns back into `.tm`. A LaTeX
 source is linked as such, and the PDF is the one named among the
-renditions, if any. An arXiv identifier, from the record the
-version was imported from or else from the relations, gives a link to
-arXiv. The change note of the version follows the dates.
+renditions, if any. The arXiv identifier gives a link to arXiv. The
+change note of the version, labelled, follows the dates.
 
     # in the TeXmacs index entry of a member:
     def index_entry(member):
@@ -289,7 +348,9 @@ arXiv. The change note of the version follows the dates.
         html = f"site/{obj_id}/{obj_id}.html"
         texmacs = obj.get("sourceFormat") == "application/x-texmacs"
         title = tm_with_math(dc["titles"][0]["title"])
-        authors = tm_escape(", ".join(display_name(c) for c in dc["creators"]))
+        authors = tm_escape(authors_of(dc))
+        if not authors.endswith("."):
+            authors += "."
         links = [f"<hlink|PDF|ocfl/{obj_id}/{pdf}>"] if pdf else []
         if texmacs:
             # links to .tm files become .html links in the HTML export; the source
@@ -299,13 +360,7 @@ arXiv. The change note of the version follows the dates.
                 f" source|{src[:-3]}.texmacs>>"]
         elif src:
             links.append(f"<hlink|LaTeX source|{src}>")
-        arxiv = None
-        for e in obj.get("external", []):
-            if e.get("service") == "arXiv":
-                arxiv = e["record"].rsplit("/abs/", 1)[1]
-        for r in dc.get("relatedIdentifiers", []):
-            if not arxiv and r["relatedIdentifierType"] == "arXiv":
-                arxiv = r["relatedIdentifier"].split(":", 1)[1]
+        arxiv = arxiv_id(obj, dc)
         if arxiv:
             links.append(f"<hlink|arXiv:{arxiv}|https://arxiv.org/abs/{arxiv}>")
         paras = []
@@ -315,15 +370,14 @@ arXiv. The change note of the version follows the dates.
         abstract = abstract_block(paras) if paras else ""
         first = date_of(dc, "Issued")
         when = (f"first issued {fmt_date(first)}; " if first else "") + version_line(obj, dc, inv, ver)
-        if obj.get("changes", {}).get("text"):
-            when += f"<next-line>{tm_escape(obj['changes']['text'])}"
+        if changes_note(obj):
+            when += f"<next-line>{tm_escape(changes_note(obj))}"
         sep = " \\<cdot\\> "
-        head = (f"<specific|texmacs|<hlink|{title}|{src}>><specific|html*|<hlink|{title}|{html}>>"
-                if texmacs else title)
+        head = f"<hlink|{title}|paper/{obj_id}/>"
         return f"""  <\\notes-news-item>
         <with|font-series|bold|{head}>
 
-        By {authors}.
+        By {authors}
 
         {sep.join(links)}
 

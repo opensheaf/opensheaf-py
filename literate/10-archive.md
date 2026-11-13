@@ -29,7 +29,7 @@ build.
     The command is `osheaf` (also installed as `opensheaf`); see `osheaf --help`.
     """
 
-    __version__ = "0.7.0"
+    __version__ = "0.8.0"
     SPECIFICATION = "0.1"
 
 `python -m opensheaf` runs the same command line as `osheaf`.
@@ -147,6 +147,12 @@ discovery document.
     discovery document, generated), `site/` (HTML versions) and `index.tm`,
     `index.html` (generated). TeXmacs runs headless with a private profile in
     `texmacs_home/` (not committed).
+
+    The index is either a TeXmacs document made from a template, as above, or
+    the website: "index": {"html": {"templates": "templates"}}. Both get landing
+    pages `paper/<id>/` and `sitemap.xml`, from the templates in the folder
+    `index.html.templates`, or `index.templates`, or else `templates/` if it
+    exists, or else the package's defaults.
     """
 
 The module uses only the standard library. The optional packages

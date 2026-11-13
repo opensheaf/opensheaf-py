@@ -9,6 +9,7 @@ Commands:
   deposit ID [SOURCE]    deposit a document (TeXmacs, or any source with --pdf)
   relicense ID           description-only version with a new licence
   relate ID              description-only version linking the same work elsewhere
+  describe ID            description-only version correcting title, abstract, keywords, authors
   notice ID              a notice about a document version
   withdraw ID            withdraw a document (the content stays)
   complete ID            add the sources of a version deposited without them
@@ -23,8 +24,8 @@ Commands:
   arxiv import           import downloaded arXiv papers into the archive
   help-config            describe osheaf.json
 
-deposit, relicense, relate and init also take their options from a YAML or
-JSON file: --from FILE (a list of entries: several, in order).
+deposit, relicense, relate, describe and init also take their options from a
+YAML or JSON file: --from FILE (a list of entries: several, in order).
 
 Warning: OpenSheaf 0.1 is a draft. Until version 1.0, a revision may change
 the format in incompatible ways, and archives may have to be rebuilt.
@@ -105,6 +106,21 @@ def build_parser():
     rl.add_argument("--from", dest="from_file", metavar="FILE",
                     help="take the options from a YAML or JSON file (a list: several, in order)")
     rl.set_defaults(func=core.relate)
+
+    ds = sub.add_parser("describe", help="description-only version correcting the title, abstract,"
+                        " keywords or authors")
+    ds.add_argument("id", nargs="?")
+    ds.add_argument("--title", help="the corrected title (plain text, mathematics in $...$)")
+    abstract = ds.add_mutually_exclusive_group()
+    abstract.add_argument("--abstract", help="the corrected abstract (plain text, mathematics in $...$)")
+    abstract.add_argument("--abstract-file", help="a UTF-8 file with the corrected abstract")
+    ds.add_argument("--keyword", action="append", help="a keyword (repeatable): replaces the keywords")
+    ds.add_argument("--author", action="append",
+                    help='"Family, Given|Affiliation" (repeatable): replaces the authors')
+    ds.add_argument("--message")
+    ds.add_argument("--from", dest="from_file", metavar="FILE",
+                    help="take the options from a YAML or JSON file (a list: several, in order)")
+    ds.set_defaults(func=core.describe)
 
     nt = sub.add_parser("notice", help="a notice about a document version (description-only)")
     nt.add_argument("id")
@@ -195,7 +211,8 @@ def build_parser():
 
 
 REQUIRED = {"deposit": ("id", "title", "author"), "relicense": ("id", "rights", "method"),
-            "relate": ("id", "to"), "init": ("archive_id", "name", "base_url", "curator")}
+            "relate": ("id", "to"), "describe": ("id",),
+            "init": ("archive_id", "name", "base_url", "curator")}
 
 
 def runs(p, args):
