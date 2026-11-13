@@ -1,5 +1,16 @@
 # opensheaf-py
 
+[![tests](https://github.com/opensheaf/opensheaf-py/actions/workflows/tests.yml/badge.svg)](https://github.com/opensheaf/opensheaf-py/actions/workflows/tests.yml)
+[![archive examples](https://github.com/opensheaf/archive-template/actions/workflows/examples.yml/badge.svg)](https://github.com/opensheaf/archive-template/actions/workflows/examples.yml)
+[![collection examples](https://github.com/opensheaf/collection-template/actions/workflows/examples.yml/badge.svg)](https://github.com/opensheaf/collection-template/actions/workflows/examples.yml)
+[![Python](https://img.shields.io/badge/python-3.9%E2%80%933.13-blue)](pyproject.toml)
+[![licence: GPL v3+](https://img.shields.io/badge/licence-GPL--3.0--or--later-blue)](LICENSE)
+
+The unit tests run on Python 3.9 and 3.13; the testing grounds of the two
+templates build archives and collections from the
+[example papers](https://github.com/opensheaf/example-papers) and go through
+every workflow, on every push and every week.
+
 Python tools for [OpenSheaf](https://opensheaf.org) archives: archives of
 scholarly documents kept as plain files (an OCFL 1.1 storage root with
 DataCite metadata), checkable by anyone and combinable into collections. This
