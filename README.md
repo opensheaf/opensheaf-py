@@ -81,6 +81,7 @@ osheaf complete ID --version N --source paper.tex [--extra-source ...]
 osheaf relicense ID --rights cc-by-4.0 --method "..."
 osheaf relate ID --to arxiv:ID|doi:DOI [--relation IsIdenticalTo]
 osheaf collect
+osheaf accept ARCHIVE-URL ID --version vN [--as ID] [--stage VoR] [--agreement ...]
 osheaf mirror ARCHIVE-URL ID [--licence-checked]
 osheaf collection sync [ID] --from collection.yaml
 osheaf collection update [ID]
@@ -136,15 +137,23 @@ osheaf arxiv import DOWNLOADS [ARXIV-ID ...] [--update] [--versions v1,v3]
   whose main collection is curated; `osheaf verify --remote` fetches every
   member and checks its pin. See `osheaf collection --help` and the template
   [opensheaf/collection-template](https://github.com/opensheaf/collection-template).
-- **mirror**: copies another archive's object (every version, each file
-  checked against its digest) into this archive, which then serves it too;
-  refused unless every version is under an open licence (CC BY, CC BY-SA,
-  CC0, GPL), or `--licence-checked` says that redistribution is allowed.
-  `mirror: yes` on a member of `collection.yaml` mirrors it and lists the
-  copy in the member's `mirrors`; `verify --remote` checks a member on its
-  mirrors when its archive fails. A journal can thus keep copies of the
-  papers of its issues; or publish its own versions of record as documents of
-  its archive (`deposit` with `--stage VoR`, its licence and `--agreement`).
+- **accept** (a journal, a series): copies exactly one version of another
+  archive's object (the version that was vetted) into a document of this
+  archive, byte for byte, recording its source and pin in `object.json`
+  (`external`, role `source`) and linking it from `datacite.json`. The
+  authors' later versions change nothing; a correction is an editorial act:
+  `accept` again with a later version (a new document version of the
+  journal's document) or `notice`. Only the accepted version needs an open
+  licence (or `--licence-checked`, with `--agreement` to record the authors'
+  agreement). A journal that typesets its own version of record deposits it
+  instead (`deposit` with `--stage VoR`, its licence and `--agreement`).
+- **mirror** (a library, a preservation copy): copies another archive's
+  object, every version, each file checked against its digest, so that this
+  archive serves it too; refused unless every version is under an open
+  licence (CC BY, CC BY-SA, CC0, GPL), or `--licence-checked` says that
+  redistribution is allowed. `mirror: yes` on a member of `collection.yaml`
+  mirrors it and lists the copy in the member's `mirrors`; `verify --remote`
+  checks a member on its mirrors when its archive fails.
 - **relicense**, **relate**: description-only versions (a new licence with the
   authors' agreement; a link to the same work elsewhere).
 - **collect**: a new version of the main collection when a document has a new

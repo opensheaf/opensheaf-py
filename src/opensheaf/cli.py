@@ -11,6 +11,7 @@ Commands:
   notice ID              a notice about a document version
   withdraw ID            withdraw a document (the content stays)
   complete ID            add the sources of a version deposited without them
+  accept URL ID          copy one vetted version of another archive's object (a journal)
   mirror URL ID          copy another archive's object (open licences only)
   collection sync|update curated collections, with members from any archive
   collect                new version of the main collection when needed
@@ -127,6 +128,21 @@ def build_parser():
     c.add_argument("--source-format")
     c.add_argument("--message")
     c.set_defaults(func=core.complete)
+    ac = sub.add_parser("accept", help="copy one vetted version of another archive's object into a "
+                        "document of this archive (a journal)")
+    ac.add_argument("url", help="the archive's base URL (or a local folder)")
+    ac.add_argument("id")
+    ac.add_argument("--version", required=True, help="the object version that was vetted, e.g. v2")
+    ac.add_argument("--as", dest="as_id", help="the identifier here (default: the same)")
+    ac.add_argument("--stage", choices=["AO", "SMUR", "AM", "P", "VoR", "CVoR", "EVoR"])
+    ac.add_argument("--type", help="resourceTypeGeneral, e.g. JournalArticle (default: as the source)")
+    ac.add_argument("--available", help="when this archive published it (default: today)")
+    ac.add_argument("--agreement", metavar="METHOD", help="record the authors' agreement")
+    ac.add_argument("--changes", help="the change note (default: says what was accepted)")
+    ac.add_argument("--licence-checked", action="store_true",
+                    help="redistribution is allowed although the licence is not an open one")
+    ac.add_argument("--message")
+    ac.set_defaults(func=None)
     mi = sub.add_parser("mirror", help="copy another archive's object (with open licences) into this archive")
     mi.add_argument("url", help="the archive's base URL (or a local folder)")
     mi.add_argument("id")
@@ -217,6 +233,10 @@ def main(argv=None):
     if args.cmd == "arxiv":
         from . import arxiv
         return arxiv.main(args.rest)
+    if args.cmd == "accept":
+        from . import accept
+        core.configure(core.find_root(args.root))
+        return accept.accept(args)
     if args.cmd == "mirror":
         from . import mirror
         core.configure(core.find_root(args.root))

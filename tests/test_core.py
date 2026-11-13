@@ -394,3 +394,44 @@ def test_mirror(tmp_path):
     shutil.move(str(a), str(tmp_path / "gone"))
     errors = collections.check_remote(members)
     assert len(errors) == 1 and "closed" in errors[0]          # the mirrored member is checked on the copy
+
+
+def test_accept_vetted_version(tmp_path):
+    """A journal accepts one version (byte for byte, with its source and pin);
+    the authors' later versions change nothing; a correction is the journal's
+    new document version."""
+    a, j = tmp_path / "a", tmp_path / "j"
+    make_archive(a, "authors")
+    pdfs = []
+    for k in range(3):
+        f = tmp_path / f"p{k}.pdf"
+        f.write_bytes(b"%PDF-1.4 version " + str(k).encode())
+        pdfs.append(f)
+    src = tmp_path / "p.tex"
+    src.write_text("\\documentclass{article}")
+    r = ["--root", str(a)]
+    run(*r, "deposit", "paper", str(src), "--pdf", str(pdfs[0]), "--title", "P", "--author", "Doe, J")
+    run(*r, "deposit", "paper", str(src), "--pdf", str(pdfs[1]), "--title", "P", "--author", "Doe, J",
+        "--rights", "cc-by-4.0")
+    make_archive(j, "journal")
+    with pytest.raises(SystemExit):                       # v1 is not openly licensed
+        run("--root", str(j), "accept", str(a), "paper", "--version", "v1")
+    run("--root", str(j), "accept", str(a), "paper", "--version", "v2", "--stage", "VoR",
+        "--agreement", "the journal's terms")
+    run(*r, "deposit", "paper", str(src), "--pdf", str(pdfs[2]), "--title", "P", "--author", "Doe, J")
+    d = j / "ocfl" / "paper"
+    inv = P.load_inventory(d)
+    assert list(inv["versions"]) == ["v1"]                # the authors' v3 changes nothing here
+    pdf_here = (d / P.content_path(inv, "v1", "paper.pdf")).read_bytes()
+    assert pdf_here == pdfs[1].read_bytes()
+    obj = P.read_json(d, inv, P.OBJ)
+    ext = obj["external"][0]
+    assert ext["role"] == "source" and ext["label"] == "paper v2"
+    assert ext["files"][0]["sha512"] == P.digest(a / "ocfl" / "paper" / "v2" / "inventory.json")
+    run("--root", str(j), "accept", str(a), "paper", "--version", "v3", "--licence-checked",
+        "--changes", "Corrected by the editors.")
+    inv = P.load_inventory(d)
+    assert P.read_json(d, inv, P.OBJ)["documentVersion"] == 2
+    run("--root", str(j), "collect")
+    run("--root", str(j), "index")
+    assert P.verify_errors() == []
