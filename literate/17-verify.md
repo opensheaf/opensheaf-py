@@ -11,7 +11,8 @@ descriptions written by [deposits](13-deposit.md) and
 [description-only versions](14-description.md), the
 [main collection](15-main-collection.md) and the
 [discovery document](16-index.md). With `--remote` it also resolves the
-members of other archives (see [collections](20-collections.md)).
+members of other archives, and the sources of accepted copies (see
+[collections](20-collections.md)).
 
 The verifier reports every problem it finds, as a line naming the place
 (`ocfl/<id>: v3 ...`), rather than stopping at the first.
@@ -29,7 +30,14 @@ The command
 -----------
 
 The command prints the problems and their number, or `OK`, and its exit
-status says which, so that it can run in continuous integration.
+status says which, so that it can run in continuous integration. With
+`--remote`, the members of other archives of the head of every collection
+are resolved and their pins checked, and every accepted copy is compared
+with its source (section 14). Mirrors of other archives' collections are
+left out: their members are the original archive's to check. Earlier
+versions of a collection are not resolved, since the pins of its head are
+what the archive presents now; a verifier that wants them all can follow
+the inventories.
 
     # in the verify command:
     def verify(args):
@@ -37,9 +45,10 @@ status says which, so that it can run in continuous integration.
         if getattr(args, "remote", False):
             from . import collections
             for obj_id, d, inv in objects():
-                if read_json(d, inv, OBJ)["kind"] == "collection":
+                if read_json(d, inv, OBJ)["kind"] == "collection" and not mirror_of(d, inv):
                     errors += [f"{obj_id}: {e}" for e in
                                collections.check_remote(read_json(d, inv, "members.json")["members"])]
+            errors += collections.check_accepted_copies()
         for e in errors:
             print(e)
         print("OK" if not errors else f"{len(errors)} problem(s)")
@@ -96,7 +105,9 @@ below.
 Without a discovery document there is nothing more to check. With one, it
 must state the required layout, and list exactly the objects of the storage
 root: the verifier reads the files, so it can also check that none is
-missing (section 14).
+missing (section 14). An object listed with `mirrorOf` must be a mirror of
+that archive, and a mirror must be listed so (sections 6.1 and 10.4);
+whether it is one is read from its head, as everywhere in these tools.
 
     # in check the discovery document of an archive against its storage root:
     disc_path = ROOT / "opensheaf.json"
@@ -110,6 +121,10 @@ missing (section 14).
     found = {obj_id: (d, inv) for obj_id, d, inv in objects()}
     for obj_id in set(listed) ^ set(found):
         errors.append(f"opensheaf.json and the storage root disagree about {obj_id}")
+    for obj_id, (d, inv) in found.items():
+        if obj_id in listed and listed[obj_id].get("mirrorOf") != mirror_of(d, inv):
+            errors.append(f"opensheaf.json: {obj_id} " + (f"is a mirror of {mirror_of(d, inv)}, without mirrorOf"
+                          if mirror_of(d, inv) else "is listed as a mirror, and is not one"))
 
 ### Objects
 
@@ -170,12 +185,11 @@ not checked.
         continue
 
 The descriptions are checked against each other and against sections 8 and
-9. `object.json` must name its object, and its archive, except in a mirror:
-an object whose head names another archive is a copy of that archive's
-object (section 10.4; the specification now also identifies a mirror by
-`mirrorOf` in the discovery document, which this check does not read
-yet). The two files must agree on the document version and the date of a
-withdrawal. `datacite.json` must
+9. `object.json` must name its object, and its archive: this archive, or,
+in a mirror, the archive it copies, which every version of the mirror must
+name (section 14: "for each mirror, check that its `object.json` files
+name that archive"). The two files must agree on the document version and
+the date of a withdrawal. `datacite.json` must
 have the required properties; a Creative Commons or arXiv licence must be
 identified, by SPDX or by URL, so that archives record the same licence the
 same way (section 8). Every note with a file must find that file in the
@@ -187,10 +201,8 @@ version.
     check_schema(f"{where}/{ver}/{OBJ}", obj, "opensheaf-object-0.1.schema.json")
     if obj.get("objectId") != obj_id:
         errors.append(f"{where}: {ver} object.json names another object")
-    elif obj.get("archiveId") != disc.get("archiveId") and \
-            read_json(d, inv, OBJ).get("archiveId") == disc.get("archiveId"):
+    elif obj.get("archiveId") != (mirror_of(d, inv) or disc.get("archiveId")):
         errors.append(f"{where}: {ver} object.json names another archive")
-    # an object whose head names another archive is a mirror (section 10.4)
     if str(obj.get("documentVersion")) != dc.get("version"):
         errors.append(f"{where}: {ver} datacite.json and object.json disagree on the version")
     if obj.get("status") == "withdrawn" and date_of(dc, "Withdrawn") != obj.get("withdrawal", {}).get("date"):
@@ -209,14 +221,8 @@ version.
 
 A document version must hold its main source and its renditions, and
 cannot both name a main source and say that its sources are missing. A
-collection version must hold `members.json`, valid against its schema, and
-every member of this archive must be pinned correctly: the pinned version
-exists and its inventory has the pinned digest. Members of other archives
-are resolved only with `--remote`.
-
-These checks predate the amended section 10: they do not yet check the
-`type` of `members.json`, nor the revisions of the members of a selection,
-which pin revisions instead of a `version`.
+collection version must hold `members.json`, valid against its schema,
+with the checks of the member list described next.
 
     # in check the files of a document version or the members of a collection version:
     if obj.get("kind") == "document":
@@ -232,14 +238,65 @@ which pin revisions instead of a `version`.
     else:
         mem = read_json(d, inv, "members.json", ver)
         check_schema(f"{where}/{ver}/members.json", mem, "opensheaf-collection-0.1.schema.json")
-        for m in mem.get("members", []):
-            if m.get("archive") != disc.get("archiveId"):
-                continue  # members of other archives: resolved as in section 6.4
-            md = OCFL / m["id"] / m["version"] / "inventory.json"
+        <<check the type of a member list and the keys of its members>>
+        <<check the pins of the members of this archive>>
+
+The schema says much of this already, but `jsonschema` is optional, and the
+rules of section 10.2 that section 14 names are checked by hand: the member
+list has a `type`, `archive` or `selection`; a member of an archive
+collection has `version` and `inventorySha512` and no revisions; a member
+of a selection has a non-empty list of `revisions`, each with its three
+fields, of distinct document versions, and none of `version`,
+`inventorySha512` or `follow`. A collection of a mirror is checked the
+same way: it is another archive's object, but the format is the same.
+
+    # in check the type of a member list and the keys of its members:
+    kind = mem.get("type")
+    if kind not in ("archive", "selection"):
+        errors.append(f"{where}: {ver} members.json has no valid type (archive or selection)")
+    for m in mem.get("members", []):
+        who = f"{where}: {ver} member {m.get('id')}"
+        if kind == "archive" and (not m.get("version") or not m.get("inventorySha512") or "revisions" in m):
+            errors.append(f"{who}: a member of an archive collection needs version and inventorySha512, "
+                          "and no revisions")
+        if kind == "selection":
+            revs = m.get("revisions")
+            if any(k in m for k in ("version", "inventorySha512", "follow")):
+                errors.append(f"{who}: a member of a selection has no version, inventorySha512 or follow")
+            if not isinstance(revs, list) or not revs or any(
+                    not all(r.get(k) for k in ("documentVersion", "version", "inventorySha512")) for r in revs):
+                errors.append(f"{who}: a member of a selection needs revisions, each with documentVersion, "
+                              "version and inventorySha512")
+            elif len({r["documentVersion"] for r in revs}) != len(revs):
+                errors.append(f"{who}: a document version is vetted twice")
+
+Every pin of a member of this archive must be right: the pinned object
+version exists, its inventory has the pinned digest and, for a revision,
+it holds the stated document version. A revision set must also be in the
+order of the document's history (section 10.2), which for a member of
+this archive is read from the head. Members of other archives are
+resolved only with `--remote`; members of a mirrored collection belong to
+the archive it copies.
+
+    # in check the pins of the members of this archive:
+    for m in mem.get("members", []):
+        if m.get("archive") != disc.get("archiveId") or mirror_of(d, inv):
+            continue  # members of other archives: resolved as in section 6.4
+        for pv, pin, n in member_pins(m):
+            md = OCFL / str(m.get("id")) / str(pv) / "inventory.json"
             if not md.exists():
-                errors.append(f"{where}: {ver} member {m['id']} {m['version']}: unavailable")
-            elif digest(md) != m["inventorySha512"]:
-                errors.append(f"{where}: {ver} member {m['id']} {m['version']}: mismatch")
+                errors.append(f"{where}: {ver} member {m['id']} {pv}: unavailable")
+            elif digest(md) != pin:
+                errors.append(f"{where}: {ver} member {m['id']} {pv}: mismatch")
+            elif n is not None and doc_version_of(OCFL / m["id"], load_inventory(OCFL / m["id"]), pv) != n:
+                errors.append(f"{where}: {ver} member {m['id']} {pv} does not hold document version {n}")
+        if kind == "selection" and (OCFL / str(m.get("id"))).exists():
+            md = OCFL / m["id"]
+            order = [doc_version_of(md, load_inventory(md), h) for h in history_of(md, load_inventory(md))]
+            vetted = [r.get("documentVersion") for r in m.get("revisions") or []]
+            pos = [order.index(x) for x in vetted if x in order]
+            if pos != sorted(pos):
+                errors.append(f"{where}: {ver} member {m['id']}: revisions not in the order of the history")
 
 ### Document versions
 
@@ -361,7 +418,8 @@ reported.
 The presentation is never authoritative, but it should not lie: the TeXmacs
 index (or the website's index page) must show the pin of every member of
 the main collection, so that an index left behind after `osheaf collect`
-is noticed.
+is noticed. For a member of a selection, the pin of the revision
+presented, the last, is required.
 
     # in check that the index shows the pins of the main collection:
     # the presentation shows the current pins
@@ -370,5 +428,5 @@ is noticed.
         html = (ROOT / "index.html").read_text(encoding="utf-8", errors="replace")
         mem = json.loads(read_logical(coll[0], coll[1], "members.json").read_text())
         for m in mem["members"]:
-            if m["inventorySha512"][:32] not in html:
+            if (member_pins(m)[-1][1] or "")[:32] not in html:
                 errors.append(f"index.html does not show the pin of {m['id']}")

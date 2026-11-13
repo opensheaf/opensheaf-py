@@ -169,26 +169,30 @@ def pdf_of(obj):
                 next((r["path"] for r in rs if r["path"].lower().endswith(".pdf")), None))
 
 
-def default_history(obj_dir, inv):
+def default_history(obj_dir, inv, at=None):
     """Without `history`: the last object version holding each document
-    version, in the order of the numbers (section 7.3)."""
+    version, in the order of the numbers, among the object versions up to
+    AT (default: the head) (section 7.3)."""
+    at = at or inv["head"]
     last = {}
     for ver in inv["versions"]:
-        last[doc_version_of(obj_dir, inv, ver)] = ver
+        if int(ver[1:]) <= int(at[1:]):
+            last[doc_version_of(obj_dir, inv, ver)] = ver
     return [last[n] for n in sorted(last)]
 
 
-def history_of(obj_dir, inv):
-    """The history as read from the head version."""
-    head = read_json(obj_dir, inv, OBJ)
-    return head.get("history") or default_history(obj_dir, inv)
+def history_of(obj_dir, inv, at=None):
+    """The history as read from object version AT (default: the head)."""
+    obj = read_json(obj_dir, inv, OBJ, at)
+    return obj.get("history") or default_history(obj_dir, inv, at)
 
 
-def current_version(obj_dir, inv):
-    """The object version holding the current document version: the last
-    entry of the history of the head, or without one the last object
-    version holding the highest document version (section 7.3)."""
-    return history_of(obj_dir, inv)[-1]
+def current_version(obj_dir, inv, at=None):
+    """The object version holding the current document version as of object
+    version AT (default: the head): the last entry of its history, or without
+    one the last object version holding the highest document version
+    (section 7.3)."""
+    return history_of(obj_dir, inv, at)[-1]
 
 
 def next_object_version(inv):
@@ -709,13 +713,18 @@ def deposit(args):
     print(f"{obj_id}: {inv['head']} (document version {doc_version})")
 
 
+def mirror_of(obj_dir, inv):
+    """The archive whose object this one mirrors (section 10.4), or None."""
+    aid = read_json(obj_dir, inv, OBJ).get("archiveId")
+    return aid if aid != ARCHIVE["archiveId"] else None
+
+
 def documents():
     """(obj_id, dir, inventory, current object version, its object.json and
     datacite.json) of every document."""
     out = []
     for obj_id, d, inv in objects():
-        head = read_json(d, inv, OBJ)
-        if head["kind"] != "document" or head.get("archiveId") != ARCHIVE["archiveId"]:
+        if read_json(d, inv, OBJ)["kind"] != "document" or mirror_of(d, inv):
             continue  # collections, and mirrors of other archives' objects
         cur = current_version(d, inv)
         out.append((obj_id, d, inv, cur, read_json(d, inv, OBJ, cur), read_json(d, inv, "datacite.json", cur)))
@@ -927,6 +936,24 @@ def relicense(args):
 ORDER = "issued-desc"
 
 
+def member_pins(m):
+    """[(object version, inventory digest, document version or None)] of a
+    member: its version in an archive collection, each revision in a
+    selection (section 10.2)."""
+    if "revisions" in m:
+        return [(r.get("version"), r.get("inventorySha512"), r.get("documentVersion"))
+                for r in m["revisions"]]
+    return [(m.get("version"), m.get("inventorySha512"), None)]
+
+
+def presented_version(m, obj_dir, inv):
+    """The object version presentations show for member M of an object held
+    in OBJ_DIR (section 10.2)."""
+    if m.get("revisions"):
+        return m["revisions"][-1]["version"]
+    return current_version(obj_dir, inv, m["version"])
+
+
 def member_order(members):
     """Section 10.2: by Issued, then Available (newest first for issued-desc),
     members with neither last, ties broken by object identifier."""
@@ -939,9 +966,9 @@ def member_order(members):
 
 
 def collect(args):
-    """A new version of the main collection when a document has a new current
-    version or a new description of it; members pin the object version
-    holding the current version."""
+    """A new version of the main collection when a document has a new object
+    version; members pin the head of their object and follow it (an archive
+    collection, section 10.2)."""
     init_storage_root()
     coll_id = ARCHIVE["mainCollection"]
     cinv = load_inventory(OCFL / coll_id)
@@ -956,7 +983,7 @@ def collect(args):
         if date_of(dc, "Issued"):
             cite["issued"] = date_of(dc, "Issued")
         m = {"kind": "document", "archive": ARCHIVE["archiveId"], "archiveUrl": ARCHIVE["baseUrl"],
-             "id": obj_id, "version": cur, "inventorySha512": digest(d / cur / "inventory.json"),
+             "id": obj_id, "version": inv["head"], "inventorySha512": digest(d / inv["head"] / "inventory.json"),
              "follow": "latest", "cite": cite}
         # the Available date only orders, it is not part of the cached citation
         m["cite"]["available"] = date_of(dc, "Available", "Created")
@@ -969,15 +996,15 @@ def collect(args):
     version, issued = 1, TODAY
     if inv:
         old = read_json(coll_dir, inv, "members.json")
-        if old["members"] == members:
+        if old["members"] == members and old.get("type") == "archive":
             print(f"{coll_id}: unchanged ({inv['head']})")
             return
         version = read_json(coll_dir, inv, OBJ)["documentVersion"] + 1
         issued = date_of(read_json(coll_dir, inv, "datacite.json"), "Issued") or TODAY
     cur = ARCHIVE["curator"]
     tmp = Path(tempfile.mkdtemp())
-    write_json(tmp / "members.json", {"format": "opensheaf-collection/0.1", "order": ORDER,
-                                      "members": members})
+    write_json(tmp / "members.json", {"format": "opensheaf-collection/0.1", "type": "archive",
+                                      "order": ORDER, "members": members})
     write_json(tmp / "datacite.json", {
         "titles": [{"title": ARCHIVE["name"]}],
         "creators": [{"name": cur["name"], "nameType": "Personal", "givenName": cur["givenName"],
@@ -1007,9 +1034,12 @@ def discovery():
     objs = []
     for obj_id, d, inv in objects():
         obj = read_json(d, inv, OBJ)
-        objs.append({"id": obj_id, "kind": obj["kind"], "head": inv["head"],
-                     "inventorySha512": (d / "inventory.json.sha512").read_text().split()[0],
-                     "status": obj["status"]})
+        entry = {"id": obj_id, "kind": obj["kind"], "head": inv["head"],
+                 "inventorySha512": (d / "inventory.json.sha512").read_text().split()[0],
+                 "status": obj["status"]}
+        if mirror_of(d, inv):
+            entry["mirrorOf"] = mirror_of(d, inv)
+        objs.append(entry)
     return {"format": "opensheaf-archive/0.1", "specification": SPEC,
             "archiveId": ARCHIVE["archiveId"], "name": ARCHIVE["name"],
             "contact": ARCHIVE["contact"], "storageRoot": "ocfl/", "storageLayout": LAYOUT,
@@ -1105,9 +1135,11 @@ def abstract_block(paras):
 
 
 def index_entry(member):
-    obj_id, ver = member["id"], member["version"]
+    obj_id = member["id"]
     d = OCFL / obj_id
     inv = load_inventory(d)
+    ver = presented_version(member, d, inv)
+    pin_ver, pin = member_pins(member)[-1][:2]
     obj = read_json(d, inv, OBJ, ver)
     dc = read_json(d, inv, "datacite.json", ver)
     pdf = content_path(inv, ver, pdf_of(obj)) if pdf_of(obj) else None
@@ -1143,7 +1175,6 @@ def index_entry(member):
     when = (f"first issued {fmt_date(first)}; " if first else "") + version_line(obj, dc, inv, ver)
     if obj.get("changes", {}).get("text"):
         when += f"<next-line>{tm_escape(obj['changes']['text'])}"
-    pin = member["inventorySha512"]
     sep = " \\<cdot\\> "
     head = (f"<specific|texmacs|<hlink|{title}|{src}>><specific|html*|<hlink|{title}|{html}>>"
             if texmacs else title)
@@ -1155,7 +1186,7 @@ def index_entry(member):
     {sep.join(links)}
 
 {abstract}    <with|font-size|0.84|par-mode|left|{when}<next-line>pin:
-    <hlink|<verbatim|{pin[:32]}...>|ocfl/{obj_id}/{ver}/inventory.json>>
+    <hlink|<verbatim|{pin[:32]}...>|ocfl/{obj_id}/{pin_ver}/inventory.json>>
   </notes-news-item>"""
 
 
@@ -1271,6 +1302,10 @@ def verify_errors():
     found = {obj_id: (d, inv) for obj_id, d, inv in objects()}
     for obj_id in set(listed) ^ set(found):
         errors.append(f"opensheaf.json and the storage root disagree about {obj_id}")
+    for obj_id, (d, inv) in found.items():
+        if obj_id in listed and listed[obj_id].get("mirrorOf") != mirror_of(d, inv):
+            errors.append(f"opensheaf.json: {obj_id} " + (f"is a mirror of {mirror_of(d, inv)}, without mirrorOf"
+                          if mirror_of(d, inv) else "is listed as a mirror, and is not one"))
 
     for obj_id, (d, inv) in found.items():
         where = f"ocfl/{obj_id}"
@@ -1310,10 +1345,8 @@ def verify_errors():
             check_schema(f"{where}/{ver}/{OBJ}", obj, "opensheaf-object-0.1.schema.json")
             if obj.get("objectId") != obj_id:
                 errors.append(f"{where}: {ver} object.json names another object")
-            elif obj.get("archiveId") != disc.get("archiveId") and \
-                    read_json(d, inv, OBJ).get("archiveId") == disc.get("archiveId"):
+            elif obj.get("archiveId") != (mirror_of(d, inv) or disc.get("archiveId")):
                 errors.append(f"{where}: {ver} object.json names another archive")
-            # an object whose head names another archive is a mirror (section 10.4)
             if str(obj.get("documentVersion")) != dc.get("version"):
                 errors.append(f"{where}: {ver} datacite.json and object.json disagree on the version")
             if obj.get("status") == "withdrawn" and date_of(dc, "Withdrawn") != obj.get("withdrawal", {}).get("date"):
@@ -1342,14 +1375,42 @@ def verify_errors():
             else:
                 mem = read_json(d, inv, "members.json", ver)
                 check_schema(f"{where}/{ver}/members.json", mem, "opensheaf-collection-0.1.schema.json")
+                kind = mem.get("type")
+                if kind not in ("archive", "selection"):
+                    errors.append(f"{where}: {ver} members.json has no valid type (archive or selection)")
                 for m in mem.get("members", []):
-                    if m.get("archive") != disc.get("archiveId"):
+                    who = f"{where}: {ver} member {m.get('id')}"
+                    if kind == "archive" and (not m.get("version") or not m.get("inventorySha512") or "revisions" in m):
+                        errors.append(f"{who}: a member of an archive collection needs version and inventorySha512, "
+                                      "and no revisions")
+                    if kind == "selection":
+                        revs = m.get("revisions")
+                        if any(k in m for k in ("version", "inventorySha512", "follow")):
+                            errors.append(f"{who}: a member of a selection has no version, inventorySha512 or follow")
+                        if not isinstance(revs, list) or not revs or any(
+                                not all(r.get(k) for k in ("documentVersion", "version", "inventorySha512")) for r in revs):
+                            errors.append(f"{who}: a member of a selection needs revisions, each with documentVersion, "
+                                          "version and inventorySha512")
+                        elif len({r["documentVersion"] for r in revs}) != len(revs):
+                            errors.append(f"{who}: a document version is vetted twice")
+                for m in mem.get("members", []):
+                    if m.get("archive") != disc.get("archiveId") or mirror_of(d, inv):
                         continue  # members of other archives: resolved as in section 6.4
-                    md = OCFL / m["id"] / m["version"] / "inventory.json"
-                    if not md.exists():
-                        errors.append(f"{where}: {ver} member {m['id']} {m['version']}: unavailable")
-                    elif digest(md) != m["inventorySha512"]:
-                        errors.append(f"{where}: {ver} member {m['id']} {m['version']}: mismatch")
+                    for pv, pin, n in member_pins(m):
+                        md = OCFL / str(m.get("id")) / str(pv) / "inventory.json"
+                        if not md.exists():
+                            errors.append(f"{where}: {ver} member {m['id']} {pv}: unavailable")
+                        elif digest(md) != pin:
+                            errors.append(f"{where}: {ver} member {m['id']} {pv}: mismatch")
+                        elif n is not None and doc_version_of(OCFL / m["id"], load_inventory(OCFL / m["id"]), pv) != n:
+                            errors.append(f"{where}: {ver} member {m['id']} {pv} does not hold document version {n}")
+                    if kind == "selection" and (OCFL / str(m.get("id"))).exists():
+                        md = OCFL / m["id"]
+                        order = [doc_version_of(md, load_inventory(md), h) for h in history_of(md, load_inventory(md))]
+                        vetted = [r.get("documentVersion") for r in m.get("revisions") or []]
+                        pos = [order.index(x) for x in vetted if x in order]
+                        if pos != sorted(pos):
+                            errors.append(f"{where}: {ver} member {m['id']}: revisions not in the order of the history")
         errors += document_version_errors(obj_id, d, inv)
 
     # an independent OCFL validator, when installed
@@ -1372,7 +1433,7 @@ def verify_errors():
         html = (ROOT / "index.html").read_text(encoding="utf-8", errors="replace")
         mem = json.loads(read_logical(coll[0], coll[1], "members.json").read_text())
         for m in mem["members"]:
-            if m["inventorySha512"][:32] not in html:
+            if (member_pins(m)[-1][1] or "")[:32] not in html:
                 errors.append(f"index.html does not show the pin of {m['id']}")
     return errors
 
@@ -1382,9 +1443,10 @@ def verify(args):
     if getattr(args, "remote", False):
         from . import collections
         for obj_id, d, inv in objects():
-            if read_json(d, inv, OBJ)["kind"] == "collection":
+            if read_json(d, inv, OBJ)["kind"] == "collection" and not mirror_of(d, inv):
                 errors += [f"{obj_id}: {e}" for e in
                            collections.check_remote(read_json(d, inv, "members.json")["members"])]
+        errors += collections.check_accepted_copies()
     for e in errors:
         print(e)
     print("OK" if not errors else f"{len(errors)} problem(s)")

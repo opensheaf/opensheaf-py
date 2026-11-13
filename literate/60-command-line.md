@@ -390,8 +390,9 @@ osheaf accept https://example.org/papers/ kpz-uniqueness --version v2 --stage Vo
     ac.set_defaults(func=None)
 
 `mirror` is what a library does (section 10.4): it copies the whole
-object, every version, under the same identifier. Every version must then
-allow redistribution.
+object, every version, under the same identifier. Every version copied
+must then allow redistribution. Run again, it brings the mirror up to
+date with the new versions of the original.
 
 ```
 osheaf mirror https://example.org/papers/ kpz-uniqueness
@@ -406,10 +407,14 @@ osheaf mirror https://example.org/papers/ kpz-uniqueness
     mi.set_defaults(func=None)
 
 `collection` keeps curated collections, whose members may belong to any
-archive. `sync` writes a collection from a file `collection.yaml`, which
-lists its members in the curator's order; `update` moves the members that
-follow their objects to their current versions. The collection is by
-default the main collection of the archive.
+archive: archive collections, which pin whole objects, and selections,
+which pin the revisions their curator vetted (section 10.1). `sync`
+writes a collection from a file `collection.yaml`, which gives its kind
+and lists its members in the curator's order; `update` moves the members
+of an archive collection that follow their objects to their new heads,
+bringing up to date the mirrors held here, and for a selection only
+reports the versions not vetted. The collection is by default the main
+collection of the archive.
 
 ```
 osheaf collection sync --from collection.yaml
@@ -420,7 +425,8 @@ Its `--from` is not the file of options of the other commands but the
 description of the collection, read by the collections module.
 
     # in the options of osheaf collection:
-    co = sub.add_parser("collection", help="curated collections, with members from any archive")
+    co = sub.add_parser("collection", help="curated collections (archive collections or selections), "
+                        "with members from any archive")
     co.add_argument("action", choices=["sync", "update"])
     co.add_argument("collection", nargs="?", help="the collection object (default: the main collection)")
     co.add_argument("--from", dest="from_file", metavar="FILE", help="sync: collection.yaml")
@@ -431,11 +437,12 @@ description of the collection, read by the collections module.
 
 Three commands maintain the archive as a whole, and are usually run in
 this order after deposits: `collect` writes a new version of the main
-collection when a document has a new current version; `index` writes the
+collection when a document has a new object version; `index` writes the
 discovery document `opensheaf.json` and the readable index (the website,
 unless `--no-html`); `verify` makes the checks of section 14 of the
 specification, and with `--remote` also fetches the members of
-collections from their archives to check their pins.
+collections from their archives to check their pins, and the sources of
+accepted copies to compare them with the copies.
 
 ```
 osheaf collect && osheaf index && osheaf verify
@@ -448,7 +455,8 @@ osheaf collect && osheaf index && osheaf verify
     i.set_defaults(func=core.index)
     v = sub.add_parser("verify", help="check the archive")
     v.add_argument("--remote", action="store_true",
-                   help="also fetch the members of collections from their archives and check their pins")
+                   help="also fetch the members of collections from their archives and check their pins, "
+                   "and compare accepted copies with their sources")
     v.set_defaults(func=core.verify)
 
 ### Services: `zenodo` and `arxiv`

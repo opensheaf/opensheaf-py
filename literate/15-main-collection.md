@@ -4,9 +4,12 @@ The main collection
 The documents of an archive are listed by its *main collection*: an object
 of kind `collection` whose `members.json` (section 10) names each document
 and pins it, by an object version and the SHA-512 digest of that version's
-inventory. The collection is itself versioned, like any object: each change
-of the list is a new version, so that the list of an archive at any past
-moment can be recovered and checked. The index and the website are made
+inventory. It is an *archive collection* (section 10.1): it keeps the
+archive's documents whole, every version, without judging them, so each
+member pins the head of its object, and follows it as it grows. The
+collection is itself versioned, like any object: each change of the list
+is a new version, so that the list of an archive at any past moment can be
+recovered and checked. The index and the website are made
 from it ([next chapter](16-index.md)), and other archives' collections can
 include it.
 
@@ -20,6 +23,9 @@ with members of other archives, are the subject of
     <<the order of the main collection>>
 
 
+    <<the pins of a member and the version presented>>
+
+
     <<order the members of a collection by date>>
 
 
@@ -28,13 +34,26 @@ with members of other archives, are the subject of
 The documents and their current versions
 ----------------------------------------
 
+A [mirror](21-mirrors.md) is a copy, in this storage root, of another
+archive's object, and stays that archive's object: its `object.json` files
+keep naming the original archive (section 10.4). That is how the tools
+recognise it, from the head: the function returns the identifier of the
+original archive, which the [discovery document](16-index.md) writes as
+`mirrorOf`, or `None` for an object of this archive.
+
+    # in the documents of the archive with their current versions:
+    def mirror_of(obj_dir, inv):
+        """The archive whose object this one mirrors (section 10.4), or None."""
+        aid = read_json(obj_dir, inv, OBJ).get("archiveId")
+        return aid if aid != ARCHIVE["archiveId"] else None
+
 The documents of the archive are the objects of kind `document` that
-belong to it. Collections are left out, and so are objects whose head names
-another archive: [mirrors](21-mirrors.md) of other archives' objects,
-which share the storage root but are not the archive's own. For each
-document, the function returns the object version holding its
+belong to it. Collections are left out, and so are mirrors, which share
+the storage root but are not the archive's own. For each document, the
+function returns the object version holding its
 [current version](11-versions.md), with that version's two descriptions:
-what readers are shown. The [website](30-website.md) uses it too.
+what readers are shown, and what the citation cached in the main
+collection is made from.
 
     # in the documents of the archive with their current versions:
     def documents():
@@ -42,8 +61,7 @@ what readers are shown. The [website](30-website.md) uses it too.
         datacite.json) of every document."""
         out = []
         for obj_id, d, inv in objects():
-            head = read_json(d, inv, OBJ)
-            if head["kind"] != "document" or head.get("archiveId") != ARCHIVE["archiveId"]:
+            if read_json(d, inv, OBJ)["kind"] != "document" or mirror_of(d, inv):
                 continue  # collections, and mirrors of other archives' objects
             cur = current_version(d, inv)
             out.append((obj_id, d, inv, cur, read_json(d, inv, OBJ, cur), read_json(d, inv, "datacite.json", cur)))
@@ -59,6 +77,40 @@ collection is newest first, by date, `issued-desc`.
 
     # in the order of the main collection:
     ORDER = "issued-desc"
+
+The pins
+--------
+
+A member pins one object version in an archive collection, and one or more
+in a selection, one per revision it vetted (section 10.2). Whatever reads
+the pins of a member (verification, the website, the index) goes through
+this function, which gives each as a triple: the object version, the digest
+of its inventory and, for a revision, the document version it is stated to
+hold.
+
+    # in the pins of a member and the version presented:
+    def member_pins(m):
+        """[(object version, inventory digest, document version or None)] of a
+        member: its version in an archive collection, each revision in a
+        selection (section 10.2)."""
+        if "revisions" in m:
+            return [(r.get("version"), r.get("inventorySha512"), r.get("documentVersion"))
+                    for r in m["revisions"]]
+        return [(m.get("version"), m.get("inventorySha512"), None)]
+
+Presentations show one version of each member. For a member of an archive
+collection it is the current version, read from the history of the pinned
+version (section 10.2), which is the head when the collection was made; for
+a member of a selection it is the last revision of its set, the one
+presented as the selection's.
+
+    # in the pins of a member and the version presented:
+    def presented_version(m, obj_dir, inv):
+        """The object version presentations show for member M of an object held
+        in OBJ_DIR (section 10.2)."""
+        if m.get("revisions"):
+            return m["revisions"][-1]["version"]
+        return current_version(obj_dir, inv, m["version"])
 
 Section 10.2 defines the rule so that every tool gets the same list: by the
 `Issued` date (the first appearance of the work), then the `Available`
@@ -84,9 +136,9 @@ Writing a new version
 
     # in write a new version of the main collection:
     def collect(args):
-        """A new version of the main collection when a document has a new current
-        version or a new description of it; members pin the object version
-        holding the current version."""
+        """A new version of the main collection when a document has a new object
+        version; members pin the head of their object and follow it (an archive
+        collection, section 10.2)."""
         <<leave a curated main collection to its curator>>
         <<pin the current version of every document of the archive>>
         <<stop if the main collection would not change>>
@@ -103,23 +155,19 @@ their order are decisions of its curator, made with `osheaf collection`.
         print(f"{coll_id} is curated (order manual): use osheaf collection sync|update")
         return
 
-Each document becomes a member pinned at the object version holding its
-current version, with `follow: latest`, so that collections of other
-archives that include it know that it moves forward. Each member carries a
+Each document becomes a member pinned at the head of its object, with
+`follow: latest`: the main collection is an archive collection, which
+follows its members whatever their new heads hold (a new document version,
+a description, a notice, a withdrawal; section 10.2). Since the inventory
+of the head lists every earlier version, the pin fixes the whole object as
+it stands. The citation is that of the current version, which is what
+presentations show. Each member carries a
 cached citation (`cite`: title, authors, year, `Issued` date), so that the
 collection stays readable, and can be ordered, without resolving its
 members, also if one becomes unavailable (section 10.2). The `Available`
 date (or `Created`, for a version not public at the time) is needed only to
 order the members, and is removed afterwards: it describes a version, not
 the work, and would make the citation change at every new version.
-
-The specification was amended since this code was written: a collection
-is now an archive collection or a selection, and `members.json` says which
-(`type`); the main collection is an archive collection, whose members pin
-the *head* of each object and follow the head (section 10.2), whatever it
-holds. These tools write no `type`, and pin the object version holding the
-current version, which differs from the head only after an earlier version
-was deposited later, described or completed.
 
     # in pin the current version of every document of the archive:
     members = []
@@ -130,7 +178,7 @@ was deposited later, described or completed.
         if date_of(dc, "Issued"):
             cite["issued"] = date_of(dc, "Issued")
         m = {"kind": "document", "archive": ARCHIVE["archiveId"], "archiveUrl": ARCHIVE["baseUrl"],
-             "id": obj_id, "version": cur, "inventorySha512": digest(d / cur / "inventory.json"),
+             "id": obj_id, "version": inv["head"], "inventorySha512": digest(d / inv["head"] / "inventory.json"),
              "follow": "latest", "cite": cite}
         # the Available date only orders, it is not part of the cached citation
         m["cite"]["available"] = date_of(dc, "Available", "Created")
@@ -140,8 +188,9 @@ was deposited later, described or completed.
         m["cite"].pop("available", None)
 
 The collection changes only when its members do: a new document, a new
-version, a description-only version (which changes the pin), a different
-order. Running `osheaf collect` with nothing new writes nothing, which
+object version of one (which changes the pin), a different order. A
+collection written before `members.json` had a `type` also changes, once,
+to gain it. Running `osheaf collect` with nothing new writes nothing, which
 keeps the history of the collection meaningful. The document version of a
 collection counts the changes of its member list (section 7.4), and the
 `Issued` date of its first version is kept.
@@ -152,14 +201,15 @@ collection counts the changes of its member list (section 7.4), and the
     version, issued = 1, TODAY
     if inv:
         old = read_json(coll_dir, inv, "members.json")
-        if old["members"] == members:
+        if old["members"] == members and old.get("type") == "archive":
             print(f"{coll_id}: unchanged ({inv['head']})")
             return
         version = read_json(coll_dir, inv, OBJ)["documentVersion"] + 1
         issued = date_of(read_json(coll_dir, inv, "datacite.json"), "Issued") or TODAY
 
-The new version holds the three files of a collection (section 7.4). Its
-`datacite.json` describes the archive as a whole: titled with the archive's
+The new version holds the three files of a collection (section 7.4).
+`members.json` states that the collection is an archive collection
+(section 10.2). Its `datacite.json` describes the archive as a whole: titled with the archive's
 name, created by its curator, of type `Collection`, available today, under
 CC0 like every member list (section 10.6). Its `object.json` has only the
 fields common to all objects.
@@ -167,8 +217,8 @@ fields common to all objects.
     # in write the files of the main collection's new version:
     cur = ARCHIVE["curator"]
     tmp = Path(tempfile.mkdtemp())
-    write_json(tmp / "members.json", {"format": "opensheaf-collection/0.1", "order": ORDER,
-                                      "members": members})
+    write_json(tmp / "members.json", {"format": "opensheaf-collection/0.1", "type": "archive",
+                                      "order": ORDER, "members": members})
     write_json(tmp / "datacite.json", {
         "titles": [{"title": ARCHIVE["name"]}],
         "creators": [{"name": cur["name"], "nameType": "Personal", "givenName": cur["givenName"],

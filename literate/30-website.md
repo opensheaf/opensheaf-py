@@ -19,10 +19,14 @@ support it: each version to its inventory, each member to its pin.
 
 The members shown are those of the main collection: the archive's own
 documents, built by the core, or a curated list with members of other
-archives ([collections](20-collections.md)). A member of this archive
-gets a landing page; a member of another archive gets an entry on the
-home page only, linking to its own archive, which has its own landing
-pages.
+archives ([collections](20-collections.md)), an archive collection or a
+selection. A member of this archive gets a landing page; a member of
+another archive gets an entry on the home page only, linking to its own
+archive, which has its own landing pages. Each member is presented in
+one version (section 10.2): a member of an archive collection in its
+current version, read from the history of the pinned head; a member of a
+selection in the last revision of its set, with the list of the revisions
+vetted.
 
 The module
 ----------
@@ -212,14 +216,18 @@ the name its source gave it.
 
 ### The landing page of a document
 
-A landing page is at `paper/<id>/` and presents the document version
-pinned by the collection, which for the main collection is the current
-version (section 7.3). Two things are read from the head instead, which
+A landing page is at `paper/<id>/` and presents the version the
+collection presents (`presented_version`, in the chapter on the
+[main collection](15-main-collection.md)): the current version, as of the
+pinned head, for an archive collection (section 7.3), or the last
+revision for a selection, whose vetted document versions are marked in
+the list of versions. Two things are read from the head instead, which
 may be a later object version (a description-only version, a notice, a
 withdrawal): the notices and the status. Notices about any version are
 kept in every later object version, and the status belongs to the
 object, whatever version is shown. The versions are listed from the last
-of the history to the first.
+of the history to the first. The pin shown is the member's, or for a
+selection that of the revision presented.
 
 Links in the page are relative to the root of the archive (`../../`), so
 that the website also works from a copy on the local disk or at another
@@ -227,15 +235,18 @@ address; only the tags for search engines, which must be absolute, use
 the base URL.
 
     # in write the landing page of a document of this archive:
-    obj_id, cur = m["id"], m["version"]
+    obj_id = m["id"]
     d = P.OCFL / obj_id
     inv = P.load_inventory(d)
+    cur = P.presented_version(m, d, inv)
+    pin_ver, pin = P.member_pins(m)[-1][:2]
+    vetted = {r["documentVersion"] for r in m["revisions"]} if m.get("revisions") else None
     obj = P.read_json(d, inv, P.OBJ, cur)
     dc = P.read_json(d, inv, "datacite.json", cur)
     head = P.read_json(d, inv, P.OBJ)
     notices = head.get("notices", [])
     root = "../../"
-    versions = "\n".join(version_block(obj_id, d, inv, v, cur, notices, root)
+    versions = "\n".join(version_block(obj_id, d, inv, v, obj["documentVersion"], notices, root, vetted)
                          for v in reversed(P.history_of(d, inv)))
     issued = P.date_of(dc, "Issued")
     <<the withdrawal notice of a landing page>>
@@ -247,7 +258,7 @@ the base URL.
         "issued": esc(fmt_date(issued)), "abstract": abstract_html(dc),
         "withdrawn": withdrawn, "versions": versions, "licence": licence,
         "pdf": esc(pdf_address(root, obj_id, inv, cur, obj) or f"#v{obj['documentVersion']}"),
-        "cite": esc(cite), "pin": m["inventorySha512"], "pin_url": f"{root}ocfl/{obj_id}/{cur}/inventory.json",
+        "cite": esc(cite), "pin": pin, "pin_url": f"{root}ocfl/{obj_id}/{pin_ver}/inventory.json",
     })
     out = root_out / "paper" / obj_id / "index.html"
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -284,10 +295,14 @@ page otherwise.
 Every document version gets an item in the list of versions, as
 appendix C asks: its number and the labels services gave it, its stage,
 its date, its change note, its files, its DOI and the notices about it.
-The current version is marked, and has an anchor `#vN` like the others.
+The version presented, the document version `shown`, is marked, and has
+an anchor `#vN` like the others. For a member of a selection, `vetted` is
+the set of the document versions vetted, each marked as such; the version
+presented is then the selection's, not necessarily the document's
+current version, and is not called current.
 
     # in a version on a landing page:
-    def version_block(obj_id, d, inv, ver, current, notices, root):
+    def version_block(obj_id, d, inv, ver, shown, notices, root, vetted=None):
         """One version of a document: its number, labels, stage, date, changes,
         files, DOI and the notices about it."""
         obj = P.read_json(d, inv, P.OBJ, ver)
@@ -295,7 +310,7 @@ The current version is marked, and has an anchor `#vN` like the others.
         n = obj["documentVersion"]
         <<the heading and date of a version>>
         <<the links of a version>>
-        out = [f'<li class="version{" is-current" if ver == current else ""}" id="v{n}">',
+        out = [f'<li class="version{" is-current" if n == shown else ""}" id="v{n}">',
                f'<div class="version-head">{head}</div>']
         if when:
             out.append(f'<div class="version-date">{esc(when)}</div>')
@@ -319,7 +334,9 @@ deposited later) shows its `Created` date and says so.
     head = f"Version {n}" + (f" ({esc(', '.join(labels))})" if labels else "")
     if obj.get("stage"):
         head += f' <span class="stage">{esc(obj["stage"]["value"])}</span>'
-    if ver == current:
+    if vetted is not None and n in vetted:
+        head += ' <span class="current">vetted</span>'
+    elif vetted is None and n == shown:
         head += ' <span class="current">current</span>'
     when = ""
     if P.date_of(dc, "Available"):
@@ -441,8 +458,8 @@ which JSON reads as the same string.
 ### The home page
 
 Each document of this archive has an entry on the home page: its title,
-linked to its landing page, its authors, its year and version, a link
-to the PDF, and its pin. The pin is shown on purpose: the home page is
+linked to its landing page, its authors, its year and version (the
+versions vetted, for a selection), a link to the PDF, and its pin. The pin is shown on purpose: the home page is
 the presentation of a collection version, and the beginning of each
 member's digest lets a reader compare it with `members.json`. The
 verification of the archive (in the chapters on the core) checks that
@@ -456,17 +473,28 @@ the home page shows the pin of every member. The abstract is folded in a
         f'<li class="paper{" withdrawn" if withdrawn else ""}">',
         f'<a class="paper-title" href="paper/{obj_id}/">{esc(dc["titles"][0]["title"])}</a>',
         f'<div class="paper-authors">{esc(authors(dc))}</div>',
-        f'<div class="paper-meta">{esc((issued or "")[:4])} · version {obj["documentVersion"]}'
+        f'<div class="paper-meta">{esc((issued or "")[:4])} · {versions_line(m, obj)}'
         + (f' · <a href="{esc(pdf)}">PDF</a>' if pdf else "")
-        + f' · <span class="pin" title="{m["inventorySha512"]}">'
-        f'pin {m["inventorySha512"][:32]}…</span></div>',
+        + f' · <span class="pin" title="{pin}">pin {pin[:32]}…</span></div>',
         f"<details><summary>Abstract</summary>{abstract}</details>" if abstract else "",
         "</li>"]))
+
+The version line of an entry names the version presented or, for a member
+of a selection, the versions vetted, the last of which is presented.
+
+    # in dates, authors and file links on the website:
+    def versions_line(m, obj):
+        """'version 3', or for a member of a selection 'vetted: versions 2, 3'."""
+        if m.get("revisions"):
+            ns = [str(r["documentVersion"]) for r in m["revisions"]]
+            return f"vetted: version{'s' if len(ns) > 1 else ''} {', '.join(ns)}"
+        return f"version {obj['documentVersion']}"
 
 The lead paragraph of the home page says what the archive is. An
 archive of one's own documents gets a fixed text; a curated collection
 (order `manual`) gets its description, and a sentence saying that its
-members are kept in their own archives.
+members are kept in their own archives, and, for a selection, that each
+is shown in the version its curator vetted.
 
     # in the lead paragraph of the home page:
     lead = ('Papers with their sources, every version, fixed by digests. An '
@@ -474,11 +502,13 @@ members are kept in their own archives.
             '<a href="opensheaf.json">opensheaf.json</a>.')
     cdir = P.OCFL / P.ARCHIVE["mainCollection"]
     cinv = P.load_inventory(cdir)
-    if cinv and P.read_json(cdir, cinv, "members.json").get("order") == "manual":
+    cmem = P.read_json(cdir, cinv, "members.json") if cinv else {}
+    if cmem.get("order") == "manual":
         desc = next((x["description"] for x in P.read_json(cdir, cinv, "datacite.json").get("descriptions", [])), "")
         lead = (esc(desc) + ' A collection in the <a href="https://opensheaf.org">OpenSheaf</a> format: each '
-                'member is kept in its own archive and pinned by a digest; programs start from '
-                '<a href="opensheaf.json">opensheaf.json</a>.')
+                'member is kept in its own archive and pinned by a digest'
+                + (', in the versions its curator vetted' if cmem.get("type") == "selection" else '')
+                + '; programs start from <a href="opensheaf.json">opensheaf.json</a>.')
 
 The home page is at the root of the archive, next to `opensheaf.json`,
 so its links need no prefix. The empty file `.nojekyll` tells GitHub
@@ -540,8 +570,11 @@ answer, the entry says so, and shows the copy or the cached citation.
         from . import collections
         cite = m.get("cite", {})
         title, by, year = cite.get("title", m["id"]), ", ".join(cite.get("creators", [])), cite.get("year", "")
-        links, abstract, archive_name = [], "", m.get("archiveUrl", "")
-        here = P.ARCHIVE["baseUrl"] in m.get("mirrors", []) and (P.OCFL / m["id"]).exists()
+        links, abstract, archive_name, status = [], "", m.get("archiveUrl", ""), {}
+        pin = P.member_pins(m)[-1][1]
+        minv = P.load_inventory(P.OCFL / m["id"])
+        here = P.ARCHIVE["baseUrl"] in m.get("mirrors", []) and minv is not None \
+            and all(v in minv["versions"] for v, _, _ in P.member_pins(m))
         if here:
             <<read a mirrored member from the copy in this archive>>
         try:
@@ -552,53 +585,69 @@ answer, the entry says so, and shows the copy or the cached citation.
                          + "</span>")
         <<the home-page entry of a member of another archive>>
 
-The mirror is read at the pinned version. The code assumes that the
-mirror holds it: after `osheaf collection update` has moved a member to
-a version not yet mirrored, `osheaf mirror` must be run again before the
-pages are written.
+The mirror is read in the version presented, if it holds every version
+the member pins: `osheaf collection update` brings mirrors up to date
+before moving a member to a new head, but a mirror whose update was
+refused, or one made by hand and left behind, may not. Without the
+pinned versions, the copy is not used, and the member is read from its
+own archive as if there were no mirror.
 
     # in read a mirrored member from the copy in this archive:
     # a mirror in this archive: its copy is read and linked locally
-    inv = P.load_inventory(P.OCFL / m["id"])
-    dc = P.read_json(P.OCFL / m["id"], inv, "datacite.json", m["version"])
+    shown = P.presented_version(m, P.OCFL / m["id"], minv)
+    dc = P.read_json(P.OCFL / m["id"], minv, "datacite.json", shown)
     title, by, abstract = dc["titles"][0]["title"], authors(dc), abstract_html(dc)
-    pdf = pdf_address("", m["id"], inv, m["version"], P.read_json(P.OCFL / m["id"], inv, P.OBJ, m["version"]))
+    pdf = pdf_address("", m["id"], minv, shown, P.read_json(P.OCFL / m["id"], minv, P.OBJ, shown))
+    status = P.read_json(P.OCFL / m["id"], minv, P.OBJ)
     if pdf:
         links.append(f'<a href="{esc(pdf)}">PDF (mirrored here)</a>')
 
 The member's archive is read with the `Remote` of the collections
-module, at the pinned version. Any failure, from the network to a
-missing file, falls back on what is already known.
+module, in the version presented: the last revision of a selection's
+member, or the current version as of the pinned head, read from the
+member's history. Any failure, from the network to a missing file, falls
+back on what is already known.
 
     # in read a member from its own archive:
     r = collections.Remote(m["archiveUrl"])
     archive_name = r.disc.get("name", archive_name)
     rinv = r.inventory(m["id"])
-    rdc = json.loads(r.file(m["id"], rinv, m["version"], "datacite.json"))
+    shown = m["revisions"][-1]["version"] if m.get("revisions") else r.current(m["id"], m["version"])
+    rdc = json.loads(r.file(m["id"], rinv, shown, "datacite.json"))
+    status = json.loads(r.file(m["id"], rinv, rinv["head"], P.OBJ))
     if not here:
         title, by, abstract = rdc["titles"][0]["title"], authors(rdc), abstract_html(rdc)
-        lp = P.pdf_of(json.loads(r.file(m["id"], rinv, m["version"], P.OBJ)))
-        cp = P.content_path(rinv, m["version"], lp) if lp else None
+        lp = P.pdf_of(json.loads(r.file(m["id"], rinv, shown, P.OBJ)))
+        cp = P.content_path(rinv, shown, lp) if lp else None
         if cp:
             links.append(f'<a href="{esc(r.root + m["id"] + "/" + cp)}">PDF</a>')
     if rdc.get("url"):
         links.insert(0, f'<a href="{esc(rdc["url"])}">landing page</a>')
 
 The entry has the same form as that of a document of this archive, with
-the archive named and linked, and the pin; the title is not a link,
-since the landing page, if any, is in the other archive.
+the archive named and linked, the versions vetted for a member of a
+selection, and the pin (of the last revision, for a selection); the title
+is not a link, since the landing page, if any, is in the other archive.
+A member withdrawn in its archive stays, and its entry shows the
+withdrawal (section 10.2), read from the head of the object in its
+archive or in the mirror here: the status belongs to the object
+(section 11.1). It is said to come from the member's archive, since for a
+selection it is not part of what was vetted.
 
     # in the home-page entry of a member of another archive:
+    withdrawn = ""
+    if status.get("status") == "withdrawn":
+        w = status.get("withdrawal", {})
+        withdrawn = (f'<div class="withdrawn"><strong>Withdrawn in its archive ({esc(fmt_date(w.get("date")))}):'
+                     f'</strong> {esc(w.get("reason", {}).get("text", ""))}</div>')
     return "\n".join([
-        '<li class="paper member">',
+        f'<li class="paper member{" withdrawn" if withdrawn else ""}">',
         f'<span class="paper-title">{esc(title)}</span>',
         f'<div class="paper-authors">{esc(by)}</div>',
         f'<div class="paper-meta">{esc(str(year))} · in <a href="{esc(m["archiveUrl"])}">{esc(archive_name)}</a>'
+        + (f' · {versions_line(m, {})}' if m.get("revisions") else "")
         + (" · " + " · ".join(links) if links else "")
-        + f' · <span class="pin" title="{m["inventorySha512"]}">pin {m["inventorySha512"][:32]}…</span></div>',
+        + f' · <span class="pin" title="{pin}">pin {pin[:32]}…</span></div>',
+        withdrawn,
         f"<details><summary>Abstract</summary>{abstract}</details>" if abstract else "",
         "</li>"])
-
-The specification now also has selections, whose members pin revisions
-rather than an object version (section 10.2); the website, like the
-rest of these tools, knows only members with a single pinned version.

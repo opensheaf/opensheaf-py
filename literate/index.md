@@ -92,19 +92,10 @@ What writing it down found
 --------------------------
 
 Explaining a program to a reader is also reading it carefully. Writing
-these chapters, with the code left exactly as it was, brought up the
-following, which the chapters mention where they occur and which are to be
-dealt with in the code:
-
-- The tools lag the specification as amended on 13 November 2026: the
-  member list has no `type`, selections and their `revisions` are not
-  written, the discovery document has no `mirrorOf`, the main collection
-  pins the object version holding the current document version instead of
-  the head, `collection update` keeps the old pin of a withdrawn member
-  instead of following the head, and `verify` knows none of this.
-- `collection update` does not copy new versions into a mirror held here,
-  and the website then fails to render the member until `osheaf mirror` is
-  run again.
-- `check_remote` does not try the mirrors listed in an archive's discovery
-  document.
-- `is_mirror` is unused.
+these chapters, with the code left exactly as it was, brought up a lag of
+the tools behind the specification as amended on 13 November 2026
+(collections of two kinds, selections, `mirrorOf`, the main collection
+pinning heads), a mirror that `collection update` did not refresh, and a
+resolution that did not try the mirrors of an archive's discovery
+document. These have since been dealt with, in the chapters where they
+occur; nothing found remains open.

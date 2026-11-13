@@ -34,12 +34,30 @@ it a copy, rather than a new document, is in its first document version:
   archive as publisher, the relations of the source, and one more
   relation, `IsIdenticalTo` the source version.
 
-The specification places accepted copies within *selections*, the kind
-of collection that vets particular revisions (section 10.1): the
-selection lists the accepted copy as a member of its own archive, or the
-original revision with the copy among its mirrors. These tools do not
-yet write selections; an accepted copy is listed in a collection as a
-member of this archive (`archive: .` in `collection.yaml`).
+Accepted copies belong to *selections*, the kind of collection that vets
+particular revisions (section 10.1): the selection lists the accepted
+copy as a member of its own archive, with the copy's first document
+version as its revision. A journal's issue is then a selection of its
+own documents, written with [`osheaf collection sync`](20-collections.md)
+from a file such as:
+
+```yaml
+id: issue-2026-1
+type: selection
+title: Volume 1, issue 1
+members:
+  - {archive: ., id: network-discrimination, revisions: [1]}
+  - {archive: ., id: stabiliser-codes, revisions: [1]}
+```
+
+When the editors accept a correction, a new document version of the
+copy, the issue changes only when they add it to the revision set
+(`revisions: [1, 2]`) and synchronise again: a new version of the issue,
+recorded as their act. The specification also allows the other form, the
+original revision set with the copy's archive among the member's
+`mirrors`; these tools do not write it, since a reader resolving the
+original pin at that archive would find there the copy, a different
+object with its own inventory, and not the pinned version.
 
 The module
 ----------
@@ -109,7 +127,9 @@ files, describes the copy, and deposits it as a new object version.
         <<deposit the accepted copy>>
 
 The version is given as an object version (`--version v2`), which is
-what a pin fixes, and must exist in the source. As for mirrors, copying
+what a pin fixes, and must exist in the source. It must be a version of a
+document: section 10.5 defines accepted copies of revisions of
+documents, and a collection's members would not be copied with it. As for mirrors, copying
 is redistribution; but only the one version copied needs a licence that
 allows it, since the other versions stay where they are. When the
 licence is not open, the curator states that copying is allowed with
@@ -124,6 +144,8 @@ licence is not open, the curator states that copying is allowed with
     if ver not in inv["versions"]:
         sys.exit(f"{args.id} has no object version {ver} (versions: {', '.join(inv['versions'])})")
     src_obj = json.loads(r.file(args.id, inv, ver, P.OBJ))
+    if src_obj.get("kind") != "document":
+        sys.exit(f"{args.id} is a {src_obj.get('kind')}: only a revision of a document is accepted (section 10.5)")
     src_dc = json.loads(r.file(args.id, inv, ver, "datacite.json"))
     if not is_open(src_dc.get("rightsList")) and not args.licence_checked:
         sys.exit(f"{args.id} {ver} is not under an open licence "

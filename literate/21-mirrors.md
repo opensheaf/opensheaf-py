@@ -19,10 +19,12 @@ original identifier, and its `object.json` files keep naming the
 original archive: nothing in it is rewritten, so every inventory and
 every digest stays valid, and a pin made on the original is confirmed by
 the copy. This is how the rest of the tools recognise a mirror: an object
-of the storage root whose head names another archive. The main
-collection leaves such objects out, a collection lists the copy in a
-member's `mirrors`, and the verification of a collection falls back on
-the copy when the original archive fails.
+of the storage root whose head names another archive (`mirror_of`, in the
+chapter on the [main collection](15-main-collection.md)). The discovery
+document lists it with `mirrorOf`, the identifier of that archive
+(section 6.1), the main collection leaves it out, a collection lists the
+copy in a member's `mirrors`, and the verification of a collection falls
+back on the copy when the original archive fails.
 
 Since OCFL objects only grow, bringing a mirror up to date means copying
 the versions it does not have yet, and nothing else; a mirror is never
@@ -30,11 +32,6 @@ changed otherwise. Two rules limit what may be mirrored. The identifier
 must be free: an object of this archive with the same identifier rules
 the mirror out (identifiers are never reused, section 6.3). And copying
 is redistribution, which the licence of every version copied must allow.
-
-The specification now also asks the discovery document to list a mirror
-with `mirrorOf`, the identifier of the original archive (section 6.1).
-The discovery document written by these tools (in the chapters on the
-core) does not do so yet.
 
 The module
 ----------
@@ -47,9 +44,6 @@ The module
 
 
     <<mirroring an object of another archive>>
-
-
-    <<whether an object is a mirror>>
 
 
     <<the command mirror>>
@@ -66,13 +60,14 @@ mirrors read other archives exactly as collections do.
         osheaf mirror ARCHIVE-URL ID [--licence-checked]
 
     A mirror is allowed only if the licence of the copied content allows
-    redistribution: the tool checks the rightsList of every version and refuses
-    unless each is an open licence (CC BY, CC BY-SA, CC0, GPL), or the curator
-    states with --licence-checked that redistribution is allowed (for instance by
-    the authors' permission). A reference (a member pinned in a collection,
-    without a copy) needs no permission. Every copied file is checked against the
-    digest of the source's inventory; a mirror that exists already gets the new
-    versions only.
+    redistribution: the tool checks the rightsList of every version it copies and
+    refuses unless each is an open licence (CC BY, CC BY-SA, CC0, GPL), or the
+    curator states with --licence-checked that redistribution is allowed (for
+    instance by the authors' permission). A reference (a member pinned in a
+    collection, without a copy) needs no permission. Every copied file is checked
+    against the digest of the source's inventory; a mirror that exists already
+    gets the new versions only, which is how it is brought up to date (running the
+    command again, or `osheaf collection update` for the members of a collection).
     """
 
     import hashlib
@@ -148,15 +143,20 @@ then applies the two rules above before copying anything.
         print(f"{obj_id}: mirrored from {r.archive_id} ({len(new)} new version(s), head {inv['head']})")
         return r
 
-The licence is checked on every version of the original, also on the
-versions already mirrored: the whole object is what the mirror
-distributes. The message names the closed versions with their licence,
-and suggests the alternatives: a reference, which needs no permission,
-or `--licence-checked`.
+The licence is checked on every version about to be copied. The versions
+already mirrored were checked, or vouched for with `--licence-checked`,
+when they were copied, and cannot have changed since, since an object
+version is fixed: checking only the new ones lets a mirror made with
+`--licence-checked` be brought up to date with new, openly licensed
+versions without the curator vouching again for the old ones. The message
+names the closed versions with their licence, and suggests the
+alternatives: a reference, which needs no permission, or
+`--licence-checked`.
 
     # in refuse to mirror versions without an open licence:
     closed = []
-    for ver in inv["versions"]:
+    here = P.load_inventory(P.OCFL / obj_id) or {"versions": {}}
+    for ver in [v for v in inv["versions"] if v not in here["versions"]]:
         dc = json.loads(r.file(obj_id, inv, ver, "datacite.json"))
         if not is_open(dc.get("rightsList")):
             closed.append(f"{ver} ({(dc.get('rightsList') or [{}])[0].get('rights', 'no licence')})")
@@ -245,24 +245,18 @@ operations the object is briefly absent, but never incomplete.
         shutil.rmtree(d)
     shutil.move(str(stage), str(d))
 
-Recognising a mirror
---------------------
-
-An object is a mirror when its head names another archive. The test is
-kept here for other modules; at present nothing calls it, and the
-chapters on the core make the same test inline.
-
-    # in whether an object is a mirror:
-    def is_mirror(obj_dir, inv):
-        return P.read_json(obj_dir, inv, P.OBJ).get("archiveId") != P.ARCHIVE["archiveId"]
-
 The command
 -----------
 
 `osheaf mirror ARCHIVE-URL ID [--licence-checked]` creates the storage
-root if needed and mirrors the object. A mirror can also be made while
-composing a collection, with `mirror: yes` in the member's entry of
-`collection.yaml`.
+root if needed and mirrors the object, or brings an existing mirror up to
+date. A mirror can also be made while composing a collection, with
+`mirror: yes` in the member's entry of `collection.yaml`, and `osheaf
+collection update` brings up to date the mirrors of the members it
+follows ([collections](20-collections.md)). An archive does not record
+where a mirror was copied from (its `object.json` files name the original
+archive, not an address), so a mirror listed in no collection is brought
+up to date only by running `osheaf mirror` again with the address.
 
     # in the command mirror:
     def main(args):

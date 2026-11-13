@@ -6,13 +6,14 @@ versions, kept under its own identifier.
     osheaf mirror ARCHIVE-URL ID [--licence-checked]
 
 A mirror is allowed only if the licence of the copied content allows
-redistribution: the tool checks the rightsList of every version and refuses
-unless each is an open licence (CC BY, CC BY-SA, CC0, GPL), or the curator
-states with --licence-checked that redistribution is allowed (for instance by
-the authors' permission). A reference (a member pinned in a collection,
-without a copy) needs no permission. Every copied file is checked against the
-digest of the source's inventory; a mirror that exists already gets the new
-versions only.
+redistribution: the tool checks the rightsList of every version it copies and
+refuses unless each is an open licence (CC BY, CC BY-SA, CC0, GPL), or the
+curator states with --licence-checked that redistribution is allowed (for
+instance by the authors' permission). A reference (a member pinned in a
+collection, without a copy) needs no permission. Every copied file is checked
+against the digest of the source's inventory; a mirror that exists already
+gets the new versions only, which is how it is brought up to date (running the
+command again, or `osheaf collection update` for the members of a collection).
 """
 
 import hashlib
@@ -47,7 +48,8 @@ def mirror(url, obj_id, licence_checked=False):
         sys.exit(f"{obj_id} is an object of this archive")
     inv = r.inventory(obj_id)
     closed = []
-    for ver in inv["versions"]:
+    here = P.load_inventory(P.OCFL / obj_id) or {"versions": {}}
+    for ver in [v for v in inv["versions"] if v not in here["versions"]]:
         dc = json.loads(r.file(obj_id, inv, ver, "datacite.json"))
         if not is_open(dc.get("rightsList")):
             closed.append(f"{ver} ({(dc.get('rightsList') or [{}])[0].get('rights', 'no licence')})")
@@ -96,10 +98,6 @@ def mirror(url, obj_id, licence_checked=False):
         shutil.rmtree(tmp, ignore_errors=True)
     print(f"{obj_id}: mirrored from {r.archive_id} ({len(new)} new version(s), head {inv['head']})")
     return r
-
-
-def is_mirror(obj_dir, inv):
-    return P.read_json(obj_dir, inv, P.OBJ).get("archiveId") != P.ARCHIVE["archiveId"]
 
 
 def main(args):

@@ -25,20 +25,25 @@ check every entry against the storage root, and
 file, as the specification says ("as written in its checksum file").
 
 The discovery document is rewritten whole every time, from the storage
-root, so that it cannot drift. The specification now also asks that a
-mirror be listed with `mirrorOf`, the archive whose object it copies
-(sections 6.1 and 10.4); this function does not write it yet, and lists
-mirrors like the archive's own objects. The optional parts (`mirrors`,
-`tombstones`, `keys`, `feed`) are not written either.
+root, so that it cannot drift. A [mirror](21-mirrors.md) of another
+archive's object is listed like the others, with `mirrorOf`, the
+identifier of the archive whose object it copies (sections 6.1 and 10.4),
+recognised as in the [main collection](15-main-collection.md) by the
+archive its head names. The optional parts (`mirrors`, `tombstones`,
+`keys`, `feed`) are not written: an archive that has them adds them by
+other means.
 
     # in write the discovery document of the archive:
     def discovery():
         objs = []
         for obj_id, d, inv in objects():
             obj = read_json(d, inv, OBJ)
-            objs.append({"id": obj_id, "kind": obj["kind"], "head": inv["head"],
-                         "inventorySha512": (d / "inventory.json.sha512").read_text().split()[0],
-                         "status": obj["status"]})
+            entry = {"id": obj_id, "kind": obj["kind"], "head": inv["head"],
+                     "inventorySha512": (d / "inventory.json.sha512").read_text().split()[0],
+                     "status": obj["status"]}
+            if mirror_of(d, inv):
+                entry["mirrorOf"] = mirror_of(d, inv)
+            objs.append(entry)
         return {"format": "opensheaf-archive/0.1", "specification": SPEC,
                 "archiveId": ARCHIVE["archiveId"], "name": ARCHIVE["name"],
                 "contact": ARCHIVE["contact"], "storageRoot": "ocfl/", "storageLayout": LAYOUT,
@@ -257,8 +262,11 @@ element, since the HTML export does not render folds.
 
 ### An entry
 
-An entry is made from the pinned object version of the member, which is
-the current version of the document. A TeXmacs document has an HTML
+An entry is made from the version the collection presents
+(section 10.2): the current version as of the pinned head, for a member of
+an archive collection, or the last revision, for a member of a selection.
+The pin shown is that of the presented version for a selection, and the
+member's own pin (the head) for an archive collection. A TeXmacs document has an HTML
 version, and its source is linked twice: TeXmacs' HTML export rewrites
 links to `.tm` files into links to `.html` files, so the web gets a link
 to a `.texmacs` name, which the export turns back into `.tm`. A LaTeX
@@ -269,9 +277,11 @@ arXiv. The change note of the version follows the dates.
 
     # in the TeXmacs index entry of a member:
     def index_entry(member):
-        obj_id, ver = member["id"], member["version"]
+        obj_id = member["id"]
         d = OCFL / obj_id
         inv = load_inventory(d)
+        ver = presented_version(member, d, inv)
+        pin_ver, pin = member_pins(member)[-1][:2]
         obj = read_json(d, inv, OBJ, ver)
         dc = read_json(d, inv, "datacite.json", ver)
         pdf = content_path(inv, ver, pdf_of(obj)) if pdf_of(obj) else None
@@ -307,7 +317,6 @@ arXiv. The change note of the version follows the dates.
         when = (f"first issued {fmt_date(first)}; " if first else "") + version_line(obj, dc, inv, ver)
         if obj.get("changes", {}).get("text"):
             when += f"<next-line>{tm_escape(obj['changes']['text'])}"
-        pin = member["inventorySha512"]
         sep = " \\<cdot\\> "
         head = (f"<specific|texmacs|<hlink|{title}|{src}>><specific|html*|<hlink|{title}|{html}>>"
                 if texmacs else title)
@@ -319,5 +328,5 @@ arXiv. The change note of the version follows the dates.
         {sep.join(links)}
 
     {abstract}    <with|font-size|0.84|par-mode|left|{when}<next-line>pin:
-        <hlink|<verbatim|{pin[:32]}...>|ocfl/{obj_id}/{ver}/inventory.json>>
+        <hlink|<verbatim|{pin[:32]}...>|ocfl/{obj_id}/{pin_ver}/inventory.json>>
       </notes-news-item>"""

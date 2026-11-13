@@ -150,7 +150,8 @@ def build_parser():
     mi.add_argument("--licence-checked", action="store_true",
                     help="redistribution is allowed although a licence is not an open one")
     mi.set_defaults(func=None)
-    co = sub.add_parser("collection", help="curated collections, with members from any archive")
+    co = sub.add_parser("collection", help="curated collections (archive collections or selections), "
+                        "with members from any archive")
     co.add_argument("action", choices=["sync", "update"])
     co.add_argument("collection", nargs="?", help="the collection object (default: the main collection)")
     co.add_argument("--from", dest="from_file", metavar="FILE", help="sync: collection.yaml")
@@ -162,7 +163,8 @@ def build_parser():
     i.set_defaults(func=core.index)
     v = sub.add_parser("verify", help="check the archive")
     v.add_argument("--remote", action="store_true",
-                   help="also fetch the members of collections from their archives and check their pins")
+                   help="also fetch the members of collections from their archives and check their pins, "
+                   "and compare accepted copies with their sources")
     v.set_defaults(func=core.verify)
 
     from . import zenodo

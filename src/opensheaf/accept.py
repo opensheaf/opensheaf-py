@@ -42,6 +42,8 @@ def accept(args):
     if ver not in inv["versions"]:
         sys.exit(f"{args.id} has no object version {ver} (versions: {', '.join(inv['versions'])})")
     src_obj = json.loads(r.file(args.id, inv, ver, P.OBJ))
+    if src_obj.get("kind") != "document":
+        sys.exit(f"{args.id} is a {src_obj.get('kind')}: only a revision of a document is accepted (section 10.5)")
     src_dc = json.loads(r.file(args.id, inv, ver, "datacite.json"))
     if not is_open(src_dc.get("rightsList")) and not args.licence_checked:
         sys.exit(f"{args.id} {ver} is not under an open licence "

@@ -57,7 +57,15 @@ def pdf_address(root, obj_id, inv, ver, obj):
     return f"{root}ocfl/{obj_id}/{cp}" if cp else None
 
 
-def version_block(obj_id, d, inv, ver, current, notices, root):
+def versions_line(m, obj):
+    """'version 3', or for a member of a selection 'vetted: versions 2, 3'."""
+    if m.get("revisions"):
+        ns = [str(r["documentVersion"]) for r in m["revisions"]]
+        return f"vetted: version{'s' if len(ns) > 1 else ''} {', '.join(ns)}"
+    return f"version {obj['documentVersion']}"
+
+
+def version_block(obj_id, d, inv, ver, shown, notices, root, vetted=None):
     """One version of a document: its number, labels, stage, date, changes,
     files, DOI and the notices about it."""
     obj = P.read_json(d, inv, P.OBJ, ver)
@@ -68,7 +76,9 @@ def version_block(obj_id, d, inv, ver, current, notices, root):
     head = f"Version {n}" + (f" ({esc(', '.join(labels))})" if labels else "")
     if obj.get("stage"):
         head += f' <span class="stage">{esc(obj["stage"]["value"])}</span>'
-    if ver == current:
+    if vetted is not None and n in vetted:
+        head += ' <span class="current">vetted</span>'
+    elif vetted is None and n == shown:
         head += ' <span class="current">current</span>'
     when = ""
     if P.date_of(dc, "Available"):
@@ -89,7 +99,7 @@ def version_block(obj_id, d, inv, ver, current, notices, root):
             files.append(f'<a href="{esc(e["record"])}">{esc(e["service"])}</a>')
     if dc.get("doi"):
         files.append(f'<a href="https://doi.org/{esc(dc["doi"])}">doi:{esc(dc["doi"])}</a>')
-    out = [f'<li class="version{" is-current" if ver == current else ""}" id="v{n}">',
+    out = [f'<li class="version{" is-current" if n == shown else ""}" id="v{n}">',
            f'<div class="version-head">{head}</div>']
     if when:
         out.append(f'<div class="version-date">{esc(when)}</div>')
@@ -168,15 +178,18 @@ def render(members):
         if m.get("archive") != P.ARCHIVE["archiveId"]:
             entries.append(remote_entry(m))
             continue
-        obj_id, cur = m["id"], m["version"]
+        obj_id = m["id"]
         d = P.OCFL / obj_id
         inv = P.load_inventory(d)
+        cur = P.presented_version(m, d, inv)
+        pin_ver, pin = P.member_pins(m)[-1][:2]
+        vetted = {r["documentVersion"] for r in m["revisions"]} if m.get("revisions") else None
         obj = P.read_json(d, inv, P.OBJ, cur)
         dc = P.read_json(d, inv, "datacite.json", cur)
         head = P.read_json(d, inv, P.OBJ)
         notices = head.get("notices", [])
         root = "../../"
-        versions = "\n".join(version_block(obj_id, d, inv, v, cur, notices, root)
+        versions = "\n".join(version_block(obj_id, d, inv, v, obj["documentVersion"], notices, root, vetted)
                              for v in reversed(P.history_of(d, inv)))
         issued = P.date_of(dc, "Issued")
         withdrawn = ""
@@ -198,7 +211,7 @@ def render(members):
             "issued": esc(fmt_date(issued)), "abstract": abstract_html(dc),
             "withdrawn": withdrawn, "versions": versions, "licence": licence,
             "pdf": esc(pdf_address(root, obj_id, inv, cur, obj) or f"#v{obj['documentVersion']}"),
-            "cite": esc(cite), "pin": m["inventorySha512"], "pin_url": f"{root}ocfl/{obj_id}/{cur}/inventory.json",
+            "cite": esc(cite), "pin": pin, "pin_url": f"{root}ocfl/{obj_id}/{pin_ver}/inventory.json",
         })
         out = root_out / "paper" / obj_id / "index.html"
         out.parent.mkdir(parents=True, exist_ok=True)
@@ -210,10 +223,9 @@ def render(members):
             f'<li class="paper{" withdrawn" if withdrawn else ""}">',
             f'<a class="paper-title" href="paper/{obj_id}/">{esc(dc["titles"][0]["title"])}</a>',
             f'<div class="paper-authors">{esc(authors(dc))}</div>',
-            f'<div class="paper-meta">{esc((issued or "")[:4])} · version {obj["documentVersion"]}'
+            f'<div class="paper-meta">{esc((issued or "")[:4])} · {versions_line(m, obj)}'
             + (f' · <a href="{esc(pdf)}">PDF</a>' if pdf else "")
-            + f' · <span class="pin" title="{m["inventorySha512"]}">'
-            f'pin {m["inventorySha512"][:32]}…</span></div>',
+            + f' · <span class="pin" title="{pin}">pin {pin[:32]}…</span></div>',
             f"<details><summary>Abstract</summary>{abstract}</details>" if abstract else "",
             "</li>"]))
     lead = ('Papers with their sources, every version, fixed by digests. An '
@@ -221,11 +233,13 @@ def render(members):
             '<a href="opensheaf.json">opensheaf.json</a>.')
     cdir = P.OCFL / P.ARCHIVE["mainCollection"]
     cinv = P.load_inventory(cdir)
-    if cinv and P.read_json(cdir, cinv, "members.json").get("order") == "manual":
+    cmem = P.read_json(cdir, cinv, "members.json") if cinv else {}
+    if cmem.get("order") == "manual":
         desc = next((x["description"] for x in P.read_json(cdir, cinv, "datacite.json").get("descriptions", [])), "")
         lead = (esc(desc) + ' A collection in the <a href="https://opensheaf.org">OpenSheaf</a> format: each '
-                'member is kept in its own archive and pinned by a digest; programs start from '
-                '<a href="opensheaf.json">opensheaf.json</a>.')
+                'member is kept in its own archive and pinned by a digest'
+                + (', in the versions its curator vetted' if cmem.get("type") == "selection" else '')
+                + '; programs start from <a href="opensheaf.json">opensheaf.json</a>.')
     index = fill(template("index.html"), {
         "root": "", "archive_name": esc(P.ARCHIVE["name"]), "base_url": esc(base), "lead": lead,
         "papers": "\n".join(entries) if entries else '<li class="empty">No documents yet.</li>',
@@ -258,25 +272,31 @@ def remote_entry(m):
     from . import collections
     cite = m.get("cite", {})
     title, by, year = cite.get("title", m["id"]), ", ".join(cite.get("creators", [])), cite.get("year", "")
-    links, abstract, archive_name = [], "", m.get("archiveUrl", "")
-    here = P.ARCHIVE["baseUrl"] in m.get("mirrors", []) and (P.OCFL / m["id"]).exists()
+    links, abstract, archive_name, status = [], "", m.get("archiveUrl", ""), {}
+    pin = P.member_pins(m)[-1][1]
+    minv = P.load_inventory(P.OCFL / m["id"])
+    here = P.ARCHIVE["baseUrl"] in m.get("mirrors", []) and minv is not None \
+        and all(v in minv["versions"] for v, _, _ in P.member_pins(m))
     if here:
         # a mirror in this archive: its copy is read and linked locally
-        inv = P.load_inventory(P.OCFL / m["id"])
-        dc = P.read_json(P.OCFL / m["id"], inv, "datacite.json", m["version"])
+        shown = P.presented_version(m, P.OCFL / m["id"], minv)
+        dc = P.read_json(P.OCFL / m["id"], minv, "datacite.json", shown)
         title, by, abstract = dc["titles"][0]["title"], authors(dc), abstract_html(dc)
-        pdf = pdf_address("", m["id"], inv, m["version"], P.read_json(P.OCFL / m["id"], inv, P.OBJ, m["version"]))
+        pdf = pdf_address("", m["id"], minv, shown, P.read_json(P.OCFL / m["id"], minv, P.OBJ, shown))
+        status = P.read_json(P.OCFL / m["id"], minv, P.OBJ)
         if pdf:
             links.append(f'<a href="{esc(pdf)}">PDF (mirrored here)</a>')
     try:
         r = collections.Remote(m["archiveUrl"])
         archive_name = r.disc.get("name", archive_name)
         rinv = r.inventory(m["id"])
-        rdc = json.loads(r.file(m["id"], rinv, m["version"], "datacite.json"))
+        shown = m["revisions"][-1]["version"] if m.get("revisions") else r.current(m["id"], m["version"])
+        rdc = json.loads(r.file(m["id"], rinv, shown, "datacite.json"))
+        status = json.loads(r.file(m["id"], rinv, rinv["head"], P.OBJ))
         if not here:
             title, by, abstract = rdc["titles"][0]["title"], authors(rdc), abstract_html(rdc)
-            lp = P.pdf_of(json.loads(r.file(m["id"], rinv, m["version"], P.OBJ)))
-            cp = P.content_path(rinv, m["version"], lp) if lp else None
+            lp = P.pdf_of(json.loads(r.file(m["id"], rinv, shown, P.OBJ)))
+            cp = P.content_path(rinv, shown, lp) if lp else None
             if cp:
                 links.append(f'<a href="{esc(r.root + m["id"] + "/" + cp)}">PDF</a>')
         if rdc.get("url"):
@@ -285,12 +305,19 @@ def remote_entry(m):
         links.append('<span class="missing">'
                      + ("its archive is unavailable" if here else "archive unavailable: cached citation")
                      + "</span>")
+    withdrawn = ""
+    if status.get("status") == "withdrawn":
+        w = status.get("withdrawal", {})
+        withdrawn = (f'<div class="withdrawn"><strong>Withdrawn in its archive ({esc(fmt_date(w.get("date")))}):'
+                     f'</strong> {esc(w.get("reason", {}).get("text", ""))}</div>')
     return "\n".join([
-        '<li class="paper member">',
+        f'<li class="paper member{" withdrawn" if withdrawn else ""}">',
         f'<span class="paper-title">{esc(title)}</span>',
         f'<div class="paper-authors">{esc(by)}</div>',
         f'<div class="paper-meta">{esc(str(year))} · in <a href="{esc(m["archiveUrl"])}">{esc(archive_name)}</a>'
+        + (f' · {versions_line(m, {})}' if m.get("revisions") else "")
         + (" · " + " · ".join(links) if links else "")
-        + f' · <span class="pin" title="{m["inventorySha512"]}">pin {m["inventorySha512"][:32]}…</span></div>',
+        + f' · <span class="pin" title="{pin}">pin {pin[:32]}…</span></div>',
+        withdrawn,
         f"<details><summary>Abstract</summary>{abstract}</details>" if abstract else "",
         "</li>"])

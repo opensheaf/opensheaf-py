@@ -96,15 +96,18 @@ The landing page of a document receives, besides `{{archive_name}}`,
   are;
 - `{{title}}`, `{{authors}}`, `{{issued}}` (the date of first
   appearance) and `{{abstract}}` (paragraphs in HTML);
-- `{{pdf}}`, the address of the PDF of the current version (for a version
-  without a PDF, its entry in the list of versions);
+- `{{pdf}}`, the address of the PDF of the version presented: the current
+  version, or for a member of a selection the last revision vetted (for a
+  version without a PDF, its entry in the list of versions);
 - `{{withdrawn}}`, the withdrawal notice, empty for a document that is
   not withdrawn;
 - `{{versions}}`, the versions, as items of a list;
 - `{{cite}}`, the suggested citation, and `{{licence}}`, the licence,
   linked when it has an address;
-- `{{pin}}`, the pin of the version shown, and `{{pin_url}}`, the
-  address of the inventory it is the digest of.
+- `{{pin}}`, the pin by which the collection fixes the document (the head
+  of the object for an archive collection, the last revision for a
+  selection), and `{{pin_url}}`, the address of the inventory it is the
+  digest of.
 
     <!-- in src/opensheaf/templates/paper.html: -->
     <!doctype html>
@@ -140,14 +143,15 @@ their own, because `{{versions}}` stands at the left margin: a part is
 indented as its reference is, and the placeholder would move. They come
 in the order of the history, the last first.
 
-The page presents the current version of the document; the withdrawal
+The page presents the version the collection presents, usually the
+current version of the document; the withdrawal
 notice, when there is one, comes before anything else about it, as
 section 11.1 requires.
 
     <!-- in the document on its landing page: -->
     <h1>{{title}}</h1>
     <p class="paper-authors">{{authors}}</p>
-    <p class="paper-meta">First issued {{issued}} · <a href="{{pdf}}">PDF of the current version</a></p>
+    <p class="paper-meta">First issued {{issued}} · <a href="{{pdf}}">PDF</a></p>
     {{withdrawn}}
     <section class="abstract">
       <h2>Abstract</h2>
@@ -155,8 +159,8 @@ section 11.1 requires.
     </section>
 
 The last section is for those who cite or check: the citation, the
-licence, and the pin of the version shown, linked to the inventory whose
-digest it is. Anyone can download the inventory, compute its SHA-512,
+licence, and the pin by which the collection fixes the document, linked
+to the inventory whose digest it is. Anyone can download the inventory, compute its SHA-512,
 and compare.
 
     <!-- in the citation on a landing page: -->
@@ -164,7 +168,7 @@ and compare.
       <h2>Cite</h2>
       <p class="cite">{{cite}}</p>
       <p class="small">Licence: {{licence}}</p>
-      <p class="small">Pin of the current version (SHA-512 of its inventory):
+      <p class="small">Pin in the collection (SHA-512 of the inventory it fixes):
       <a href="{{pin_url}}"><code>{{pin}}</code></a></p>
     </section>
 

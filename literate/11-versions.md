@@ -81,38 +81,46 @@ later one keeps it.
 
 Without `history`, the default is computed from the inventory: for each
 document version, the last object version holding it, in the order of the
-numbers.
+numbers. The object versions considered are those up to `at`, by default
+the head: a collection pins an object version (section 10.2), and what it
+shows is the history as known at that version.
 
     # in the history of a document without a history in object.json:
-    def default_history(obj_dir, inv):
+    def default_history(obj_dir, inv, at=None):
         """Without `history`: the last object version holding each document
-        version, in the order of the numbers (section 7.3)."""
+        version, in the order of the numbers, among the object versions up to
+        AT (default: the head) (section 7.3)."""
+        at = at or inv["head"]
         last = {}
         for ver in inv["versions"]:
-            last[doc_version_of(obj_dir, inv, ver)] = ver
+            if int(ver[1:]) <= int(at[1:]):
+                last[doc_version_of(obj_dir, inv, ver)] = ver
         return [last[n] for n in sorted(last)]
 
 The history is read from the head version, the latest knowledge of the
 archive; earlier object versions keep the history as it was known when
-they were made.
+they were made, and `at` reads it from one of them instead.
 
     # in the history of a document as its head states it:
-    def history_of(obj_dir, inv):
-        """The history as read from the head version."""
-        head = read_json(obj_dir, inv, OBJ)
-        return head.get("history") or default_history(obj_dir, inv)
+    def history_of(obj_dir, inv, at=None):
+        """The history as read from object version AT (default: the head)."""
+        obj = read_json(obj_dir, inv, OBJ, at)
+        return obj.get("history") or default_history(obj_dir, inv, at)
 
 The *current version* is the one readers are sent to: the last entry of the
-history. Landing pages, the index and the main collection use it rather
-than the head, since the head may hold an earlier document version (one
-found later, or one just described).
+history. Landing pages, the index and citations use it rather than the
+head, since the head may hold an earlier document version (one found
+later, or one just described). The main collection pins the head of each
+document (section 10.2) and shows its current version, read from the
+history of the pinned version, which is what `at` is for.
 
     # in the object version holding the current version of a document:
-    def current_version(obj_dir, inv):
-        """The object version holding the current document version: the last
-        entry of the history of the head, or without one the last object
-        version holding the highest document version (section 7.3)."""
-        return history_of(obj_dir, inv)[-1]
+    def current_version(obj_dir, inv, at=None):
+        """The object version holding the current document version as of object
+        version AT (default: the head): the last entry of its history, or without
+        one the last object version holding the highest document version
+        (section 7.3)."""
+        return history_of(obj_dir, inv, at)[-1]
 
 Without `history`, the head is not always the answer. It holds the
 highest document version after a deposit and after the description-only

@@ -130,11 +130,19 @@ osheaf arxiv import DOWNLOADS [ARXIV-ID ...] [--update] [--versions v1,v3]
   (`--no-source`); its number stays.
 - **collection sync / update**: curated collections, with members from this
   archive or any other (an `https://` address, or a local folder), in the
-  curator's order, each pinned by the SHA-512 of its version's inventory and
-  checked against the checksum file its archive publishes; `update` follows
-  members to their current versions. `osheaf init --curated` makes an archive
-  whose main collection is curated; `osheaf verify --remote` fetches every
-  member and checks its pin. See `osheaf collection --help` and the template
+  curator's order, each pinned by the SHA-512 of an inventory and checked
+  against the checksum file its archive publishes. `collection.yaml` gives
+  the kind (section 10.1): `type: archive` (the default, with a message, for
+  files without a type) pins each object at its head, and `update` follows
+  the members with `follow: latest` to their new heads, whatever they hold (a
+  withdrawal too), bringing up to date the mirrors held here; `type:
+  selection` pins the revisions vetted (`revisions: [2, 3]`, document
+  versions, or object versions such as `v4`), which `sync` writes exactly
+  and `update` never changes: it reports the versions not vetted.
+  `osheaf init --curated` makes an archive whose main collection is curated;
+  `osheaf verify --remote` fetches every member and checks its pins, trying
+  the mirrors listed in the member and in its archive's discovery document
+  when the archive fails. See `osheaf collection --help` and the template
   [opensheaf/collection-template](https://github.com/opensheaf/collection-template).
 - **accept** (a journal, a series): copies exactly one version of another
   archive's object (the version that was vetted) into a document of this
@@ -144,24 +152,32 @@ osheaf arxiv import DOWNLOADS [ARXIV-ID ...] [--update] [--versions v1,v3]
   `accept` again with a later version (a new document version of the
   journal's document) or `notice`. Only the accepted version needs an open
   licence (or `--licence-checked`, with `--agreement` to record the authors'
-  agreement). A journal that typesets its own version of record deposits it
-  instead (`deposit` with `--stage VoR`, its licence and `--agreement`).
+  agreement). The journal's issue is a selection of these documents
+  (`{archive: ., id: ..., revisions: [1]}`), and `verify --remote` compares
+  each accepted copy with its source. A journal that typesets its own version
+  of record deposits it instead (`deposit` with `--stage VoR`, its licence
+  and `--agreement`).
 - **mirror** (a library, a preservation copy): copies another archive's
   object, every version, each file checked against its digest, so that this
   archive serves it too; refused unless every version is under an open
   licence (CC BY, CC BY-SA, CC0, GPL), or `--licence-checked` says that
-  redistribution is allowed. `mirror: yes` on a member of `collection.yaml`
-  mirrors it and lists the copy in the member's `mirrors`; `verify --remote`
+  redistribution is allowed. Run again, it copies the new versions only. The
+  discovery document lists the copy with `mirrorOf`. `mirror: yes` on a
+  member of `collection.yaml` mirrors it and lists the copy in the member's
+  `mirrors`, and `collection update` keeps it up to date; `verify --remote`
   checks a member on its mirrors when its archive fails.
 - **relicense**, **relate**: description-only versions (a new licence with the
   authors' agreement; a link to the same work elsewhere).
-- **collect**: a new version of the main collection when a document has a new
-  current version; members are ordered `issued-desc` and pin the object
-  version holding the current version.
+- **collect**: a new version of the main collection, an archive collection,
+  when a document has a new object version; members are ordered
+  `issued-desc`, pin the head of their object and follow it, and the index
+  shows their current versions.
 - **index**: the discovery document and the readable index.
 - **verify**: the checks of section 14 of the specification (identifiers,
   inventories and digests, `object.json` and `datacite.json`, numbering of
-  document versions, history and notices, collections and their pins).
+  document versions, history and notices, collections, their kinds and their
+  pins, mirrors; with `--remote`, members of other archives and the sources
+  of accepted copies).
 - **zenodo**: the Zenodo binding (appendix A): deposits the current document
   version (on the sandbox, on a copy of the object, unless `--production`).
   Tokens are read from the macOS keychain (`zenodo-token`,
