@@ -24,22 +24,38 @@ application).
 
 ## An archive
 
+The quickest start is the template
+[opensheaf/archive-template](https://github.com/opensheaf/archive-template):
+a ready website, published with GitHub Pages. Or create one anywhere:
+
+```
+osheaf init my-papers --archive-id tag:example.org,2026:my-papers \
+  --name "Papers of Jane Doe" --base-url https://example.org/papers/ --curator "Doe, Jane"
+```
+
 An archive is a folder with a configuration file `osheaf.json` (identifier,
-name, address, curator, depositor, and optionally the TeXmacs profile and the
-index template; `osheaf help-config` describes it). The tools find it from
-the current folder or from `--root`. They maintain:
+name, address, curator, depositor, the website or the TeXmacs profile;
+`osheaf help-config` describes it). The tools find it from the current folder
+or from `--root`. They maintain:
 
 - `ocfl/`: the storage root, one OCFL object per document, and the main
   collection;
 - `opensheaf.json`: the discovery document;
-- `site/<id>/`: the HTML versions of documents with TeXmacs sources;
-- `index.tm`, `index.html`: a readable index, from a TeXmacs template of the
-  archive (optional).
+- the website (appendix C): `index.html`, a landing page `paper/<id>/` per
+  document (current version, every version in the order of the history,
+  notices, files, DOI, the `citation_*` tags read by Google Scholar, JSON-LD,
+  Signposting links) and `sitemap.xml`, from the templates in `templates/`
+  (`{{name}}` placeholders; MathJax renders `$...$`);
+- or, with the TeXmacs profile, `site/<id>/` (HTML versions of TeXmacs
+  documents) and an index made from a TeXmacs template.
 
 ## Commands
 
 ```
-osheaf deposit ID SOURCE.tm --title T --author "Family, Given|Affiliation" ...
+osheaf init FOLDER --archive-id URI --name NAME --base-url URL --curator "Family, Given"
+osheaf deposit ID SOURCE --pdf PAPER.pdf --title T --author "Family, Given|Affiliation" ...
+osheaf deposit ID SOURCE.tm --title T --author ...           (TeXmacs: typeset by the archive)
+osheaf deposit ID --pdf PAPER.pdf --no-source REASON ...
 osheaf relicense ID --rights cc-by-4.0 --method "..."
 osheaf relate ID --to arxiv:ID|doi:DOI [--relation IsIdenticalTo]
 osheaf collect
@@ -50,12 +66,15 @@ osheaf arxiv fetch DOWNLOADS --author AUTHOR-ID | ARXIV-ID ...
 osheaf arxiv import DOWNLOADS [ARXIV-ID ...] [--update] [--versions v1,v3]
 ```
 
-- **deposit** a TeXmacs document, or a new document version of it: the source
-  is copied byte for byte, the PDF typeset with TeXmacs, the HTML version
-  exported. Dates follow the specification (`--available`, or `--created` for
-  a version not public at the time; `--issued`), with `--stage` (NISO-JAV),
-  `--changes`, and `--after N` for a version found later, which writes the
-  history.
+- **deposit** a document, or a new document version of it: any source (LaTeX,
+  Markdown, ...) with its PDF (`--pdf`; other sources with `--extra-source`,
+  the abstract with `--abstract` or `--abstract-file`), a PDF alone
+  (`--no-source REASON`), or a TeXmacs source, typeset by the archive. Files
+  are copied byte for byte. Dates follow the specification (`--available`, or
+  `--created` for a version not public at the time; `--issued`), with
+  `--stage` (NISO-JAV), `--changes`, and `--after N` for a version found
+  later, which writes the history. A new version keeps the abstract, keywords
+  and licence of the previous one unless they are given.
 - **relicense**, **relate**: description-only versions (a new licence with the
   authors' agreement; a link to the same work elsewhere).
 - **collect**: a new version of the main collection when a document has a new

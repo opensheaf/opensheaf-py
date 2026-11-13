@@ -168,3 +168,54 @@ def test_preamble_macros():
 def test_tm_escape():
     assert P.tm_escape("Brzeźniak a|b <x>") == "Brze\\<#17A\\>niak a\\|b <less>x<gtr>"
     assert P.tex_text(r"H{\o}egh It\^o Pawe{\l}") == "Høegh Itô Paweł"
+
+
+def run(*argv):
+    from opensheaf import cli
+    cli.main(list(argv))
+
+
+def test_init_deposit_website(tmp_path):
+    """A house-made archive without TeXmacs: init, a LaTeX deposit with its
+    PDF, a new version keeping abstract and licence, a PDF-only deposit, the
+    website, and the checks."""
+    root = tmp_path / "archive"
+    run("init", str(root), "--archive-id", "tag:example.org,2026:t", "--name", "Papers of Jane Doe",
+        "--base-url", "https://example.org/papers", "--curator", "Doe, Jane")
+    src, pdf = tmp_path / "main.tex", tmp_path / "paper.pdf"
+    src.write_text("\\documentclass{article}\\begin{document}x\\end{document}")
+    pdf.write_bytes(b"%PDF-1.4 test")
+    r = ["--root", str(root)]
+    run(*r, "deposit", "first-paper", str(src), "--pdf", str(pdf), "--title", "On $\\Phi^4_3$",
+        "--author", "Doe, Jane", "--abstract", "We prove $x<y$.", "--rights", "cc-by-4.0",
+        "--available", "2025-01-02")
+    run(*r, "deposit", "first-paper", str(src), "--pdf", str(pdf), "--title", "On $\\Phi^4_3$",
+        "--author", "Doe, Jane", "--changes", "Typos.", "--available", "2025-02-03")
+    run(*r, "deposit", "old-notes", "--pdf", str(pdf), "--no-source", "lost",
+        "--title", "Old notes", "--author", "Doe, Jane", "--available", "2019-05-01")
+    run(*r, "collect")
+    run(*r, "index")
+    assert P.verify_errors() == []
+    d = root / "ocfl" / "first-paper"
+    inv = P.load_inventory(d)
+    dc2 = P.read_json(d, inv, "datacite.json", "v2")
+    assert dc2["rightsList"][0]["rightsIdentifier"] == "cc-by-4.0"
+    assert dc2["descriptions"][0]["description"] == "We prove $x<y$."
+    assert P.read_json(d, inv, P.OBJ, "v2")["changes"] == {"text": "Typos."}
+    page = (root / "paper" / "first-paper" / "index.html").read_text()
+    assert 'name="citation_title" content="On $\\Phi^4_3$"' in page
+    assert "Version 2" in page and "Version 1" in page and "Typos." in page
+    notes = (root / "paper" / "old-notes" / "index.html").read_text()
+    assert "sources not available: lost" in notes
+    assert "first-paper" in (root / "index.html").read_text()
+    assert "paper/old-notes/" in (root / "sitemap.xml").read_text()
+
+
+def test_deposit_needs_pdf_or_texmacs(tmp_path):
+    root = tmp_path / "archive"
+    run("init", str(root), "--archive-id", "tag:example.org,2026:t", "--name", "T",
+        "--base-url", "https://example.org/", "--curator", "Doe, Jane")
+    src = tmp_path / "main.tex"
+    src.write_text("x")
+    with pytest.raises(SystemExit):
+        run("--root", str(root), "deposit", "p", str(src), "--title", "T", "--author", "Doe, J")

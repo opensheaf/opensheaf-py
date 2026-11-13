@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "opensheaf"
-version = "0.1.0"
+version = "0.2.0"
 description = "Tools for OpenSheaf archives of scholarly documents (OCFL storage, DataCite metadata, collections)"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -33,4 +33,4 @@ Source = "https://github.com/opensheaf/opensheaf-py"
 Specification = "https://opensheaf.org/opensheaf-specification-0.1.html"
 
 [tool.setuptools.package-data]
-opensheaf = ["schemas/*.json"]
+opensheaf = ["schemas/*.json", "templates/*"]

@@ -4,7 +4,8 @@ The archive is the folder given with --root, or else the nearest folder above
 the current one that has an osheaf.json (see `osheaf help-config`).
 
 Commands:
-  deposit ID SOURCE.tm   deposit a TeXmacs document, or a new document version
+  init                   create an archive (osheaf.json, storage root) in the folder
+  deposit ID [SOURCE]    deposit a document (TeXmacs, or any source with --pdf)
   relicense ID           description-only version with a new licence
   relate ID              description-only version linking the same work elsewhere
   collect                new version of the main collection when needed
@@ -29,9 +30,21 @@ def build_parser():
     p.add_argument("--root", help="the archive folder (default: found from the current folder)")
     sub = p.add_subparsers(dest="cmd", required=True)
 
-    d = sub.add_parser("deposit", help="deposit a TeXmacs document, or a new document version")
+    d = sub.add_parser("deposit", help="deposit a document, or a new document version",
+                       description=core.deposit.__doc__)
     d.add_argument("id")
-    d.add_argument("source")
+    d.add_argument("source", nargs="?", help="the main source (.tm: typeset by the archive; "
+                   "anything else: give the PDF with --pdf)")
+    d.add_argument("--pdf", help="the PDF of this version (required unless the source is TeXmacs)")
+    d.add_argument("--no-source", metavar="REASON",
+                   help="deposit only the PDF, saying why the sources are not available")
+    d.add_argument("--source-format", help="media type of the main source (default: from its extension)")
+    d.add_argument("--abstract", help="the abstract (plain text, mathematics in $...$)")
+    d.add_argument("--abstract-file", help="a UTF-8 file with the abstract (paragraphs separated by blank lines)")
+    d.add_argument("--keyword", action="append", help="a keyword (repeatable)")
+    d.add_argument("--language", default="en")
+    d.add_argument("--toolchain", action="append", metavar="NAME=VERSION",
+                   help="a tool that produced the PDF (repeatable), e.g. pdflatex=TeX Live 2025")
     d.add_argument("--title", required=True)
     d.add_argument("--author", action="append", required=True,
                    help='"Family, Given|Affiliation", as printed in the document')
@@ -46,8 +59,8 @@ def build_parser():
     d.add_argument("--after", type=int, help="place this version after document version N in the"
                    " history (a version found later); otherwise it becomes the current version")
     d.add_argument("--type", default="Preprint")
-    d.add_argument("--rights", default="All rights reserved",
-                   help="free text, or one of " + ", ".join(sorted(core.RIGHTS)))
+    d.add_argument("--rights", help="free text, or one of " + ", ".join(sorted(core.RIGHTS))
+                   + " (default: as the previous version, or 'All rights reserved')")
     d.add_argument("--related", action="append",
                    help="arxiv=ID (IsVariantFormOf), or RELATION:doi:DOI, RELATION:arxiv:ID")
     d.add_argument("--extra-source", action="append",
@@ -86,6 +99,16 @@ def build_parser():
     a.add_argument("rest", nargs=argparse.REMAINDER, help="see osheaf arxiv fetch|import --help")
     a.set_defaults(func=None)
 
+    n = sub.add_parser("init", help="create an archive (osheaf.json, storage root, website templates)")
+    n.add_argument("folder", nargs="?", help="where (default: the current folder)")
+    n.add_argument("--archive-id", required=True,
+                   help="a URI that does not change when the archive moves, e.g. tag:example.org,2026:name")
+    n.add_argument("--name", required=True, help="the name of the archive, e.g. 'Papers of Jane Doe'")
+    n.add_argument("--base-url", required=True, help="where the archive is served, e.g. https://example.org/papers/")
+    n.add_argument("--curator", required=True, help='"Family, Given"')
+    n.add_argument("--affiliation")
+    n.add_argument("--contact", help="a URL or mailto: address")
+    n.set_defaults(func=None)
     sub.add_parser("help-config", help="describe osheaf.json").set_defaults(func=None)
     return p
 
@@ -97,6 +120,8 @@ def main(argv=None):
     if args.cmd == "help-config":
         print(core.__doc__)
         return
+    if args.cmd == "init":
+        return core.init(args)
     if args.cmd == "arxiv" and args.action == "fetch":
         from . import arxiv
         return arxiv.fetch_main(args.rest)

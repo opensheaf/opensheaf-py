@@ -523,15 +523,44 @@ def related_from_args(specs):
     return related
 
 
+SOURCE_FORMATS = {".tex": "application/x-tex", ".ltx": "application/x-tex", ".tm": "application/x-texmacs",
+                  ".md": "text/markdown", ".txt": "text/plain", ".html": "text/html",
+                  ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                  ".odt": "application/vnd.oasis.opendocument.text", ".zip": "application/zip"}
+
+
+def rights_list(rights, prev_dc=None):
+    """The licence given (an SPDX key of RIGHTS or a statement), or else that
+    of the previous version, or else 'All rights reserved'."""
+    if rights:
+        return [dict(RIGHTS[rights]) if rights in RIGHTS else {"rights": rights}]
+    if prev_dc and prev_dc.get("rightsList"):
+        return prev_dc["rightsList"]
+    return [{"rights": "All rights reserved"}]
+
+
+def landing_url(obj_id):
+    """The address readers are sent to: the landing page of the HTML website,
+    or else the HTML version of a TeXmacs document."""
+    if INDEX.get("html"):
+        return f"{ARCHIVE['baseUrl']}paper/{obj_id}/"
+    return f"{ARCHIVE['baseUrl']}site/{obj_id}/{obj_id}.html"
+
+
 def deposit(args):
-    """Deposit a TeXmacs document, or a new document version of it."""
+    """Deposit a document, or a new document version of it: a TeXmacs source
+    (typeset by the archive), or any source with its PDF (--pdf), or a PDF
+    alone (--no-source REASON)."""
     obj_id = args.id
     if not ID_RE.match(obj_id) or len(obj_id) > 64:
         sys.exit("ID must match ^[a-z0-9]+(-[a-z0-9]+)*$ and have at most 64 characters")
     if len(obj_id) > 32:
         print(f"warning: {obj_id} is longer than 32 characters (section 5: SHOULD be short)")
     init_storage_root()
-    source = Path(args.source)
+    source = Path(args.source) if args.source else None
+    for f in [source, args.pdf and Path(args.pdf)] + [Path(x.partition("=")[0]) for x in args.extra_source or []]:
+        if f and not f.is_file():
+            sys.exit(f"no file {f}")
     obj_dir = OCFL / obj_id
     inv = load_inventory(obj_dir)
     prev_obj = prev_dc = None
@@ -547,8 +576,22 @@ def deposit(args):
     issued = args.issued or (date_of(prev_dc, "Issued") if prev_dc else None) or available
 
     tmp = Path(tempfile.mkdtemp())
-    files = {f"{obj_id}.tm": source}
-    formats = ["application/x-texmacs", "application/pdf"]
+    texmacs = source is not None and source.suffix == ".tm" and not args.pdf
+    if not texmacs and not args.pdf:
+        sys.exit("give the PDF of this version with --pdf (only TeXmacs sources are typeset by the archive)")
+    if source is None and not args.no_source:
+        sys.exit("a deposit without sources needs --no-source REASON (section 9: sourcesMissing)")
+    files, formats = {}, []
+    if texmacs:
+        main = f"{obj_id}.tm"
+        fmt = "application/x-texmacs"
+    elif source is not None:
+        main = source.name
+        fmt = args.source_format or SOURCE_FORMATS.get(source.suffix.lower(), "application/octet-stream")
+    if source is not None:
+        files[main] = source
+        formats.append(fmt)
+    formats.append("application/pdf")
     for spec in args.extra_source or []:
         # FILE or FILE=LOGICAL/PATH (the path the main source refers to)
         src, _, logical = spec.partition("=")
@@ -559,11 +602,28 @@ def deposit(args):
         files[logical] = Path(src)
         if logical.endswith(".bib") and "application/x-bibtex" not in formats:
             formats.append("application/x-bibtex")
-    pdf = tmp / "paper.pdf"
-    typeset(source, obj_id, pdf, SITE / obj_id)
+    if texmacs:
+        pdf = tmp / "paper.pdf"
+        typeset(source, obj_id, pdf, SITE / obj_id if TEXMACS.get("htmlPackage") or not INDEX.get("html") else None)
+    else:
+        pdf = Path(args.pdf)
+        if pdf.read_bytes()[:4] != b"%PDF":
+            sys.exit(f"{pdf} is not a PDF")
     files["paper.pdf"] = pdf
 
-    abstract = tm_abstract(source)
+    if args.abstract_file:
+        abstract_text = Path(args.abstract_file).read_text(encoding="utf-8").strip()
+    elif args.abstract:
+        abstract_text = args.abstract.strip()
+    elif texmacs:
+        paras = tm_abstract(source)
+        abstract_text = "\n\n".join(tm_to_text(p) for p in paras) if paras else None
+    else:
+        abstract_text = None
+    if abstract_text is None and prev_dc:
+        # a new version keeps the abstract and keywords unless they are given
+        abstract_text = next((x["description"] for x in prev_dc.get("descriptions", [])
+                              if x["descriptionType"] == "Abstract"), None)
     datacite = {
         "titles": [{"title": args.title}],
         "creators": [creator(a) for a in args.author],
@@ -571,21 +631,24 @@ def deposit(args):
         "publicationYear": int((issued or args.created)[:4]),
         "types": {"resourceTypeGeneral": args.type},
         "version": str(doc_version),
-        "url": f"{ARCHIVE['baseUrl']}site/{obj_id}/{obj_id}.html",
+        "url": landing_url(obj_id),
         "dates": [],
-        "language": "en",
+        "language": args.language,
         "formats": formats,
-        "rightsList": [dict(RIGHTS[args.rights]) if args.rights in RIGHTS else {"rights": args.rights}],
+        "rightsList": rights_list(args.rights, prev_dc),
     }
+    if args.keyword:
+        datacite["subjects"] = [{"subject": k} for k in args.keyword]
+    elif prev_dc and prev_dc.get("subjects"):
+        datacite["subjects"] = prev_dc["subjects"]
     if issued:
         set_date(datacite, "Issued", issued)
     if available:
         set_date(datacite, "Available", available, args.date_info)
     else:
         set_date(datacite, "Created", args.created, args.date_info)
-    if abstract:
-        datacite["descriptions"] = [{"description": "\n\n".join(tm_to_text(p) for p in abstract),
-                                     "descriptionType": "Abstract"}]
+    if abstract_text:
+        datacite["descriptions"] = [{"description": abstract_text, "descriptionType": "Abstract"}]
     related = related_from_args(args.related)
     if related:
         datacite["relatedIdentifiers"] = related
@@ -596,12 +659,17 @@ def deposit(args):
         "archiveId": ARCHIVE["archiveId"],
         "objectId": obj_id,
         "documentVersion": doc_version,
-        "mainSource": f"{obj_id}.tm",
-        "sourceFormat": "application/x-texmacs",
-        "renditions": [{"path": "paper.pdf", "mediaType": "application/pdf"}],
-        "toolchain": [{"name": "TeXmacs", "version": TEXMACS_VERSION}],
-        "status": "active",
     }
+    if source is not None:
+        obj.update(mainSource=main, sourceFormat=fmt)
+    else:
+        obj["sourcesMissing"] = {"text": args.no_source}
+    obj["renditions"] = [{"path": "paper.pdf", "mediaType": "application/pdf"}]
+    if texmacs:
+        obj["toolchain"] = [{"name": "TeXmacs", "version": TEXMACS_VERSION}]
+    elif args.toolchain:
+        obj["toolchain"] = [{"name": n, "version": v} for n, _, v in (t.partition("=") for t in args.toolchain)]
+    obj["status"] = "active"
     if args.changes:
         obj["changes"] = {"text": args.changes}
     if args.stage:
@@ -944,8 +1012,13 @@ def index(args):
     coll_dir = OCFL / ARCHIVE["mainCollection"]
     inv = load_inventory(coll_dir)
     members = json.loads(read_logical(coll_dir, inv, "members.json").read_text())["members"]
+    if INDEX.get("html"):
+        from . import html
+        html.render(members)
+        print(f"opensheaf.json, index.html, {len(members)} landing pages and sitemap.xml written")
+        return
     if not INDEX.get("template"):
-        print("opensheaf.json written (no index template configured)")
+        print("opensheaf.json written (no index configured)")
         return
     template = (ROOT / INDEX["template"]).read_text(encoding="latin-1")
     line = "  <paper-index>\n"
@@ -1156,3 +1229,43 @@ def verify(args):
         print(e)
     print("OK" if not errors else f"{len(errors)} problem(s)")
     sys.exit(1 if errors else 0)
+
+
+def init(args):
+    """Create an archive in the folder: osheaf.json, the storage root, the
+    templates of the website (to edit), the empty main collection, the
+    discovery document and the pages."""
+    root = Path(args.folder or ".").resolve()
+    root.mkdir(parents=True, exist_ok=True)
+    if (root / CONFIG_NAME).exists():
+        sys.exit(f"{root / CONFIG_NAME} exists already")
+    family, _, given = args.curator.partition(",")
+    family, given = family.strip(), given.strip()
+    cfg = {
+        "archiveId": args.archive_id,
+        "name": args.name,
+        "contact": args.contact or args.base_url,
+        "baseUrl": args.base_url if args.base_url.endswith("/") else args.base_url + "/",
+        "profiles": ["website"],
+        "mainCollection": "collection-main",
+        "curator": {"name": f"{family}, {given}" if given else family, "givenName": given,
+                    "familyName": family, "affiliation": args.affiliation or ""},
+        "depositor": {"name": f"{given} {family}".strip(), "address": args.contact or args.base_url},
+        "index": {"html": {"templates": "templates"}},
+    }
+    (root / CONFIG_NAME).write_text(json.dumps(cfg, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    from . import html
+    (root / "templates").mkdir(exist_ok=True)
+    for f in html.DEFAULTS.iterdir():
+        if not (root / "templates" / f.name).exists():
+            shutil.copyfile(f, root / "templates" / f.name)
+    configure(root)
+    init_storage_root()
+    collect(None)
+    index(argparse_namespace(no_html=False))
+    print(f"archive created in {root}: edit {CONFIG_NAME} and templates/, then deposit")
+
+
+def argparse_namespace(**kw):
+    import argparse
+    return argparse.Namespace(**kw)
