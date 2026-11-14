@@ -371,7 +371,9 @@ The template and the stylesheet
 
 The colours are defined once, as variables, and again for a dark
 background; the code is set a little smaller than the prose, with its
-chunk name above it as a caption.
+chunk name above it as a caption. Chunk names, above the code and in it, are
+set in the italic of the text face, a little larger than the code, since a
+serif italic looks smaller than the monospaced letters around it.
 
     /* in tools/weave.css: */
     :root {
@@ -408,14 +410,15 @@ chunk name above it as a caption.
     code { font: .86em/1.4 ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
     pre { overflow-x: auto; }
     .chunk { margin: 1.2em 0; }
-    .chunk-name { font: italic 14px/1.4 Charter, Georgia, serif; color: var(--muted); }
+    .chunk-name { font: italic 16px/1.4 Charter, Georgia, serif; color: var(--muted); }
     .chunk-name a { color: var(--accent); }
     pre.code, div.code pre { margin: .25em 0; padding: .6em .8em; background: var(--code-bg);
       border-left: 3px solid var(--rule); font: 13.5px/1.45 ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
     div.code { background: none; }
-    .code a.ref { color: var(--accent); font-family: Charter, Georgia, serif; font-style: italic; }
+    .code a.ref { color: var(--accent); font-family: Charter, Georgia, serif; font-style: italic;
+      font-size: 1.12em; }
     .undefined { color: #c01c28; font-style: italic; }
-    .chunk-notes { font: 13px/1.4 system-ui, sans-serif; color: var(--muted); }
+    .chunk-notes { font: 14px/1.45 system-ui, sans-serif; color: var(--muted); }
     table { border-collapse: collapse; margin: 1em 0; font-size: .95em; }
     td { border-bottom: 1px solid var(--rule); padding: .3em .7em .3em 0; vertical-align: top; }
     tr:first-child td { font-weight: 600; }
