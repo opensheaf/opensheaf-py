@@ -243,8 +243,7 @@ with the checks of the member list described next.
 
 The schema says much of this already, but `jsonschema` is optional, and the
 rules of section 10.2 that section 14 names are checked by hand: the member
-list has a `type`, `archive` or `selection`; a member of an archive
-collection has `version` and `inventorySha512` and no revisions; a member
+list has a `type`, `catalogue` or `selection`; a member of a catalogue has `version` and `inventorySha512` and no revisions; a member
 of a selection has a non-empty list of `revisions`, each with its three
 fields, of distinct document versions, and none of `version`,
 `inventorySha512` or `follow`. A collection of a mirror is checked the
@@ -252,12 +251,12 @@ same way: it is another archive's object, but the format is the same.
 
     # in check the type of a member list and the keys of its members:
     kind = mem.get("type")
-    if kind not in ("archive", "selection"):
-        errors.append(f"{where}: {ver} members.json has no valid type (archive or selection)")
+    if kind not in ("catalogue", "selection"):
+        errors.append(f"{where}: {ver} members.json has no valid type (catalogue or selection)")
     for m in mem.get("members", []):
         who = f"{where}: {ver} member {m.get('id')}"
-        if kind == "archive" and (not m.get("version") or not m.get("inventorySha512") or "revisions" in m):
-            errors.append(f"{who}: a member of an archive collection needs version and inventorySha512, "
+        if kind == "catalogue" and (not m.get("version") or not m.get("inventorySha512") or "revisions" in m):
+            errors.append(f"{who}: a member of a catalogue needs version and inventorySha512, "
                           "and no revisions")
         if kind == "selection":
             revs = m.get("revisions")

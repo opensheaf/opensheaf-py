@@ -4,7 +4,7 @@ The main collection
 The documents of an archive are listed by its *main collection*: an object
 of kind `collection` whose `members.json` (section 10) names each document
 and pins it, by an object version and the SHA-512 digest of that version's
-inventory. It is an *archive collection* (section 10.1): it keeps the
+inventory. It is a *catalogue* (section 10.1): it keeps the
 archive's documents whole, every version, without judging them, so each
 member pins the head of its object, and follows it as it grows. The
 collection is itself versioned, like any object: each change of the list
@@ -81,7 +81,7 @@ collection is newest first, by date, `issued-desc`.
 The pins
 --------
 
-A member pins one object version in an archive collection, and one or more
+A member pins one object version in a catalogue, and one or more
 in a selection, one per revision it vetted (section 10.2). Whatever reads
 the pins of a member (verification, the website, the index) goes through
 this function, which gives each as a triple: the object version, the digest
@@ -91,15 +91,14 @@ hold.
     # in the pins of a member and the version presented:
     def member_pins(m):
         """[(object version, inventory digest, document version or None)] of a
-        member: its version in an archive collection, each revision in a
+        member: its version in a catalogue, each revision in a
         selection (section 10.2)."""
         if "revisions" in m:
             return [(r.get("version"), r.get("inventorySha512"), r.get("documentVersion"))
                     for r in m["revisions"]]
         return [(m.get("version"), m.get("inventorySha512"), None)]
 
-Presentations show one version of each member. For a member of an archive
-collection it is the current version, read from the history of the pinned
+Presentations show one version of each member. For a member of a catalogue it is the current version, read from the history of the pinned
 version (section 10.2), which is the head when the collection was made; for
 a member of a selection it is the last revision of its set, the one
 presented as the selection's.
@@ -137,8 +136,7 @@ Writing a new version
     # in write a new version of the main collection:
     def collect(args):
         """A new version of the main collection when a document has a new object
-        version; members pin the head of their object and follow it (an archive
-        collection, section 10.2)."""
+        version; members pin the head of their object and follow it (a catalogue, section 10.2)."""
         <<leave a curated main collection to its curator>>
         <<pin the current version of every document of the archive>>
         <<stop if the main collection would not change>>
@@ -156,7 +154,7 @@ their order are decisions of its curator, made with `osheaf collection`.
         return
 
 Each document becomes a member pinned at the head of its object, with
-`follow: latest`: the main collection is an archive collection, which
+`follow: latest`: the main collection is a catalogue, which
 follows its members whatever their new heads hold (a new document version,
 a description, a notice, a withdrawal; section 10.2). Since the inventory
 of the head lists every earlier version, the pin fixes the whole object as
@@ -201,14 +199,14 @@ collection counts the changes of its member list (section 7.4), and the
     version, issued = 1, TODAY
     if inv:
         old = read_json(coll_dir, inv, "members.json")
-        if old["members"] == members and old.get("type") == "archive":
+        if old["members"] == members and old.get("type") == "catalogue":
             print(f"{coll_id}: unchanged ({inv['head']})")
             return
         version = read_json(coll_dir, inv, OBJ)["documentVersion"] + 1
         issued = date_of(read_json(coll_dir, inv, "datacite.json"), "Issued") or TODAY
 
 The new version holds the three files of a collection (section 7.4).
-`members.json` states that the collection is an archive collection
+`members.json` states that the collection is a catalogue
 (section 10.2). Its `datacite.json` describes the archive as a whole: titled with the archive's
 name, created by its curator, of type `Collection`, available today, under
 CC0 like every member list (section 10.6). Its `object.json` has only the
@@ -217,7 +215,7 @@ fields common to all objects.
     # in write the files of the main collection's new version:
     cur = ARCHIVE["curator"]
     tmp = Path(tempfile.mkdtemp())
-    write_json(tmp / "members.json", {"format": "opensheaf-collection/0.1", "type": "archive",
+    write_json(tmp / "members.json", {"format": "opensheaf-collection/0.1", "type": "catalogue",
                                       "order": ORDER, "members": members})
     write_json(tmp / "datacite.json", {
         "titles": [{"title": ARCHIVE["name"]}],

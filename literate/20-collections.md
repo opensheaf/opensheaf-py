@@ -29,7 +29,7 @@ identifier and its object identifier, and gives the address of the
 archive when the collection was made.
 
 Collections are of two kinds (section 10.1), and `members.json` says which
-in its `type`. An *archive collection* keeps objects whole and is
+in its `type`. A *catalogue* keeps objects whole and is
 impartial about their versions: each member pins the head of its object
 by the SHA-512 digest of that version's inventory, and may follow the
 object as it grows. A *selection* vets particular revisions (a journal its
@@ -41,7 +41,7 @@ nothing else of the document is part of the selection:
 ```json
 {
   "format": "opensheaf-collection/0.1",
-  "type": "archive",
+  "type": "catalogue",
   "order": "manual",
   "members": [
     {"kind": "document", "archive": "tag:opensheaf.org,2026:mgubi",
@@ -76,7 +76,7 @@ collection is a hash tree, and whoever reads it can check every byte
 without trusting the archives it was fetched from (section 6.4: "integrity
 comes from the pin, not from the place").
 
-`follow: latest`, in an archive collection, is a setting for the
+`follow: latest`, in a catalogue, is a setting for the
 curator's tools, not a floating reference: the member is pinned all the
 same, and `osheaf collection update` writes a new collection version when
 the followed object has a new head, whatever the head holds. A selection
@@ -111,7 +111,7 @@ against other archives.
     from . import core as P
 
     UA = {"User-Agent": "opensheaf-py (https://github.com/opensheaf/opensheaf-py)"}
-    KINDS = ("archive", "selection")
+    KINDS = ("catalogue", "selection")
 
 
     <<reading another archive>>
@@ -168,7 +168,7 @@ vetted another one names it by its object version instead (`v2`).
     collection.yaml (read with every value as text):
 
         id: collection-main            # optional: the collection object (default: the main collection)
-        type: archive                  # archive (the default) or selection (section 10.1)
+        type: catalogue                  # catalogue (the default) or selection (section 10.1)
         title: Stochastic quantisation
         description: Papers on the stochastic quantisation of field theories.
         order: manual                  # manual (default: the order below) or issued-desc / issued-asc
@@ -188,7 +188,7 @@ vetted another one names it by its object version instead (`v2`).
             revisions: [2, 3]          # document versions (or object versions: [v2, v4])
           - {archive: ., id: accepted-paper, revisions: [1]}
 
-    An archive collection pins the head of each object (section 10.2): `sync`
+    A catalogue pins the head of each object (section 10.2): `sync`
     reads the member archive's discovery document and the object's inventory,
     checks the pin against the checksum file the archive publishes, and caches a
     citation of the current version. `update` moves members with follow: latest to
@@ -216,7 +216,7 @@ mean, and a value is never silently changed. A file ending in `.json` is
 read as JSON instead. The module `yaml` is imported only here, so that
 the rest of the package works without it.
 
-A file without `type` describes an archive collection, as every
+A file without `type` describes a catalogue, as every
 collection did before the specification distinguished the two kinds; the
 tool says so, so that the curator can write the type and decide. Any
 other value than the two kinds is an error.
@@ -232,17 +232,17 @@ other value than the two kinds is an error.
         if not isinstance(spec, dict) or not isinstance(spec.get("members", []), list):
             sys.exit(f"{path}: expected a mapping with members: [...]")
         if "type" not in spec:
-            print(f"{path}: no type: an archive collection (write `type: archive`, or `type: selection` "
+            print(f"{path}: no type: a catalogue (write `type: catalogue`, or `type: selection` "
                   "for a collection vetting revisions, section 10.1)")
-            spec["type"] = "archive"
+            spec["type"] = "catalogue"
         if spec["type"] not in KINDS:
-            sys.exit(f"{path}: type must be archive or selection, not {spec['type']}")
+            sys.exit(f"{path}: type must be catalogue or selection, not {spec['type']}")
         <<check the keys of the members of each kind>>
         return spec
 
 The keys of the two kinds of members exclude each other (section 10.2): a
 member of a selection has revisions and neither a version nor `follow`,
-since following is not vetting; a member of an archive collection has no
+since following is not vetting; a member of a catalogue has no
 revisions. A mistake here is better reported before anything is fetched.
 
     # in check the keys of the members of each kind:
@@ -251,7 +251,7 @@ revisions. A mistake here is better reported before anything is fetched.
             sys.exit(f"{path}: every member needs an id")
         if spec["type"] == "selection" and (e.get("version") or e.get("follow")):
             sys.exit(f"{path}: {e['id']}: a member of a selection gives its revisions, not a version or follow")
-        if spec["type"] == "archive" and e.get("revisions"):
+        if spec["type"] == "catalogue" and e.get("revisions"):
             sys.exit(f"{path}: {e['id']}: revisions belong to selections (type: selection)")
 
 Reading archives
@@ -389,8 +389,8 @@ last object version holding each document version, among those up to
 `at`, which needs the `object.json` of every one of them. The current
 version is the last entry. A selection uses the history to find the
 object version holding each vetted document version, and to keep its
-revisions in the order of the document's history (section 10.2); an
-archive collection, to cache the citation of the current version.
+revisions in the order of the document's history (section 10.2); a
+catalogue, to cache the citation of the current version.
 
     # in the document version and the history of an object of an archive:
     def doc_version(self, obj_id, inv, ver):
@@ -418,16 +418,16 @@ Resolving a member
 
 Resolving turns an entry of `collection.yaml` into a member of
 `members.json`, in a collection of the given kind. It reads the object,
-here or in its archive, pins it (an archive collection) or its revisions
+here or in its archive, pins it (a catalogue) or its revisions
 (a selection), and builds the member record from the `object.json` and
-`datacite.json` of the version presented: the current version of an
-archive collection's member, the last revision of a selection's. `old` is
+`datacite.json` of the version presented: the current version of a
+catalogue's member, the last revision of a selection's. `old` is
 the member as the previous version of the collection has it, if any, so
 that revisions already vetted keep their pins; it is ignored if it names
 another archive's object of the same identifier.
 
     # in resolving a member of a collection:
-    def resolve(entry, kind="archive", old=None):
+    def resolve(entry, kind="catalogue", old=None):
         """The member for an entry of collection.yaml in a collection of KIND
         (mirror: yes copies the object into this archive first, and lists the
         copy as a mirror); OLD is the member in the previous collection version."""
@@ -445,7 +445,7 @@ another archive's object of the same identifier.
         if kind == "selection":
             <<the revisions of a member of a selection>>
         else:
-            <<the pinned version of a member of an archive collection>>
+            <<the pinned version of a member of a catalogue>>
         dc = json.loads(src.file(obj_id, inv, shown, "datacite.json"))
         obj = json.loads(src.file(obj_id, inv, shown, P.OBJ))
         <<the member record of a resolved entry>>
@@ -467,9 +467,9 @@ member is read from the disk; any other through a `Remote`, whose archive
 identifier is the one its discovery document states, whatever address was
 written in the entry.
 
-### A member of an archive collection
+### A member of a catalogue
 
-A member of an archive collection pins the head of its object
+A member of a catalogue pins the head of its object
 (section 10.2), and presents its current version, read from the history
 of the head. An entry may fix another version: the member then does not
 follow (below), and keeps that pin. The specification calls the pinned
@@ -478,7 +478,7 @@ which describes the pin of a member that follows; a fixed earlier version
 pins the object as it was then, every version up to it. The curator is
 told, since vetting one version of a document is what a selection does.
 
-    # in the pinned version of a member of an archive collection:
+    # in the pinned version of a member of a catalogue:
     ver = entry.get("version") or inv["head"]
     if ver not in inv["versions"]:
         sys.exit(f"{obj_id} has no object version {ver} (versions: {', '.join(inv['versions'])})")
@@ -564,8 +564,7 @@ on the web records the address its readers know; for a local folder, the
 `file://` URL is all there is, and for this archive its base URL. The
 cached citation, from the version presented, holds the title, the
 creators as display names, the year and, when known, the `Issued` date,
-by which collections in date order are sorted. A member of an archive
-collection has its pin, a member of a selection its revisions.
+by which collections in date order are sorted. A member of a catalogue has its pin, a member of a selection its revisions.
 
     # in the member record of a resolved entry:
     archive_url = url if not local and url.startswith(("http://", "https://")) else src.url
@@ -589,13 +588,13 @@ collection has its pin, a member of a selection its revisions.
 The citation is added last, so that it stands at the end of the member
 in `members.json`, after the fields that matter.
 
-A member of an archive collection follows its object unless the entry
+A member of a catalogue follows its object unless the entry
 says otherwise (`follow: no`, `false`, `none` or `fixed`) or fixes a
 version: a fixed version that followed its object would not stay fixed.
 A member of a selection never follows (section 10.2).
 
     # in whether a resolved member follows its object:
-    if kind == "archive" and str(entry.get("follow", "latest")).lower() not in ("no", "false", "none", "fixed") \
+    if kind == "catalogue" and str(entry.get("follow", "latest")).lower() not in ("no", "false", "none", "fixed") \
             and not entry.get("version"):
         m["follow"] = "latest"
 
@@ -623,7 +622,7 @@ a collection counts the changes of its member list (section 7.4), and its
 `Issued` date is that of its first version.
 
     # in writing a collection version:
-    def write(coll_id, members, title, description, order, message, kind="archive"):
+    def write(coll_id, members, title, description, order, message, kind="catalogue"):
         """A new version of collection COLL_ID, if its member list changed."""
         coll_dir = P.OCFL / coll_id
         inv = P.load_inventory(coll_dir)
@@ -689,8 +688,7 @@ notices) applies.
         "status": "active"})
 
 The chapters on the core also use `write`: `osheaf init --curated`
-creates an empty main collection with order `manual`, an archive
-collection until the curator's first `sync` says otherwise, which `osheaf
+creates an empty main collection with order `manual`, a catalogue until the curator's first `sync` says otherwise, which `osheaf
 collect` then leaves alone, so that the curator's list is never replaced
 by the archive's own documents.
 
@@ -738,8 +736,7 @@ they are sorted by `Issued` alone, those without a date last.
 
 `update` needs no input file: it reads the last version of the collection
 and acts according to its kind. A collection written before the
-specification had kinds has no `type`: it is taken as an archive
-collection, and its next version says so.
+specification had kinds has no `type`: it is taken as a catalogue, and its next version says so.
 
     # in the command collection update:
     def update(args):
@@ -754,8 +751,8 @@ collection, and its next version says so.
         dc = P.read_json(d, inv, "datacite.json")
         kind = doc.get("type")
         if kind is None:
-            print(f"{coll_id}: no type: an archive collection (section 10.1)")
-            kind = "archive"
+            print(f"{coll_id}: no type: a catalogue (section 10.1)")
+            kind = "catalogue"
         if kind == "selection":
             report_unvetted(coll_id, doc["members"])
             return
@@ -859,7 +856,7 @@ Checking the members of other archives
 `osheaf verify --remote` (in the chapters on the core) checks the pins of
 the members of every collection. Members of this archive are checked
 with the rest of the archive; this function checks the others. Each pin
-is checked: the pin of a member of an archive collection, and the pin of
+is checked: the pin of a member of a catalogue, and the pin of
 every revision of a member of a selection, whose object version must
 also hold the document version the revision states (section 14).
 

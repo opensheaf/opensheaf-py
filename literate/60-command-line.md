@@ -444,11 +444,11 @@ osheaf mirror https://example.org/papers/ kpz-uniqueness
     mi.set_defaults(func=None)
 
 `collection` keeps curated collections, whose members may belong to any
-archive: archive collections, which pin whole objects, and selections,
+archive: catalogues, which pin whole objects, and selections,
 which pin the revisions their curator vetted (section 10.1). `sync`
 writes a collection from a file `collection.yaml`, which gives its kind
 and lists its members in the curator's order; `update` moves the members
-of an archive collection that follow their objects to their new heads,
+of a catalogue that follow their objects to their new heads,
 bringing up to date the mirrors held here, and for a selection only
 reports the versions not vetted. The collection is by default the main
 collection of the archive.
@@ -462,7 +462,7 @@ Its `--from` is not the file of options of the other commands but the
 description of the collection, read by the collections module.
 
     # in the options of osheaf collection:
-    co = sub.add_parser("collection", help="curated collections (archive collections or selections), "
+    co = sub.add_parser("collection", help="curated collections (catalogues or selections), "
                         "with members from any archive")
     co.add_argument("action", choices=["sync", "update"])
     co.add_argument("collection", nargs="?", help="the collection object (default: the main collection)")

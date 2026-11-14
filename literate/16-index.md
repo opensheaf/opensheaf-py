@@ -318,9 +318,9 @@ element, since the HTML export does not render folds.
 
 An entry is made from the version the collection presents
 (section 10.2): the current version as of the pinned head, for a member of
-an archive collection, or the last revision, for a member of a selection.
+a catalogue, or the last revision, for a member of a selection.
 The pin shown is that of the presented version for a selection, and the
-member's own pin (the head) for an archive collection. The title links
+member's own pin (the head) for a catalogue. The title links
 the landing page, for every document; before, the title of a TeXmacs
 document linked its HTML version and the others linked nothing. The
 authors are written by the rule of every presentation, `A, B and C`

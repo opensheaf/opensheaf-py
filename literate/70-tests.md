@@ -279,7 +279,7 @@ it, and the verifier checks that every notice stays.
         assert P.read_json(d, P.load_inventory(d), P.OBJ)["notices"] == [notice]
         assert finish() == []
 
-The main collection is an archive collection (section 10.2): it says so
+The main collection is a catalogue (section 10.2): it says so
 in its `type`, and each member pins the head of its object, whatever the
 head holds. Here the head of `paper-a` holds a version found later, and
 is not the object version holding the current version; the member pins
@@ -294,7 +294,7 @@ from the history of the pinned version.
         assert finish() == []
         cdir = P.OCFL / CONFIG["mainCollection"]
         members = P.read_json(cdir, P.load_inventory(cdir), "members.json")
-        assert members["type"] == "archive"
+        assert members["type"] == "catalogue"
         m = members["members"][0]
         d = P.OCFL / "paper-a"
         assert m["version"] == "v3" and m["inventorySha512"] == P.digest(d / "v3" / "inventory.json")
@@ -322,7 +322,7 @@ collection has no `type` at all.
         errors = finish()
         assert any("has no version, inventorySha512 or follow" in e for e in errors)
         assert any("v1 does not hold document version 2" in e for e in errors)
-        collections.write("untyped", [base], "Untyped", "No type.", "manual", None, "archive")
+        collections.write("untyped", [base], "Untyped", "No type.", "manual", None, "catalogue")
         cdir = P.OCFL / "untyped"
         mem = P.read_json(cdir, P.load_inventory(cdir), "members.json")
         mem.pop("type")
@@ -915,13 +915,13 @@ Archive `papers` has two documents. Archive `reading` is created with a
 curated main collection and synchronised from a `collection.yaml` that
 lists `two` before `one`, the second with `follow: no`. The file has no
 `type`, as files written before the specification had kinds: the
-collection is an archive collection, and the tool says so. The members
+collection is a catalogue, and the tool says so. The members
 keep the curator's order (`manual`, section 10.2), record the identifier
 of their archive, and their pins are confirmed by `check_remote`, which
 reads the other archive as a verifier would (section 14). Then `two` gets
 a new version in its archive; `collection update` moves `two` to it and
 leaves `one`, which does not follow, at its version. Finally `two` is
-withdrawn: an archive collection follows the head whatever it holds
+withdrawn: a catalogue follows the head whatever it holds
 (section 10.2), so `update` pins the withdrawal too, and the home page
 shows it.
 
@@ -940,10 +940,10 @@ shows it.
         (tmp_path / "collection.yaml").write_text(
             f"title: Reading\nmembers:\n  - {{archive: {a}, id: two}}\n  - {{archive: {a}, id: one, follow: no}}\n")
         run("--root", str(c), "collection", "sync", "--from", str(tmp_path / "collection.yaml"))
-        assert "no type: an archive collection" in capsys.readouterr().out
+        assert "no type: a catalogue" in capsys.readouterr().out
         members = P.read_json(c / "ocfl" / "collection-main", P.load_inventory(c / "ocfl" / "collection-main"),
                               "members.json")
-        assert members["type"] == "archive"
+        assert members["type"] == "catalogue"
         assert [m["id"] for m in members["members"]] == ["two", "one"] and members["order"] == "manual"
         assert members["members"][0]["archive"] == "tag:example.org,2026:papers"
         run("--root", str(c), "index")
@@ -958,7 +958,7 @@ shows it.
                           "members.json")["members"]
         assert new[0]["version"] == "v2" and new[1]["version"] == "v1"
         assert collections.check_remote(new) == []
-        # a withdrawal is a new head, which the archive collection follows
+        # a withdrawal is a new head, which the catalogue follows
         run("--root", str(a), "withdraw", "two", "--reason", "a mistake")
         run("--root", str(c), "collection", "update")
         new = P.read_json(c / "ocfl" / "collection-main", P.load_inventory(c / "ocfl" / "collection-main"),
@@ -1118,7 +1118,7 @@ authors' storage root, the pin is confirmed on the library's copy.
         disc["mirrors"] = [collections.norm_url(str(lib))]
         (a / "opensheaf.json").write_text(json.dumps(disc))
         make_archive(c, "reading", curated=True)
-        (tmp_path / "c.yaml").write_text(f"type: archive\nmembers:\n  - {{archive: {a}, id: open}}\n")
+        (tmp_path / "c.yaml").write_text(f"type: catalogue\nmembers:\n  - {{archive: {a}, id: open}}\n")
         run("--root", str(c), "collection", "sync", "--from", str(tmp_path / "c.yaml"))
         members = P.read_json(c / "ocfl" / "collection-main", P.load_inventory(c / "ocfl" / "collection-main"),
                               "members.json")["members"]

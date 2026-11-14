@@ -145,7 +145,7 @@ def test_main_collection_pins_heads(archive):
     assert finish() == []
     cdir = P.OCFL / CONFIG["mainCollection"]
     members = P.read_json(cdir, P.load_inventory(cdir), "members.json")
-    assert members["type"] == "archive"
+    assert members["type"] == "catalogue"
     m = members["members"][0]
     d = P.OCFL / "paper-a"
     assert m["version"] == "v3" and m["inventorySha512"] == P.digest(d / "v3" / "inventory.json")
@@ -167,7 +167,7 @@ def test_verify_catches_malformed_selection_members(archive):
     errors = finish()
     assert any("has no version, inventorySha512 or follow" in e for e in errors)
     assert any("v1 does not hold document version 2" in e for e in errors)
-    collections.write("untyped", [base], "Untyped", "No type.", "manual", None, "archive")
+    collections.write("untyped", [base], "Untyped", "No type.", "manual", None, "catalogue")
     cdir = P.OCFL / "untyped"
     mem = P.read_json(cdir, P.load_inventory(cdir), "members.json")
     mem.pop("type")
@@ -592,10 +592,10 @@ def test_curated_collection_across_archives(tmp_path, capsys):
     (tmp_path / "collection.yaml").write_text(
         f"title: Reading\nmembers:\n  - {{archive: {a}, id: two}}\n  - {{archive: {a}, id: one, follow: no}}\n")
     run("--root", str(c), "collection", "sync", "--from", str(tmp_path / "collection.yaml"))
-    assert "no type: an archive collection" in capsys.readouterr().out
+    assert "no type: a catalogue" in capsys.readouterr().out
     members = P.read_json(c / "ocfl" / "collection-main", P.load_inventory(c / "ocfl" / "collection-main"),
                           "members.json")
-    assert members["type"] == "archive"
+    assert members["type"] == "catalogue"
     assert [m["id"] for m in members["members"]] == ["two", "one"] and members["order"] == "manual"
     assert members["members"][0]["archive"] == "tag:example.org,2026:papers"
     run("--root", str(c), "index")
@@ -610,7 +610,7 @@ def test_curated_collection_across_archives(tmp_path, capsys):
                       "members.json")["members"]
     assert new[0]["version"] == "v2" and new[1]["version"] == "v1"
     assert collections.check_remote(new) == []
-    # a withdrawal is a new head, which the archive collection follows
+    # a withdrawal is a new head, which the catalogue follows
     run("--root", str(a), "withdraw", "two", "--reason", "a mistake")
     run("--root", str(c), "collection", "update")
     new = P.read_json(c / "ocfl" / "collection-main", P.load_inventory(c / "ocfl" / "collection-main"),
@@ -730,7 +730,7 @@ def test_check_remote_tries_the_archive_mirrors(tmp_path):
     disc["mirrors"] = [collections.norm_url(str(lib))]
     (a / "opensheaf.json").write_text(json.dumps(disc))
     make_archive(c, "reading", curated=True)
-    (tmp_path / "c.yaml").write_text(f"type: archive\nmembers:\n  - {{archive: {a}, id: open}}\n")
+    (tmp_path / "c.yaml").write_text(f"type: catalogue\nmembers:\n  - {{archive: {a}, id: open}}\n")
     run("--root", str(c), "collection", "sync", "--from", str(tmp_path / "c.yaml"))
     members = P.read_json(c / "ocfl" / "collection-main", P.load_inventory(c / "ocfl" / "collection-main"),
                           "members.json")["members"]

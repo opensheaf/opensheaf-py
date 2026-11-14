@@ -9,7 +9,7 @@ inventory of an object version.
 collection.yaml (read with every value as text):
 
     id: collection-main            # optional: the collection object (default: the main collection)
-    type: archive                  # archive (the default) or selection (section 10.1)
+    type: catalogue                  # catalogue (the default) or selection (section 10.1)
     title: Stochastic quantisation
     description: Papers on the stochastic quantisation of field theories.
     order: manual                  # manual (default: the order below) or issued-desc / issued-asc
@@ -29,7 +29,7 @@ In a selection each member gives the revisions vetted instead:
         revisions: [2, 3]          # document versions (or object versions: [v2, v4])
       - {archive: ., id: accepted-paper, revisions: [1]}
 
-An archive collection pins the head of each object (section 10.2): `sync`
+A catalogue pins the head of each object (section 10.2): `sync`
 reads the member archive's discovery document and the object's inventory,
 checks the pin against the checksum file the archive publishes, and caches a
 citation of the current version. `update` moves members with follow: latest to
@@ -56,7 +56,7 @@ from pathlib import Path
 from . import core as P
 
 UA = {"User-Agent": "opensheaf-py (https://github.com/opensheaf/opensheaf-py)"}
-KINDS = ("archive", "selection")
+KINDS = ("catalogue", "selection")
 
 
 def norm_url(url):
@@ -149,7 +149,7 @@ class Here(Archive):
         return P.digest(P.OCFL / obj_id / ver / "inventory.json")
 
 
-def resolve(entry, kind="archive", old=None):
+def resolve(entry, kind="catalogue", old=None):
     """The member for an entry of collection.yaml in a collection of KIND
     (mirror: yes copies the object into this archive first, and lists the
     copy as a mirror); OLD is the member in the previous collection version."""
@@ -224,7 +224,7 @@ def resolve(entry, kind="archive", old=None):
         m["version"], m["inventorySha512"] = ver, pin
     if dc.get("doi"):
         m["doi"] = dc["doi"]
-    if kind == "archive" and str(entry.get("follow", "latest")).lower() not in ("no", "false", "none", "fixed") \
+    if kind == "catalogue" and str(entry.get("follow", "latest")).lower() not in ("no", "false", "none", "fixed") \
             and not entry.get("version"):
         m["follow"] = "latest"
     d = P.OCFL / obj_id
@@ -246,22 +246,22 @@ def load_spec(path):
     if not isinstance(spec, dict) or not isinstance(spec.get("members", []), list):
         sys.exit(f"{path}: expected a mapping with members: [...]")
     if "type" not in spec:
-        print(f"{path}: no type: an archive collection (write `type: archive`, or `type: selection` "
+        print(f"{path}: no type: a catalogue (write `type: catalogue`, or `type: selection` "
               "for a collection vetting revisions, section 10.1)")
-        spec["type"] = "archive"
+        spec["type"] = "catalogue"
     if spec["type"] not in KINDS:
-        sys.exit(f"{path}: type must be archive or selection, not {spec['type']}")
+        sys.exit(f"{path}: type must be catalogue or selection, not {spec['type']}")
     for e in spec.get("members", []):
         if not isinstance(e, dict) or not e.get("id"):
             sys.exit(f"{path}: every member needs an id")
         if spec["type"] == "selection" and (e.get("version") or e.get("follow")):
             sys.exit(f"{path}: {e['id']}: a member of a selection gives its revisions, not a version or follow")
-        if spec["type"] == "archive" and e.get("revisions"):
+        if spec["type"] == "catalogue" and e.get("revisions"):
             sys.exit(f"{path}: {e['id']}: revisions belong to selections (type: selection)")
     return spec
 
 
-def write(coll_id, members, title, description, order, message, kind="archive"):
+def write(coll_id, members, title, description, order, message, kind="catalogue"):
     """A new version of collection COLL_ID, if its member list changed."""
     coll_dir = P.OCFL / coll_id
     inv = P.load_inventory(coll_dir)
@@ -338,8 +338,8 @@ def update(args):
     dc = P.read_json(d, inv, "datacite.json")
     kind = doc.get("type")
     if kind is None:
-        print(f"{coll_id}: no type: an archive collection (section 10.1)")
-        kind = "archive"
+        print(f"{coll_id}: no type: a catalogue (section 10.1)")
+        kind = "catalogue"
     if kind == "selection":
         report_unvetted(coll_id, doc["members"])
         return

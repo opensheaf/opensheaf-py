@@ -116,7 +116,7 @@ The landing page of a document receives, besides `{{archive_name}}`,
 - `{{cite}}`, the suggested citation, and `{{licence}}`, the licence,
   linked when it has an address;
 - `{{pin}}`, the pin by which the collection fixes the document (the head
-  of the object for an archive collection, the last revision for a
+  of the object for a catalogue, the last revision for a
   selection), and `{{pin_url}}`, the address of the inventory it is the
   digest of.
 

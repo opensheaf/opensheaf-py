@@ -999,7 +999,7 @@ ORDER = "issued-desc"
 
 def member_pins(m):
     """[(object version, inventory digest, document version or None)] of a
-    member: its version in an archive collection, each revision in a
+    member: its version in a catalogue, each revision in a
     selection (section 10.2)."""
     if "revisions" in m:
         return [(r.get("version"), r.get("inventorySha512"), r.get("documentVersion"))
@@ -1028,8 +1028,7 @@ def member_order(members):
 
 def collect(args):
     """A new version of the main collection when a document has a new object
-    version; members pin the head of their object and follow it (an archive
-    collection, section 10.2)."""
+    version; members pin the head of their object and follow it (a catalogue, section 10.2)."""
     init_storage_root()
     coll_id = ARCHIVE["mainCollection"]
     cinv = load_inventory(OCFL / coll_id)
@@ -1057,14 +1056,14 @@ def collect(args):
     version, issued = 1, TODAY
     if inv:
         old = read_json(coll_dir, inv, "members.json")
-        if old["members"] == members and old.get("type") == "archive":
+        if old["members"] == members and old.get("type") == "catalogue":
             print(f"{coll_id}: unchanged ({inv['head']})")
             return
         version = read_json(coll_dir, inv, OBJ)["documentVersion"] + 1
         issued = date_of(read_json(coll_dir, inv, "datacite.json"), "Issued") or TODAY
     cur = ARCHIVE["curator"]
     tmp = Path(tempfile.mkdtemp())
-    write_json(tmp / "members.json", {"format": "opensheaf-collection/0.1", "type": "archive",
+    write_json(tmp / "members.json", {"format": "opensheaf-collection/0.1", "type": "catalogue",
                                       "order": ORDER, "members": members})
     write_json(tmp / "datacite.json", {
         "titles": [{"title": ARCHIVE["name"]}],
@@ -1455,12 +1454,12 @@ def verify_errors():
                 mem = read_json(d, inv, "members.json", ver)
                 check_schema(f"{where}/{ver}/members.json", mem, "opensheaf-collection-0.1.schema.json")
                 kind = mem.get("type")
-                if kind not in ("archive", "selection"):
-                    errors.append(f"{where}: {ver} members.json has no valid type (archive or selection)")
+                if kind not in ("catalogue", "selection"):
+                    errors.append(f"{where}: {ver} members.json has no valid type (catalogue or selection)")
                 for m in mem.get("members", []):
                     who = f"{where}: {ver} member {m.get('id')}"
-                    if kind == "archive" and (not m.get("version") or not m.get("inventorySha512") or "revisions" in m):
-                        errors.append(f"{who}: a member of an archive collection needs version and inventorySha512, "
+                    if kind == "catalogue" and (not m.get("version") or not m.get("inventorySha512") or "revisions" in m):
+                        errors.append(f"{who}: a member of a catalogue needs version and inventorySha512, "
                                       "and no revisions")
                     if kind == "selection":
                         revs = m.get("revisions")

@@ -25,11 +25,11 @@ support it: each version to its inventory, each member to its pin.
 
 The members shown are those of the main collection: the archive's own
 documents, built by the core, or a curated list with members of other
-archives ([collections](20-collections.md)), an archive collection or a
+archives ([collections](20-collections.md)), a catalogue or a
 selection. A member of this archive gets a landing page; a member of
 another archive gets an entry on the home page only, linking to its own
 archive, which has its own landing pages. Each member is presented in
-one version (section 10.2): a member of an archive collection in its
+one version (section 10.2): a member of a catalogue in its
 current version, read from the history of the pinned head; a member of a
 selection in the last revision of its set, with the list of the revisions
 vetted.
@@ -248,7 +248,7 @@ the name its source gave it.
 A landing page is at `paper/<id>/` and presents the version the
 collection presents (`presented_version`, in the chapter on the
 [main collection](15-main-collection.md)): the current version, as of the
-pinned head, for an archive collection (section 7.3), or the last
+pinned head, for a catalogue (section 7.3), or the last
 revision for a selection, whose vetted document versions are marked in
 the list of versions. Two things are read from the head instead, which
 may be a later object version (a description-only version, a notice, a
@@ -607,12 +607,13 @@ site, as `https://mgubi.org/papers/`, has the line
 
 A document that left the collection loses its landing page, which is
 generated output like the rest; the document itself stays in the
-storage root.
+storage root. Only folders are landing pages: files left in `paper/` by
+others (the `.DS_Store` of macOS) are not touched.
 
     # in remove the landing pages of former members:
     # remove landing pages of documents no longer in the collection
     for p in (root_out / "paper").glob("*") if (root_out / "paper").exists() else []:
-        if p.name not in {m["id"] for m in members if m.get("archive") == P.ARCHIVE["archiveId"]}:
+        if p.is_dir() and p.name not in {m["id"] for m in members if m.get("archive") == P.ARCHIVE["archiveId"]}:
             shutil.rmtree(p)
 
 Members of other archives

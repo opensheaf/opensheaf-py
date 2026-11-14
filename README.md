@@ -135,7 +135,7 @@ osheaf arxiv import DOWNLOADS [ARXIV-ID ...] [--update] [--versions v1,v3]
   archive or any other (an `https://` address, or a local folder), in the
   curator's order, each pinned by the SHA-512 of an inventory and checked
   against the checksum file its archive publishes. `collection.yaml` gives
-  the kind (section 10.1): `type: archive` (the default, with a message, for
+  the kind (section 10.1): `type: catalogue` (the default, with a message, for
   files without a type) pins each object at its head, and `update` follows
   the members with `follow: latest` to their new heads, whatever they hold (a
   withdrawal too), bringing up to date the mirrors held here; `type:
@@ -176,7 +176,7 @@ osheaf arxiv import DOWNLOADS [ARXIV-ID ...] [--update] [--versions v1,v3]
   replacing the keywords; arXiv categories stay) or the authors (`--author`,
   repeated, as in a deposit, replacing the list); the other fields are kept,
   and a correction that changes nothing is refused.
-- **collect**: a new version of the main collection, an archive collection,
+- **collect**: a new version of the main collection, a catalogue,
   when a document has a new object version; members are ordered
   `issued-desc`, pin the head of their object and follow it, and the index
   shows their current versions.

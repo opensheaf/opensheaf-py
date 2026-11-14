@@ -274,7 +274,7 @@ def render(members, home=True):
     (root_out / "sitemap.xml").write_text("\n".join(sm) + "\n", encoding="utf-8")
     # remove landing pages of documents no longer in the collection
     for p in (root_out / "paper").glob("*") if (root_out / "paper").exists() else []:
-        if p.name not in {m["id"] for m in members if m.get("archive") == P.ARCHIVE["archiveId"]}:
+        if p.is_dir() and p.name not in {m["id"] for m in members if m.get("archive") == P.ARCHIVE["archiveId"]}:
             shutil.rmtree(p)
     return len(written)
 

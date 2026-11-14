@@ -166,7 +166,7 @@ def build_parser():
     mi.add_argument("--licence-checked", action="store_true",
                     help="redistribution is allowed although a licence is not an open one")
     mi.set_defaults(func=None)
-    co = sub.add_parser("collection", help="curated collections (archive collections or selections), "
+    co = sub.add_parser("collection", help="curated collections (catalogues or selections), "
                         "with members from any archive")
     co.add_argument("action", choices=["sync", "update"])
     co.add_argument("collection", nargs="?", help="the collection object (default: the main collection)")
