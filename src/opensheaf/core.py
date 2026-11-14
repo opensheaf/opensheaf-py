@@ -351,7 +351,8 @@ def run_texmacs(calls):
 
 def export_calls(doc, pdf=None, html=None):
     """Scheme code exporting DOC; a PDF export typesets it first."""
-    c = f'(let ((u (string->url "{doc}"))) (load-buffer u) (switch-to-buffer u)'
+    c = (f'(let ((u (string->url "{doc}"))) (load-buffer u) (switch-to-buffer u)'
+         ' (update-forced)')
     if pdf:
         c += f' (export-buffer-main u (string->url "{pdf}") "pdf" (list :overwrite))'
     if html:

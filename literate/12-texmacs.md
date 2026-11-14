@@ -112,10 +112,19 @@ the buffer to PDF, to HTML, or both, in this order: the PDF export
 typesets the document first, and the HTML export then finds it typeset,
 with its numbers and references.
 
+Before exporting, the buffer is typeset as for the screen, with
+`(update-forced)`. The PDF export takes the hyperlinks from tables that this
+typesetting fills, and a buffer just loaded, never displayed, has none: up to
+TeXmacs 2.1.5, a PDF exported headless lost every external link (its `hlink`s
+and `slink`s), while the links inside the document survived. The fork of
+TeXmacs fixes this in the printer itself (mgubi/texmacs#341); the call costs
+one typesetting and makes the tools independent of the version.
+
     # in the Scheme code exporting a TeXmacs document:
     def export_calls(doc, pdf=None, html=None):
         """Scheme code exporting DOC; a PDF export typesets it first."""
-        c = f'(let ((u (string->url "{doc}"))) (load-buffer u) (switch-to-buffer u)'
+        c = (f'(let ((u (string->url "{doc}"))) (load-buffer u) (switch-to-buffer u)'
+             ' (update-forced)')
         if pdf:
             c += f' (export-buffer-main u (string->url "{pdf}") "pdf" (list :overwrite))'
         if html:
