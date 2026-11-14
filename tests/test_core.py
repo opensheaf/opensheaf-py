@@ -188,6 +188,44 @@ def test_sources_missing(archive):
     assert finish() == []
 
 
+def test_licence_terms_added_by_a_description_only_version(archive):
+    licence = {"path": "LICENCE.txt", "mediaType": "text/plain"}
+    put("paper-a", 1, FILES1)
+    put("paper-a", 1, dict(FILES1, **{"LICENCE.txt": b"The terms of the licence."}),
+        extra_obj={"licence": licence}, description_only=True)
+    assert finish() == []
+
+
+def test_inventory_copies_record_the_versions_up_to_theirs(archive):
+    put("paper-a", 1, FILES1)
+    put("paper-a", 2, FILES2)
+    assert finish() == []
+    d = P.OCFL / "paper-a"
+    shutil.copyfile(d / "v1" / "inventory.json", d / "v2" / "inventory.json")
+    errors = P.verify_errors()
+    assert "ocfl/paper-a: v2 the inventory copy has the head v1" in errors
+    assert "ocfl/paper-a: v2 the inventory copy does not record exactly the versions v1 to v2" in errors
+    copy = P.load_inventory(d)
+    copy["versions"]["v1"]["message"] = "another message"
+    (d / "v2" / "inventory.json").write_text(json.dumps(copy))
+    errors = P.verify_errors()
+    assert ("ocfl/paper-a: v2 the inventory copy disagrees with the inventory"
+            " about the versions it records") in errors
+    assert not any("the inventory copy has the head" in e for e in errors)
+
+
+def test_index_pins_required_by_the_profile_website(archive, monkeypatch, capsys):
+    put("paper-a", 1, FILES1)
+    assert finish() == []
+    (archive / "index.html").write_text("<p>an index made by other tools</p>")
+    assert P.verify_errors() == []
+    assert "index.html does not show the pin of paper-a (the archive does not declare" \
+        " the profile website)" in capsys.readouterr().out
+    monkeypatch.setitem(P.ARCHIVE, "profiles", ["website"])
+    P.write_json(archive / "opensheaf.json", P.discovery())
+    assert "index.html does not show the pin of paper-a" in P.verify_errors()
+
+
 def test_member_order():
     m = lambda i, issued, avail=None: {"id": i, "cite": {"issued": issued, "available": avail}}
     out = P.member_order([m("b", "2020-01-01"), m("a", "2020-01-01"), m("c", None), m("d", "2024-05-01")])

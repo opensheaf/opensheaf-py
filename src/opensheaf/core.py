@@ -1313,6 +1313,8 @@ def document_version_errors(obj_id, d, inv):
         notes = {x["path"] for x in obj.get("notices", []) if x.get("path")}
         if obj.get("withdrawal", {}).get("reason", {}).get("path"):
             notes.add(obj["withdrawal"]["reason"]["path"])
+        if (obj.get("licence") or {}).get("path"):
+            notes.add(obj["licence"]["path"])
         own = {p: dig for dig, ps in vinfo["state"].items() for p in ps
                if p not in ("datacite.json", OBJ) and p not in notes}
         change = (obj.get("changes") or {}).get("text")
@@ -1406,6 +1408,16 @@ def verify_errors():
         for ver, vinfo in inv["versions"].items():
             if not (d / ver / "inventory.json").exists() or not (d / ver / "inventory.json.sha512").exists():
                 errors.append(f"{where}: {ver} has no inventory copy")
+            else:
+                copy = json.loads((d / ver / "inventory.json").read_text())
+                upto = [v for v in inv["versions"] if int(v[1:]) <= int(ver[1:])]
+                if copy.get("head") != ver:
+                    errors.append(f"{where}: {ver} the inventory copy has the head {copy.get('head')}")
+                if sorted(copy.get("versions") or {}) != sorted(upto):
+                    errors.append(f"{where}: {ver} the inventory copy does not record exactly the versions v1 to {ver}")
+                elif any(copy["versions"][v] != inv["versions"][v] for v in upto):
+                    errors.append(f"{where}: {ver} the inventory copy disagrees with the inventory"
+                                  " about the versions it records")
             if not vinfo.get("user", {}).get("name") or not vinfo.get("message"):
                 errors.append(f"{where}: {ver} lacks a user name or a message")
             logical = {p for ps in vinfo["state"].values() for p in ps}
@@ -1505,14 +1517,19 @@ def verify_errors():
         if not ocfl.StorageRoot(root=str(OCFL)).validate(log_warnings=False):
             errors.append("ocfl: the OCFL validator rejects the storage root")
 
-    # the presentation shows the current pins
+    # the presentation shows the current pins (appendix C, for the profile website)
     coll = found.get(disc.get("mainCollection"))
     if coll and (ROOT / "index.html").exists():
+        website = "website" in (disc.get("profiles") or [])
         html = (ROOT / "index.html").read_text(encoding="utf-8", errors="replace")
         mem = json.loads(read_logical(coll[0], coll[1], "members.json").read_text())
         for m in mem["members"]:
             if (member_pins(m)[-1][1] or "")[:32] not in html:
-                errors.append(f"index.html does not show the pin of {m['id']}")
+                if website:
+                    errors.append(f"index.html does not show the pin of {m['id']}")
+                else:
+                    print(f"  index.html does not show the pin of {m['id']}"
+                          " (the archive does not declare the profile website)")
     return errors
 
 

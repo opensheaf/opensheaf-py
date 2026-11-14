@@ -446,7 +446,16 @@ holds for the file of a withdrawal reason.
             files[lp["path"]] = dest
 
 The files left out of the upload are those named by the notices of the
-head and by its withdrawal reason, if any.
+head and by its withdrawal reason, if any. The file of the licence terms
+(`licence`, section 9) is not among them, although `osheaf verify` does
+not count it among the files of the document version either (licence
+terms describe the object, sections 7.3 and 9): this list serves only to
+choose what is uploaded, and the licence terms are the terms under which
+the uploaded files are distributed. They are deposited with the content,
+not written later about it as a notice is; and Zenodo knows licences only
+by their SPDX identifiers, recording any other as "Other (Not Open)" with
+its name in the notes (see below), so the full terms of such a licence
+reach the readers of the record only as a file next to the content.
 
     # in Zenodo: files of notices:
     def notice_files(obj):

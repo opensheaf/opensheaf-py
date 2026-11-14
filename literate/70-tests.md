@@ -346,6 +346,58 @@ main source, and the archive is valid.
         assert "mainSource" not in obj and obj["sourcesMissing"]
         assert finish() == []
 
+The file of the licence terms (`licence`, section 9) describes the object,
+not the document version: a description-only version may add it, and the
+document version keeps the same files (sections 7.3 and 9).
+
+    # in test: the rules of document versions:
+    def test_licence_terms_added_by_a_description_only_version(archive):
+        licence = {"path": "LICENCE.txt", "mediaType": "text/plain"}
+        put("paper-a", 1, FILES1)
+        put("paper-a", 1, dict(FILES1, **{"LICENCE.txt": b"The terms of the licence."}),
+            extra_obj={"licence": licence}, description_only=True)
+        assert finish() == []
+
+The copy of the inventory in each version is the inventory as of that
+version (OCFL 1.1, section 3.5.3): its head is the version, and it records
+the versions up to it as the root inventory does. Here the copy of `v2`
+is replaced by that of `v1`, which has another head and lacks `v2`; then by
+a copy of the right shape whose `v1` has another message.
+
+    # in test: the rules of document versions:
+    def test_inventory_copies_record_the_versions_up_to_theirs(archive):
+        put("paper-a", 1, FILES1)
+        put("paper-a", 2, FILES2)
+        assert finish() == []
+        d = P.OCFL / "paper-a"
+        shutil.copyfile(d / "v1" / "inventory.json", d / "v2" / "inventory.json")
+        errors = P.verify_errors()
+        assert "ocfl/paper-a: v2 the inventory copy has the head v1" in errors
+        assert "ocfl/paper-a: v2 the inventory copy does not record exactly the versions v1 to v2" in errors
+        copy = P.load_inventory(d)
+        copy["versions"]["v1"]["message"] = "another message"
+        (d / "v2" / "inventory.json").write_text(json.dumps(copy))
+        errors = P.verify_errors()
+        assert ("ocfl/paper-a: v2 the inventory copy disagrees with the inventory"
+                " about the versions it records") in errors
+        assert not any("the inventory copy has the head" in e for e in errors)
+
+The index page must show the pins of the main collection only in an
+archive that declares the profile `website` (appendix C); in another, a
+missing pin is a note, printed but not counted among the problems.
+
+    # in test: the rules of document versions:
+    def test_index_pins_required_by_the_profile_website(archive, monkeypatch, capsys):
+        put("paper-a", 1, FILES1)
+        assert finish() == []
+        (archive / "index.html").write_text("<p>an index made by other tools</p>")
+        assert P.verify_errors() == []
+        assert "index.html does not show the pin of paper-a (the archive does not declare" \
+            " the profile website)" in capsys.readouterr().out
+        monkeypatch.setitem(P.ARCHIVE, "profiles", ["website"])
+        P.write_json(archive / "opensheaf.json", P.discovery())
+        assert "index.html does not show the pin of paper-a" in P.verify_errors()
+
 Small functions
 ---------------
 
