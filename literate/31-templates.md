@@ -187,83 +187,201 @@ The style sheet
 ---------------
 
 The style sheet is copied as it is, without placeholders. It is meant to
-be edited, and says so. It is a single column of text, set in a serif
-face available on most systems, with no web fonts to load.
+be edited, and says so. It follows the design of `opensheaf.org`,
+described in the site's
+[style](https://github.com/opensheaf/opensheaf.github.io/blob/main/.agents/skills/opensheaf-style/SKILL.md):
+an archive's pages are documents, read like a mathematical text. A page
+is a sheet of warm paper with black ink, in one column; the titles, the
+authors, the abstracts and the text are set in CMU Serif, the Computer
+Modern of TeX and TeXmacs, which also matches the mathematics MathJax
+typesets; the apparatus around them (dates, facts, tags, the footer) in
+the small IBM Plex Sans of the site, in grey; digests and code in
+JetBrains Mono. Hierarchy comes from size, space and weight, not from
+colour: headings in bold, links in ink with a thin grey underline. Three
+quiet tones only say a state: green for the current version, red for a
+withdrawal, amber for warnings.
 
     /* in src/opensheaf/templates/style.css: */
     /* The default style of an OpenSheaf archive (opensheaf-py); edit freely. */
+    <<the faces of the default style>>
     <<the colours of the default style>>
     <<the page and its type in the default style>>
     <<the list of documents in the default style>>
     <<the versions in the default style>>
     <<notices and citations in the default style>>
 
-The colours are custom properties, defined once for a light background
-and once for a dark one, chosen by the reader's system setting.
+The faces are those of the site and are loaded from it; an archive is
+served from elsewhere, and the site allows it. A page read without a
+network, or from a site that cannot reach `opensheaf.org`, falls back on
+the faces of the system named with the colours below. An archive that
+wants no font from elsewhere removes these lines.
+
+    /* in the faces of the default style: */
+    @font-face { font-family: "CMU Serif"; font-style: normal; font-weight: 400; font-display: swap;
+      src: url("https://opensheaf.org/resources/fonts/cmu/cmunrm.woff2") format("woff2"); }
+    @font-face { font-family: "CMU Serif"; font-style: italic; font-weight: 400; font-display: swap;
+      src: url("https://opensheaf.org/resources/fonts/cmu/cmunti.woff2") format("woff2"); }
+    @font-face { font-family: "CMU Serif"; font-style: normal; font-weight: 600 700; font-display: swap;
+      src: url("https://opensheaf.org/resources/fonts/cmu/cmunbx.woff2") format("woff2"); }
+    @font-face { font-family: "CMU Serif"; font-style: italic; font-weight: 600 700; font-display: swap;
+      src: url("https://opensheaf.org/resources/fonts/cmu/cmunbi.woff2") format("woff2"); }
+    @font-face { font-family: "IBM Plex Sans"; font-style: normal; font-weight: 100 700; font-display: swap;
+      src: url("https://opensheaf.org/resources/fonts/plex/IBMPlexSans-Roman.woff2") format("woff2"); }
+    @font-face { font-family: "IBM Plex Sans"; font-style: italic; font-weight: 100 700; font-display: swap;
+      src: url("https://opensheaf.org/resources/fonts/plex/IBMPlexSans-Italic.woff2") format("woff2"); }
+    @font-face { font-family: "JetBrains Mono"; font-style: normal; font-weight: 100 800; font-display: swap;
+      src: url("https://opensheaf.org/resources/fonts/jetbrains/JetBrainsMono-Roman.woff2") format("woff2"); }
+
+The colours and the faces are the block of variables `--os-*` of the
+site's stylesheet (`resources/opensheaf.css`), copied whole, never one
+value at a time: the paper, the surface of tinted blocks, the hairlines,
+the ink, the secondary text, the faint grey of bullets and underlines,
+the three states with their tints; light, dark (following the reader's
+system) and print.
 
     /* in the colours of the default style: */
     :root {
-      --bg: #fdfcf9; --fg: #22252b; --muted: #5d6270; --rule: #dedad2;
-      --link: #2b5c9e; --accent: #b4572a; --box: #f3f0ea;
+        color-scheme: light;
+        --os-paper: #f9f8f5;
+        --os-surface: #f1efea;
+        --os-rule: #dedbd3;
+        --os-ink: #171716;
+        --os-muted: #6a6861;
+        --os-faint: #a09d95;
+        --os-ok: #2c6a3e;
+        --os-ok-bg: #e6efe4;
+        --os-bad: #9d2b22;
+        --os-bad-bg: #f6e4e0;
+        --os-warn: #7d5200;
+        --os-warn-bg: #f5ecd6;
+        --os-serif: "CMU Serif", "Latin Modern Roman", "Computer Modern", "Times New Roman", serif;
+        --os-sans: "IBM Plex Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+        --os-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
     }
     @media (prefers-color-scheme: dark) {
-      :root { --bg: #17191d; --fg: #e4e2dd; --muted: #a2a6b0; --rule: #33363d;
-              --link: #8fb4e8; --accent: #e59a6b; --box: #22252b; }
+        :root:not([data-theme="light"]) {
+            color-scheme: dark;
+            --os-paper: #12141a;
+            --os-surface: #1b1e25;
+            --os-rule: #31353e;
+            --os-ink: #e6e7ea;
+            --os-muted: #9a9ea8;
+            --os-faint: #646975;
+            --os-ok: #93cfa1;
+            --os-ok-bg: #182a23;
+            --os-bad: #eda59c;
+            --os-bad-bg: #342025;
+            --os-warn: #e7c277;
+            --os-warn-bg: #2d281c;
+        }
+    }
+    :root[data-theme="dark"] {
+        color-scheme: dark;
+        --os-paper: #12141a;
+        --os-surface: #1b1e25;
+        --os-rule: #31353e;
+        --os-ink: #e6e7ea;
+        --os-muted: #9a9ea8;
+        --os-faint: #646975;
+        --os-ok: #93cfa1;
+        --os-ok-bg: #182a23;
+        --os-bad: #eda59c;
+        --os-bad-bg: #342025;
+        --os-warn: #e7c277;
+        --os-warn-bg: #2d281c;
+    }
+    @media print {
+        :root, :root[data-theme] {
+            color-scheme: light !important;
+            --os-paper: #fff !important;
+            --os-surface: #fff !important;
+            --os-rule: #999 !important;
+            --os-ink: #000 !important;
+            --os-muted: #333 !important;
+            --os-faint: #666 !important;
+            --os-ok: #000 !important;
+            --os-ok-bg: #fff !important;
+            --os-bad: #000 !important;
+            --os-bad-bg: #fff !important;
+            --os-warn: #000 !important;
+            --os-warn-bg: #fff !important;
+        }
     }
 
-The column is at most 46 rem wide, with a margin of 16 pixels on narrow
-screens. Secondary text (the lead, dates, metadata, pins) is in the
-muted colour.
+The column is at most 36 rem of text, at 20 pixels (18 on a phone), with
+a margin of 16 pixels on narrow screens. The title of a page is centred,
+like the title of a paper, with the authors in italics and the first
+facts below it; on a landing page, the name of the archive stands above
+it, on the left, as a masthead. Secondary text (dates, metadata, pins,
+the footer) is in the small grey sans.
 
     /* in the page and its type in the default style: */
     * { box-sizing: border-box; }
-    body { margin: 0; background: var(--bg); color: var(--fg);
-           font: 17px/1.55 Charter, "Bitstream Charter", "Sitka Text", Cambria, Georgia, serif; }
-    header, main, footer, nav { max-width: 46rem; margin: 0 auto; padding: 0 16px; }
-    header { padding-top: 2.5rem; }
-    h1 { font-size: 1.7rem; line-height: 1.25; margin: 0.4em 0; }
-    h2 { font-size: 1.1rem; margin: 1.8em 0 0.5em; color: var(--muted);
-         text-transform: uppercase; letter-spacing: 0.06em; }
-    a { color: var(--link); text-underline-offset: 2px; }
-    .lead, .small, footer, .paper-meta, .version-date, .pin { color: var(--muted); }
-    .small, footer { font-size: 0.85rem; }
-    nav { padding-top: 1.2rem; font-size: 0.9rem; }
-    footer { border-top: 1px solid var(--rule); margin-top: 3rem; padding-top: 1rem; padding-bottom: 2rem; }
+    html { font-size: 20px; }
+    @media (max-width: 40rem) { html { font-size: 18px; } }
+    body { margin: 0; background: var(--os-paper); color: var(--os-ink); font-family: var(--os-serif);
+           font-size: 1rem; line-height: 1.6; font-variant-numeric: lining-nums;
+           -webkit-font-smoothing: antialiased; }
+    header, main, footer, nav { max-width: calc(36rem + 32px); margin: 0 auto; padding: 0 16px; }
+    header { padding-top: 3rem; text-align: center; }
+    h1, h2 { font-weight: 700; line-height: 1.2; text-wrap: balance; }
+    h1 { font-size: 2.1rem; letter-spacing: -0.01em; margin: 0.3em 0 0.4em; text-align: center; }
+    h2 { font-size: 1.2rem; margin: 2em 0 0.5em; }
+    a { color: inherit; text-decoration: underline; text-decoration-thickness: 1px;
+        text-underline-offset: 0.2em; text-decoration-color: var(--os-faint); }
+    a:hover, a:focus { text-decoration-color: currentColor; }
+    .lead { font-style: italic; margin: 0 0 2.5rem; }
+    .small, footer, .paper-meta, .version-date, .pin, details summary {
+      font-family: var(--os-sans); color: var(--os-muted); }
+    .small, footer { font-size: 0.7rem; line-height: 1.5; }
+    nav { padding-top: 1.4rem; font-size: 1.05rem; }
+    nav a { text-decoration: none; }
+    footer { margin-top: 4rem; padding-bottom: 2.5rem; }
+    footer a { color: inherit; }
 
-The home page is a list of entries separated by rules, without numbers.
+The home page is a list of entries divided by hairlines, as in a
+bibliography: the title a little larger than the text, the authors in
+italics, then a line of facts in the small sans. A withdrawn document
+keeps its place, its title in grey with a tag in the red of withdrawals.
 
     /* in the list of documents in the default style: */
-    ol.papers { list-style: none; padding: 0; }
-    li.paper { padding: 1rem 0; border-bottom: 1px solid var(--rule); }
-    .paper-title { font-weight: bold; font-size: 1.08rem; text-decoration: none; }
+    ol.papers { list-style: none; padding: 0; margin: 0; border-top: 1px solid var(--os-rule); }
+    li.paper { padding: 1rem 0; border-bottom: 1px solid var(--os-rule); }
+    .paper-title { font-weight: 700; font-size: 1.1rem; text-decoration: none; }
     .paper-title:hover { text-decoration: underline; }
-    .paper-authors { margin: 0.15rem 0; }
-    .paper-meta, .pin { font-size: 0.88rem; }
-    details summary { cursor: pointer; color: var(--muted); font-size: 0.9rem; margin-top: 0.3rem; }
+    .paper-authors { margin: 0.15rem 0; font-style: italic; }
+    .paper-page .paper-authors, .paper-page .paper-meta { text-align: center; }
+    .paper-meta, .pin, .version-date { font-size: 0.72rem; }
+    details summary { cursor: pointer; font-size: 0.72rem; margin-top: 0.3rem; }
     details p, .abstract p { margin: 0.5em 0; }
+    li.paper.withdrawn .paper-title { color: var(--os-muted); }
+    li.paper.withdrawn .paper-title::after { content: "withdrawn"; font-family: var(--os-sans); font-size: 0.6rem;
+      font-weight: 400; padding: 0.1rem 0.55rem; border-radius: 999px; margin-left: 0.5rem; vertical-align: 0.2em;
+      background: var(--os-bad-bg); color: var(--os-bad); }
 
-Each version on a landing page has a rule on its left, in the accent
-colour for the current version, which is also marked by a small label,
-as is the stage.
+The versions of a landing page are divided by hairlines too. The current
+version is marked by a small tag in the green of what is current, the
+stage by a tag on the surface.
 
     /* in the versions in the default style: */
-    ol.versions { list-style: none; padding: 0; }
-    li.version { border-left: 3px solid var(--rule); padding: 0.4rem 0 0.4rem 0.9rem; margin: 0.6rem 0; }
-    li.version.is-current { border-left-color: var(--accent); }
-    .version-head { font-weight: bold; }
-    .stage, .current { font-size: 0.75rem; font-weight: normal; padding: 0.05rem 0.4rem;
-                       border-radius: 3px; background: var(--box); margin-left: 0.3rem; }
-    .current { color: var(--accent); }
+    ol.versions { list-style: none; padding: 0; margin: 0; border-top: 1px solid var(--os-rule); }
+    li.version { padding: 0.6rem 0; border-bottom: 1px solid var(--os-rule); }
+    .version-head { font-weight: 700; }
+    .stage, .current { font-family: var(--os-sans); font-size: 0.65rem; font-weight: 400; padding: 0.1rem 0.55rem;
+                       border-radius: 999px; background: var(--os-surface); margin-left: 0.3rem;
+                       vertical-align: 0.1em; }
+    .current { background: var(--os-ok-bg); color: var(--os-ok); }
     .changes { font-style: italic; }
-    .files { font-size: 0.92rem; }
-    .missing { color: var(--muted); }
+    .files { font-size: 0.9rem; }
+    .missing { color: var(--os-muted); }
 
-Notices and withdrawals stand out in a box with the accent rule; the
-citation is in a box too, to be copied. A pin is a long string of
-hexadecimal digits, and may be broken anywhere.
+Notices stand on the surface, withdrawals on the red tint, without a
+frame; the citation is on the surface too, to be copied. A pin is a long
+string of hexadecimal digits, and may be broken anywhere.
 
     /* in notices and citations in the default style: */
-    .notice, .withdrawn { background: var(--box); border-left: 3px solid var(--accent);
-                          padding: 0.5rem 0.8rem; margin: 0.5rem 0; }
-    .cite { background: var(--box); padding: 0.6rem 0.8rem; font-size: 0.92rem; }
-    code { font-size: 0.8rem; word-break: break-all; }
+    .notice, div.withdrawn { background: var(--os-surface); border-radius: 4px; padding: 0.7rem 1rem; margin: 0.6rem 0; }
+    div.withdrawn { background: var(--os-bad-bg); color: var(--os-bad); }
+    .cite { background: var(--os-surface); border-radius: 4px; padding: 0.7rem 1rem; font-size: 0.92rem; }
+    code { font-family: var(--os-mono); font-size: 0.75em; word-break: break-all;
+           font-variant-ligatures: none; }
