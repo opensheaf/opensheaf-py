@@ -1,4 +1,4 @@
-# Generated from literate/20-collections.md by tools/tangle.py: edit the document, not this file.
+# Generated from literate/20-collections.md by opensheaf-literate: edit the document, not this file.
 """Curated collections (section 10 of the specification): members from this
 archive or from other archives, each pinned by the SHA-512 digest of the
 inventory of an object version.

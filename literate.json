@@ -1,0 +1,7 @@
+{
+  "name": "opensheaf-py",
+  "tagline": "the tools of <a href=\"https://opensheaf.org\">OpenSheaf</a>, a literate program",
+  "repository": "https://github.com/opensheaf/opensheaf-py",
+  "logo": "literate/opensheaf-symbol.svg",
+  "logoDark": "invert"
+}

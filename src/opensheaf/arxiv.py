@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Generated from literate/40-arxiv.md by tools/tangle.py: edit the document, not this file.
+# Generated from literate/40-arxiv.md by opensheaf-literate: edit the document, not this file.
 """Import papers downloaded from arXiv into the archive, one OCFL version per
 arXiv version.
 

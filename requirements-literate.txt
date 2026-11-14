@@ -1,0 +1,3 @@
+# The literate programming tools (literate tangle, literate weave), pinned:
+# see "A literate program" in README.md.
+opensheaf-literate[weave] @ git+https://github.com/opensheaf/literate@v0.1.0

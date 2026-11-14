@@ -1,4 +1,4 @@
-# Generated from literate/30-website.md by tools/tangle.py: edit the document, not this file.
+# Generated from literate/30-website.md by opensheaf-literate: edit the document, not this file.
 """The website of an archive in plain HTML (the website profile, appendix C of
 the specification): a home page listing the documents of the main collection,
 one landing page per document (its current version, every version in the

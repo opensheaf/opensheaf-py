@@ -12,10 +12,18 @@ This is the source of [opensheaf-py](https://github.com/opensheaf/opensheaf-py)
 program. It is meant to be read: the program is explained in the order in
 which it is best understood, with the reasons for what it does and the
 sections of the specification it implements. The Python files of the
-package are *tangled* out of these documents (see [tangling](90-tangle.md))
-and kept in the repository, so that the package installs and runs like any
-other; the documents are also *woven* into this website (see
-[weaving](91-weave.md)). One edits the documents, never the files.
+package are *tangled* out of these documents and kept in the repository, so
+that the package installs and runs like any other; the documents are also
+*woven* into this website. One edits the documents, never the files. The
+tangler and the weaver are a package of their own,
+[opensheaf-literate](https://opensheaf.org/literate/) (the `literate`
+command), written for OpenSheaf and itself a literate program: its chapters
+explain the syntax of these documents and
+[tangling](https://opensheaf.org/literate/10-tangle.html), and
+[weaving](https://opensheaf.org/literate/20-weave.html). This project
+pins a version of it in `requirements-literate.txt` and describes itself to
+it in `literate.json`; `literate tangle --where FILE:LINE` tells which line
+of which chapter a line of a tangled file comes from.
 
 An OpenSheaf archive is a folder of plain files: an
 [OCFL](https://ocfl.io) storage root in which every document is an object,
@@ -33,9 +41,15 @@ Reading the code
 Code is set in grey boxes. Above each box stands the name of its chunk,
 with `≡` for the first fragment of a chunk and `+≡` for the ones that
 continue it; a name in angle brackets inside the code, like
-⟨the syntax as patterns⟩, is a reference to another chunk, and a link to
+⟨locate and configure an archive⟩, is a reference to another chunk, and a link to
 it. Below each box: where the chunk is used, and where it continues. The
 [index of chunks](chunks.html) lists them all.
+
+The OpenSheaf symbol on these pages, `literate/opensheaf-symbol.svg` (a
+copy of `resources/brand/opensheaf-symbol.svg` of the specification's
+repository), is not under the GPL of this program: it is licensed under
+CC BY 4.0, and its use as a mark follows the OpenSheaf
+[trademark policy](https://github.com/opensheaf/opensheaf.github.io/blob/main/TRADEMARKS.md).
 
 The archive
 -----------
@@ -85,11 +99,8 @@ The command line and the tests
     files.
 20. [The tests](70-tests.md).
 
-The literate tools
-------------------
-
-21. [Tangling: from the documents to the program](90-tangle.md).
-22. [Weaving: from the documents to the website](91-weave.md).
+The literate tools, tangling and weaving, are described in their own
+literate program, [opensheaf-literate](https://opensheaf.org/literate/).
 
 What writing it down found
 --------------------------

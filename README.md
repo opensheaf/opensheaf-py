@@ -210,19 +210,25 @@ best understood, and the Python files under `src/` and `tests/` are
 *tangled* out of them (in the style of Kragen Sitaker's
 [handaxeweb](https://github.com/kragen/peg-bootstrap/blob/master/handaxeweb.md)).
 The tangled files are kept in the repository, so the package installs as
-usual; to change the code, edit the documents and run
+usual. Tangling and weaving are done by
+[opensheaf-literate](https://github.com/opensheaf/literate) (the `literate`
+command; its own literate program is at
+[opensheaf.org/literate](https://opensheaf.org/literate/)), pinned in
+`requirements-literate.txt` and configured by `literate.json`. To change
+the code, edit the documents (never the tangled files: see
+[AGENTS.md](AGENTS.md)) and run
 
 ```
-tools/build
+pip install -r requirements-literate.txt   # once
+literate tangle         # write the files out of literate/
+literate tangle --check # nothing differs (what the continuous integration checks)
+literate weave          # the website, in site/
 ```
 
-which tangles the files (checking that the tangler, itself tangled from
-[literate/90-tangle.md](literate/90-tangle.md), reproduces itself) and, if
-the packages `markdown` and `pygments` are installed, weaves the documents
-into a website in `site/`, published at
-[opensheaf.github.io/opensheaf-py](https://opensheaf.github.io/opensheaf-py/). `tools/tangle.py --where FILE:LINE` tells which
-line of which document a line of a tangled file comes from. The continuous
-integration checks that the files are exactly what the documents say.
+The website is published at
+[opensheaf.org/opensheaf-py](https://opensheaf.org/opensheaf-py/).
+`literate tangle --where FILE:LINE` tells which line of which document a
+line of a tangled file comes from.
 
 ## The first archive
 
@@ -233,7 +239,7 @@ integration checks that the files are exactly what the documents say.
 
 GNU General Public License, version 3 or later. The JSON Schemas in
 `src/opensheaf/schemas/` are those of the specification, dedicated to the
-public domain under CC0 1.0. The OpenSheaf symbol in `tools/` (used by the
-woven website) is licensed under CC BY 4.0, and its use as a mark follows
+public domain under CC0 1.0. The OpenSheaf symbol, `literate/opensheaf-symbol.svg`
+(used by the woven website), is licensed under CC BY 4.0, and its use as a mark follows
 the OpenSheaf
 [trademark policy](https://github.com/opensheaf/opensheaf.github.io/blob/main/TRADEMARKS.md).

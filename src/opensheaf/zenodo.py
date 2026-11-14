@@ -1,4 +1,4 @@
-# Generated from literate/50-zenodo.md by tools/tangle.py: edit the document, not this file.
+# Generated from literate/50-zenodo.md by opensheaf-literate: edit the document, not this file.
 """Zenodo binding of OpenSheaf 0.1 (appendix A of the specification).
 
     osheaf zenodo ID [--production] [--keep]

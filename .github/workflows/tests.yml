@@ -15,8 +15,9 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}
-      - name: the files are tangled from literate/, and the tangler reproduces itself
-        run: sh tools/build && git diff --exit-code
+      - run: pip install -r requirements-literate.txt
+      - name: the files are tangled from literate/
+        run: literate tangle --check
       - run: pip install ".[test]"
       - run: pytest -q
       - run: osheaf --version
@@ -27,8 +28,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
-      - run: pip install markdown pygments
-      - run: python3 tools/weave.py --out site --branch "${GITHUB_REF_NAME}"
+      - run: pip install -r requirements-literate.txt
+      - run: literate weave --out site --branch "${GITHUB_REF_NAME}"
       - uses: actions/upload-artifact@v4
         with:
           name: literate-site

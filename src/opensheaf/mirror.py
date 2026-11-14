@@ -1,4 +1,4 @@
-# Generated from literate/21-mirrors.md by tools/tangle.py: edit the document, not this file.
+# Generated from literate/21-mirrors.md by opensheaf-literate: edit the document, not this file.
 """Mirrors (section 10.4 of the specification): a copy, in this archive's
 storage root, of another archive's object, byte for byte and with all its
 versions, kept under its own identifier.
