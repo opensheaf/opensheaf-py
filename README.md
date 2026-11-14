@@ -1,6 +1,7 @@
 # opensheaf-py
 
 [![tests](https://github.com/opensheaf/opensheaf-py/actions/workflows/tests.yml/badge.svg)](https://github.com/opensheaf/opensheaf-py/actions/workflows/tests.yml)
+[![pages](https://github.com/opensheaf/opensheaf-py/actions/workflows/pages.yml/badge.svg)](https://github.com/opensheaf/opensheaf-py/actions/workflows/pages.yml)
 [![archive examples](https://github.com/opensheaf/archive-template/actions/workflows/examples.yml/badge.svg)](https://github.com/opensheaf/archive-template/actions/workflows/examples.yml)
 [![collection examples](https://github.com/opensheaf/collection-template/actions/workflows/examples.yml/badge.svg)](https://github.com/opensheaf/collection-template/actions/workflows/examples.yml)
 [![Python](https://img.shields.io/badge/python-3.9%E2%80%933.13-blue)](pyproject.toml)
