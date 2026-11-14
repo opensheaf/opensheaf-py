@@ -1,3 +1,4 @@
-# The literate programming tools (literate tangle, literate weave), pinned:
+# The literate programming tools (literate tangle, literate weave), pinned
+# (to the commit with the woven pages in their own style, after v0.1.0):
 # see "A literate program" in README.md.
-opensheaf-literate[weave] @ git+https://github.com/opensheaf/literate@v0.1.0
+opensheaf-literate[weave] @ git+https://github.com/opensheaf/literate@a5de0a37237ef32e6327f2198699b498dcc00020
