@@ -49,8 +49,13 @@ The home page receives:
 - `{{papers}}`, the entries of the members, as items of a list;
 - `{{count}}`, their number, and `{{updated}}`, the date of the pages.
 
+The footer links the [OpenSheaf Explorer](https://opensheaf.org/explorer/), which
+reads the archive from the browser, shows its objects, versions and
+collections, and checks it as `osheaf verify` does; it is given the
+archive's address in its `url` parameter.
+
 It also receives `{{base_url}}`, the base URL of the archive, which the
-default does not use. Its head links the discovery document with
+default gives to the Explorer. Its head links the discovery document with
 `describedby`, the start of everything for a program that reads the
 archive.
 
@@ -86,6 +91,8 @@ draft: a reader should not take the archive's form as settled.
       <p>{{count}} documents · updated {{updated}} ·
       made with <a href="https://github.com/opensheaf/opensheaf-py">opensheaf-py</a> ·
       format <a href="https://opensheaf.org">OpenSheaf 0.1</a> (a draft, which may still change)</p>
+      <p><a href="https://opensheaf.org/explorer/?url={{base_url}}">Explore and verify this archive</a>
+      with the OpenSheaf Explorer, in the browser</p>
     </footer>
 
 The landing page
