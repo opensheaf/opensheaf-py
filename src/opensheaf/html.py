@@ -282,9 +282,10 @@ def render(members, home=True, featured=None):
         sm.append(f"  <url><loc>{esc(url)}</loc>" + (f"<lastmod>{last}</lastmod>" if last else "") + "</url>")
     sm.append("</urlset>")
     (root_out / "sitemap.xml").write_text("\n".join(sm) + "\n", encoding="utf-8")
-    # remove landing pages of documents no longer in the collection
+    # remove landing pages of documents no longer listed (by the main or the
+    # featured collection): those not written now
     for p in (root_out / "paper").glob("*") if (root_out / "paper").exists() else []:
-        if p.is_dir() and p.name not in {m["id"] for m in members if m.get("archive") == P.ARCHIVE["archiveId"]}:
+        if p.is_dir() and p.name not in set(written):
             shutil.rmtree(p)
     return len(written)
 

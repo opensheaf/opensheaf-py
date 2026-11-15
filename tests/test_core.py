@@ -692,6 +692,18 @@ def test_featured_collection_on_the_home_page(tmp_path):
     for m in reading + main:
         assert P.member_pins(m)[-1][1][:32] in home
     assert P.verify_errors() == []
+    # a collection of the archive inside the featured one gets a landing page, which stays
+    (tmp_path / "sub.yaml").write_text("title: Part one\ntype: catalogue\nmembers: []\n")
+    run("--root", str(a), "collection", "sync", "part-one", "--from", str(tmp_path / "sub.yaml"))
+    (tmp_path / "reading.yaml").write_text(
+        "title: A reading list\ndescription: Papers to read first.\ntype: selection\n"
+        f"members:\n  - {{archive: {p}, id: one}}\n  - {{archive: {a}, id: mine}}\n"
+        f"  - {{archive: {a}, id: part-one}}\n")
+    run("--root", str(a), "collection", "sync", "reading-list", "--from", str(tmp_path / "reading.yaml"))
+    run("--root", str(a), "index")
+    run("--root", str(a), "index")
+    assert (a / "paper" / "part-one" / "index.html").exists()
+    assert (a / "paper" / "mine" / "index.html").exists()
     cfg["index"]["html"]["featured"] = "mine"
     (a / "osheaf.json").write_text(json.dumps(cfg))
     with pytest.raises(SystemExit):

@@ -674,9 +674,10 @@ storage root. Only folders are landing pages: files left in `paper/` by
 others (the `.DS_Store` of macOS) are not touched.
 
     # in remove the landing pages of former members:
-    # remove landing pages of documents no longer in the collection
+    # remove landing pages of documents no longer listed (by the main or the
+    # featured collection): those not written now
     for p in (root_out / "paper").glob("*") if (root_out / "paper").exists() else []:
-        if p.is_dir() and p.name not in {m["id"] for m in members if m.get("archive") == P.ARCHIVE["archiveId"]}:
+        if p.is_dir() and p.name not in set(written):
             shutil.rmtree(p)
 
 Members of other archives
