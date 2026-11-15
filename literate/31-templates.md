@@ -46,7 +46,13 @@ The home page receives:
 - `{{archive_name}}`, the name of the archive, and `{{root}}`, the way
   back to the root of the archive (empty here);
 - `{{lead}}`, the lead paragraph, in HTML;
-- `{{papers}}`, the entries of the members, as items of a list;
+- `{{papers}}`, the entries of the members of the main collection, as
+  items of a list;
+- `{{featured}}`, the featured collection (`index.html.featured`), a
+  section with its title and the entries of its members, and
+  `{{papers_heading}}`, a heading for the main collection's list when
+  there is one; both are empty otherwise, and a template written before
+  they existed simply does not show the featured collection;
 - `{{count}}`, their number, and `{{updated}}`, the date of the pages.
 
 The footer links the [OpenSheaf Explorer](https://opensheaf.org/explorer/), which
@@ -75,6 +81,8 @@ archive.
       <p class="lead">{{lead}}</p>
     </header>
     <main>
+    {{featured}}
+    {{papers_heading}}
       <ol class="papers">
     {{papers}}
       </ol>
@@ -346,6 +354,8 @@ keeps its place, its title in grey with a tag in the red of withdrawals.
 
     /* in the list of documents in the default style: */
     ol.papers { list-style: none; padding: 0; margin: 0; border-top: 1px solid var(--os-rule); }
+    section.featured { margin: 0 0 3rem; }
+    main > h2 { margin-top: 0; }
     li.paper { padding: 1rem 0; border-bottom: 1px solid var(--os-rule); }
     .paper-title { font-weight: 700; font-size: 1.1rem; text-decoration: none; }
     .paper-title:hover { text-decoration: underline; }

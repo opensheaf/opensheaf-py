@@ -1021,6 +1021,57 @@ shows it.
         assert P.verify_errors() == []
         assert "Withdrawn in its archive" in (c / "index.html").read_text()
 
+### A featured collection
+
+An author's archive `a` holds a paper of its own and a reading list, a
+selection with a paper of another archive and the author's own paper. The
+main collection lists the archive's own documents (the reading list is an
+object of the archive, not a member of the main collection); with
+`index.html.featured` naming the reading list, the home page lists it
+first, under its title and with its description as the
+lead paragraph, then the main collection, under its own heading. Both
+show their pins, and the verifier, which checks the main collection's,
+is satisfied. A setting that names something other than a collection of
+the archive stops `osheaf index`.
+
+    # in test: collections, mirrors and accepted copies:
+    def test_featured_collection_on_the_home_page(tmp_path):
+        a, p = tmp_path / "a", tmp_path / "p"
+        make_archive(p, "papers")
+        make_archive(a, "author")
+        pdf = tmp_path / "p.pdf"
+        pdf.write_bytes(b"%PDF-1.4 p")
+        run("--root", str(p), "deposit", "one", "--pdf", str(pdf), "--no-source", "x", "--title", "One",
+            "--author", "Doe, J")
+        run("--root", str(p), "collect")
+        run("--root", str(p), "index")
+        run("--root", str(a), "deposit", "mine", "--pdf", str(pdf), "--no-source", "x", "--title", "Mine",
+            "--author", "Roe, R")
+        (tmp_path / "reading.yaml").write_text(
+            "title: A reading list\ndescription: Papers to read first.\ntype: selection\n"
+            f"members:\n  - {{archive: {p}, id: one}}\n  - {{archive: {a}, id: mine}}\n")
+        run("--root", str(a), "collection", "sync", "reading-list", "--from", str(tmp_path / "reading.yaml"))
+        run("--root", str(a), "collect")
+        main = P.read_json(a / "ocfl" / "collection-main", P.load_inventory(a / "ocfl" / "collection-main"),
+                           "members.json")["members"]
+        assert [m["id"] for m in main] == ["mine"]
+        cfg = json.loads((a / "osheaf.json").read_text())
+        cfg["index"] = {"html": {"templates": "templates", "featured": "reading-list"}}
+        (a / "osheaf.json").write_text(json.dumps(cfg))
+        run("--root", str(a), "index")
+        home = (a / "index.html").read_text()
+        assert home.index("<h2>A reading list</h2>") < home.index("<h2>In this archive</h2>")
+        assert "Papers to read first." in home
+        reading = P.read_json(a / "ocfl" / "reading-list", P.load_inventory(a / "ocfl" / "reading-list"),
+                              "members.json")["members"]
+        for m in reading + main:
+            assert P.member_pins(m)[-1][1][:32] in home
+        assert P.verify_errors() == []
+        cfg["index"]["html"]["featured"] = "mine"
+        (a / "osheaf.json").write_text(json.dumps(cfg))
+        with pytest.raises(SystemExit):
+            run("--root", str(a), "index")
+
 ### A selection
 
 A selection pins the revisions its curator vetted (section 10.2). Archive

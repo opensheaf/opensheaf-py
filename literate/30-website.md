@@ -34,6 +34,17 @@ current version, read from the history of the pinned head; a member of a
 selection in the last revision of its set, with the list of the revisions
 vetted.
 
+An archive may also **feature** one of its collections on the home page
+(`index.html.featured` in `osheaf.json`: the identifier of a collection
+of the archive): a reading list, a journal's issues, the papers of a
+seminar. Its members are listed first, under its title, and its
+description becomes the lead paragraph; the main collection follows, as
+appendix C asks ("an index page generated from the head version of the
+main collection"), so that the home page still shows the archive's own
+documents and the pin of every member. The main collection lists the
+archive's own documents (section 6.1); curation lives in the collections
+of the archive, which are objects of their own.
+
 The module
 ----------
 
@@ -76,6 +87,9 @@ The module
 
 
     <<a member of another archive on the home page>>
+
+
+    <<the home-page entry of a document of this archive>>
 
 The documentation of the module is a summary of this chapter.
 
@@ -215,22 +229,26 @@ default one does, so that an archive whose template uses its own style
 sheets gets no stray `style.css`.
 
     # in writing the website:
-    def render(members, home=True):
+    def render(members, home=True, featured=None):
         """Write index.html, paper/<id>/index.html for every member, style.css
         and sitemap.xml; with home=False (a TeXmacs index is the home page),
-        everything but index.html."""
+        everything but index.html. featured: a collection of the archive whose
+        members the home page lists first."""
         root_out = P.ROOT
         base = P.ARCHIVE["baseUrl"]
         entries, urls, written = [], [(base, None)], []
         page_t = template("paper.html")
-        for m in members:
+        <<the members of the featured collection>>
+        for k, m in enumerate(members + extra):
             if m.get("archive") != P.ARCHIVE["archiveId"]:
                 if home:
                     entries.append(remote_entry(m))
                 continue
             <<write the landing page of a document of this archive>>
-            <<the home-page entry of a document of this archive>>
+            if k < len(members):
+                entries.append(local_entry(m))
         if home:
+            <<the featured collection of the home page>>
             <<the lead paragraph of the home page>>
             <<write the home page and the style sheet>>
         elif "style.css" in page_t:
@@ -526,17 +544,60 @@ the home page shows the pin of every member. The abstract is folded in a
 `<details>` element, so that the list stays short.
 
     # in the home-page entry of a document of this archive:
-    pdf = pdf_address("", obj_id, inv, cur, obj)
-    abstract = abstract_html(dc)
-    entries.append("\n".join([
-        f'<li class="paper{" withdrawn" if withdrawn else ""}">',
-        f'<a class="paper-title" href="paper/{obj_id}/">{esc(dc["titles"][0]["title"])}</a>',
-        f'<div class="paper-authors">{esc(authors(dc))}</div>',
-        f'<div class="paper-meta">{esc((issued or "")[:4])} · {versions_line(m, obj)}'
-        + (f' · <a href="{esc(pdf)}">PDF</a>' if pdf else "")
-        + f' · <span class="pin" title="{pin}">pin {pin[:32]}…</span></div>',
-        f"<details><summary>Abstract</summary>{abstract}</details>" if abstract else "",
-        "</li>"]))
+    def local_entry(m):
+        """The home-page entry of a member of this archive, in the version its
+        collection presents (the main collection's or the featured one's)."""
+        obj_id = m["id"]
+        d = P.OCFL / obj_id
+        inv = P.load_inventory(d)
+        cur = P.presented_version(m, d, inv)
+        pin = P.member_pins(m)[-1][1]
+        obj = P.read_json(d, inv, P.OBJ, cur)
+        dc = P.read_json(d, inv, "datacite.json", cur)
+        withdrawn = P.read_json(d, inv, P.OBJ).get("status") == "withdrawn"
+        issued = P.date_of(dc, "Issued")
+        pdf = pdf_address("", obj_id, inv, cur, obj)
+        abstract = abstract_html(dc)
+        return "\n".join([
+            f'<li class="paper{" withdrawn" if withdrawn else ""}">',
+            f'<a class="paper-title" href="paper/{obj_id}/">{esc(dc["titles"][0]["title"])}</a>',
+            f'<div class="paper-authors">{esc(authors(dc))}</div>',
+            f'<div class="paper-meta">{esc((issued or "")[:4])} · {versions_line(m, obj)}'
+            + (f' · <a href="{esc(pdf)}">PDF</a>' if pdf else "")
+            + f' · <span class="pin" title="{pin}">pin {pin[:32]}…</span></div>',
+            f"<details><summary>Abstract</summary>{abstract}</details>" if abstract else "",
+            "</li>"])
+
+A featured collection is read from the storage root like the main one.
+Its members of this archive need landing pages too: a document of the
+main collection has one already; another object of this archive (a
+subcollection, a document the main collection does not list) gets one
+as well, in the version the featured collection presents, but no entry in
+the main collection's list.
+
+    # in the members of the featured collection:
+    fmembers = []
+    if featured:
+        fdir = P.OCFL / featured
+        finv = P.load_inventory(fdir)
+        fmembers = P.read_json(fdir, finv, "members.json")["members"]
+    listed = {m["id"] for m in members if m.get("archive") == P.ARCHIVE["archiveId"]}
+    extra = [fm for fm in fmembers if fm.get("archive") == P.ARCHIVE["archiveId"] and fm["id"] not in listed]
+
+Its title heads its section, and each member gets an entry, from this
+archive or another, in the version the featured collection presents (the
+revisions its curator vetted, for a selection).
+
+    # in the featured collection of the home page:
+    featured_html = ""
+    if featured:
+        fdc = P.read_json(fdir, finv, "datacite.json")
+        items = [local_entry(fm) if fm.get("archive") == P.ARCHIVE["archiveId"] else remote_entry(fm)
+                 for fm in fmembers]
+        featured_html = ('<section class="featured">\n'
+                         f'<h2>{esc(fdc["titles"][0]["title"])}</h2>\n<ol class="papers">\n'
+                         + ("\n".join(items) if items else '<li class="empty">No members yet.</li>')
+                         + "\n</ol>\n</section>")
 
 The version line of an entry names the version presented or, for a member
 of a selection, the versions vetted, the last of which is presented.
@@ -551,18 +612,18 @@ of a selection, the versions vetted, the last of which is presented.
 
 The lead paragraph of the home page says what the archive is. An
 archive of one's own documents gets a fixed text; a curated collection
-(order `manual`) gets its description, and a sentence saying that its
-members are kept in their own archives, and, for a selection, that each
-is shown in the version its curator vetted.
+(order `manual`), or the featured collection, gets its description, and a
+sentence saying that its members are kept in their own archives, and, for
+a selection, that each is shown in the version its curator vetted.
 
     # in the lead paragraph of the home page:
     lead = ('Papers with their sources, every version, fixed by digests. An '
             '<a href="https://opensheaf.org">OpenSheaf</a> archive: programs start from '
             '<a href="opensheaf.json">opensheaf.json</a>.')
-    cdir = P.OCFL / P.ARCHIVE["mainCollection"]
+    cdir = P.OCFL / (featured or P.ARCHIVE["mainCollection"])
     cinv = P.load_inventory(cdir)
     cmem = P.read_json(cdir, cinv, "members.json") if cinv else {}
-    if cmem.get("order") == "manual":
+    if featured or cmem.get("order") == "manual":
         cdc = P.read_json(cdir, cinv, "datacite.json")
         desc = next((x["description"] for x in cdc.get("descriptions", [])), "")
         lead = (esc(desc) + ' A collection in the <a href="https://opensheaf.org">OpenSheaf</a> format: each '
@@ -579,6 +640,8 @@ Jekyll.
     index = fill(template("index.html"), {
         "root": "", "archive_name": esc(P.ARCHIVE["name"]), "base_url": esc(base), "lead": lead,
         "papers": "\n".join(entries) if entries else '<li class="empty">No documents yet.</li>',
+        "featured": featured_html,
+        "papers_heading": "<h2>In this archive</h2>" if featured else "",
         "count": str(len(entries)), "updated": esc(fmt_date(datetime.date.today().isoformat())),
     })
     (root_out / "index.html").write_text(index, encoding="utf-8")

@@ -114,6 +114,11 @@ needed to typeset it, goes to a scratch folder). The landing pages are at
 empty file `.texmacs-noconvert` tells TeXmacs' website converter not to
 touch the archive's files (appendix B).
 
+With `index.html.featured` set to a collection of the archive, the home
+page lists that collection first (a reading list, a journal's issues),
+then the main collection; a setting that names something else stops the
+command.
+
 Only members of the archive itself can be shown this way: the entries are
 read from the local storage root. A curated main collection with members
 of other archives needs the website.
@@ -126,7 +131,12 @@ of other archives needs the website.
         members = json.loads(read_logical(coll_dir, inv, "members.json").read_text())["members"]
         if INDEX.get("html"):
             from . import html
-            html.render(members)
+            featured = INDEX["html"].get("featured") if isinstance(INDEX["html"], dict) else None
+            if featured and not (OCFL / featured / "inventory.json").exists():
+                sys.exit(f"osheaf.json: index.html.featured names {featured}, which is not an object of this archive")
+            if featured and read_json(OCFL / featured, load_inventory(OCFL / featured), OBJ).get("kind") != "collection":
+                sys.exit(f"osheaf.json: index.html.featured names {featured}, which is not a collection")
+            html.render(members, featured=featured)
             local = sum(1 for m in members if m.get("archive") == ARCHIVE["archiveId"])
             print(f"opensheaf.json, index.html, {local} landing pages and sitemap.xml written")
             return

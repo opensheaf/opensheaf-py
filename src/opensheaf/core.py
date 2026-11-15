@@ -30,7 +30,9 @@ The index is either a TeXmacs document made from a template, as above, or
 the website: "index": {"html": {"templates": "templates"}}. Both get landing
 pages `paper/<id>/` and `sitemap.xml`, from the templates in the folder
 `index.html.templates`, or `index.templates`, or else `templates/` if it
-exists, or else the package's defaults.
+exists, or else the package's defaults. The website's home page may
+feature a collection of the archive, listed before the main collection:
+"index": {"html": {"templates": "templates", "featured": "reading-list"}}.
 """
 
 import datetime
@@ -1272,7 +1274,12 @@ def index(args):
     members = json.loads(read_logical(coll_dir, inv, "members.json").read_text())["members"]
     if INDEX.get("html"):
         from . import html
-        html.render(members)
+        featured = INDEX["html"].get("featured") if isinstance(INDEX["html"], dict) else None
+        if featured and not (OCFL / featured / "inventory.json").exists():
+            sys.exit(f"osheaf.json: index.html.featured names {featured}, which is not an object of this archive")
+        if featured and read_json(OCFL / featured, load_inventory(OCFL / featured), OBJ).get("kind") != "collection":
+            sys.exit(f"osheaf.json: index.html.featured names {featured}, which is not a collection")
+        html.render(members, featured=featured)
         local = sum(1 for m in members if m.get("archive") == ARCHIVE["archiveId"])
         print(f"opensheaf.json, index.html, {local} landing pages and sitemap.xml written")
         return

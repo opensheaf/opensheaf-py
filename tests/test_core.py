@@ -660,6 +660,44 @@ def test_curated_collection_across_archives(tmp_path, capsys):
     assert "Withdrawn in its archive" in (c / "index.html").read_text()
 
 
+def test_featured_collection_on_the_home_page(tmp_path):
+    a, p = tmp_path / "a", tmp_path / "p"
+    make_archive(p, "papers")
+    make_archive(a, "author")
+    pdf = tmp_path / "p.pdf"
+    pdf.write_bytes(b"%PDF-1.4 p")
+    run("--root", str(p), "deposit", "one", "--pdf", str(pdf), "--no-source", "x", "--title", "One",
+        "--author", "Doe, J")
+    run("--root", str(p), "collect")
+    run("--root", str(p), "index")
+    run("--root", str(a), "deposit", "mine", "--pdf", str(pdf), "--no-source", "x", "--title", "Mine",
+        "--author", "Roe, R")
+    (tmp_path / "reading.yaml").write_text(
+        "title: A reading list\ndescription: Papers to read first.\ntype: selection\n"
+        f"members:\n  - {{archive: {p}, id: one}}\n  - {{archive: {a}, id: mine}}\n")
+    run("--root", str(a), "collection", "sync", "reading-list", "--from", str(tmp_path / "reading.yaml"))
+    run("--root", str(a), "collect")
+    main = P.read_json(a / "ocfl" / "collection-main", P.load_inventory(a / "ocfl" / "collection-main"),
+                       "members.json")["members"]
+    assert [m["id"] for m in main] == ["mine"]
+    cfg = json.loads((a / "osheaf.json").read_text())
+    cfg["index"] = {"html": {"templates": "templates", "featured": "reading-list"}}
+    (a / "osheaf.json").write_text(json.dumps(cfg))
+    run("--root", str(a), "index")
+    home = (a / "index.html").read_text()
+    assert home.index("<h2>A reading list</h2>") < home.index("<h2>In this archive</h2>")
+    assert "Papers to read first." in home
+    reading = P.read_json(a / "ocfl" / "reading-list", P.load_inventory(a / "ocfl" / "reading-list"),
+                          "members.json")["members"]
+    for m in reading + main:
+        assert P.member_pins(m)[-1][1][:32] in home
+    assert P.verify_errors() == []
+    cfg["index"]["html"]["featured"] = "mine"
+    (a / "osheaf.json").write_text(json.dumps(cfg))
+    with pytest.raises(SystemExit):
+        run("--root", str(a), "index")
+
+
 def test_selection_pins_revisions(tmp_path, capsys):
     from opensheaf import collections
     a, s = tmp_path / "a", tmp_path / "s"

@@ -152,7 +152,9 @@ discovery document.
     the website: "index": {"html": {"templates": "templates"}}. Both get landing
     pages `paper/<id>/` and `sitemap.xml`, from the templates in the folder
     `index.html.templates`, or `index.templates`, or else `templates/` if it
-    exists, or else the package's defaults.
+    exists, or else the package's defaults. The website's home page may
+    feature a collection of the archive, listed before the main collection:
+    "index": {"html": {"templates": "templates", "featured": "reading-list"}}.
     """
 
 The module uses only the standard library. The optional packages
