@@ -299,6 +299,42 @@ def test_unpack_limits(tmp_path, monkeypatch):
         arxiv.unpack(bomb, tmp_path / "bomb-out", "2611.14296")
 
 
+def test_zenodo_token_order(monkeypatch):
+    import sys
+    import types
+    from opensheaf import zenodo
+    s = zenodo.SERVICES[True]
+    store = {}
+
+    def get_password(service, user):
+        if store.get("fail"):
+            raise RuntimeError("no backend")
+        return store.get(service)
+    monkeypatch.setitem(sys.modules, "keyring", types.SimpleNamespace(get_password=get_password))
+    asked = []
+
+    def security(cmd, **kw):
+        asked.append(cmd)
+        return types.SimpleNamespace(returncode=0, stdout="from-security\n")
+    monkeypatch.setattr(zenodo.subprocess, "run", security)
+    monkeypatch.setattr(zenodo.shutil, "which", lambda name: "/usr/bin/" + name)
+    monkeypatch.setattr(zenodo.sys, "platform", "linux")
+    monkeypatch.delenv("ZENODO_TOKEN", raising=False)
+    assert zenodo.read_token(s) is None
+    store["zenodo-token"] = "from-keyring"
+    assert zenodo.read_token(s) == "from-keyring"
+    monkeypatch.setenv("ZENODO_TOKEN", " from-env ")
+    assert zenodo.read_token(s) == "from-env"
+    monkeypatch.delenv("ZENODO_TOKEN")
+    store["fail"] = True
+    assert zenodo.read_token(s) is None and asked == []
+    monkeypatch.setattr(zenodo.sys, "platform", "darwin")
+    assert zenodo.read_token(s) == "from-security"
+    assert asked[0][:4] == ["security", "find-generic-password", "-s", "zenodo-token"]
+    assert zenodo.read_token(zenodo.SERVICES[False]) == "from-security"
+    assert asked[1][3] == "zenodo-sandbox-token"
+
+
 def run(*argv):
     from opensheaf import cli
     cli.main(list(argv))

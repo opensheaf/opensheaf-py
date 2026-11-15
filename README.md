@@ -196,8 +196,10 @@ osheaf arxiv import DOWNLOADS [ARXIV-ID ...] [--update] [--versions v1,v3]
   of accepted copies).
 - **zenodo**: the Zenodo binding (appendix A): deposits the current document
   version (on the sandbox, on a copy of the object, unless `--production`).
-  Tokens are read from the macOS keychain (`zenodo-token`,
-  `zenodo-sandbox-token`).
+  Tokens are read from `ZENODO_TOKEN` / `ZENODO_SANDBOX_TOKEN`, or from the
+  system's credential store under `zenodo-token` / `zenodo-sandbox-token`
+  (through keyring, `pip install 'opensheaf[zenodo]'`; on macOS also the
+  keychain directly).
 - **arxiv fetch / import**: download papers from arXiv (every version, with
   each version's licence and comments; one request every 3 seconds) and
   import them, one document version per arXiv version, with arXiv's files

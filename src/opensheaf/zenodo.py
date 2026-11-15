@@ -25,9 +25,14 @@ Without --production the Zenodo sandbox is used, and everything is done on a
 temporary copy of the object, so that test DOIs never enter the archive; the
 copy is printed and removed unless --keep is given.
 
-Tokens are read from the macOS keychain: `zenodo-token` (production) and
-`zenodo-sandbox-token` (sandbox), created with
-    security add-generic-password -a "$USER" -s zenodo-token -w
+Tokens: the environment variable ZENODO_TOKEN (production) or
+ZENODO_SANDBOX_TOKEN (sandbox); otherwise the system's credential store,
+under the service name zenodo-token or zenodo-sandbox-token and the login
+name, read through the Python package keyring (pip install
+'opensheaf[zenodo]': macOS keychain, Windows Credential Manager, Secret
+Service on Linux); on macOS also the keychain directly. To store a token:
+    keyring set zenodo-token "$USER"                              (any system)
+    security add-generic-password -a "$USER" -s zenodo-token -w   (macOS)
 
 If publication succeeds and the commit fails, the staging folder
 zenodo-staging/ID/ is kept, and the next run completes the object version
@@ -35,8 +40,10 @@ from it before anything else (appendix A).
 """
 
 import datetime
+import getpass
 import html
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -49,9 +56,9 @@ from pathlib import Path
 
 SERVICES = {
     False: {"api": "https://sandbox.zenodo.org/api", "records": "https://sandbox.zenodo.org/records/",
-            "keychain": "zenodo-sandbox-token", "prefix": "10.5072"},
+            "token": "zenodo-sandbox-token", "env": "ZENODO_SANDBOX_TOKEN", "prefix": "10.5072"},
     True: {"api": "https://zenodo.org/api", "records": "https://zenodo.org/records/",
-           "keychain": "zenodo-token", "prefix": "10.5281"},
+           "token": "zenodo-token", "env": "ZENODO_TOKEN", "prefix": "10.5281"},
 }
 SERVICE_NAME = "Zenodo"
 MAX_FILES = 100          # Zenodo's limit on files per record
@@ -67,16 +74,34 @@ OPEN_LICENCES = {"cc-by-4.0", "cc-by-sa-4.0", "cc-by-nc-4.0", "cc-by-nd-4.0", "c
                  "cc-by-nc-nd-4.0", "cc0-1.0", "mit", "apache-2.0", "gpl-3.0-or-later"}
 
 
+def read_token(s):
+    """The token of the service s (an entry of SERVICES), or None."""
+    token = os.environ.get(s["env"], "").strip()
+    if token:
+        return token
+    try:
+        import keyring
+        token = keyring.get_password(s["token"], getpass.getuser())
+    except Exception:   # no keyring, no store, or a store that refuses
+        token = None
+    if token and token.strip():
+        return token.strip()
+    if sys.platform == "darwin" and shutil.which("security"):
+        r = subprocess.run(["security", "find-generic-password", "-s", s["token"], "-w"],
+                           capture_output=True, text=True)
+        if r.returncode == 0 and r.stdout.strip():
+            return r.stdout.strip()
+    return None
+
+
 class Zenodo:
     def __init__(self, production):
         self.production = production
         self.s = SERVICES[production]
-        try:
-            self.token = subprocess.run(
-                ["security", "find-generic-password", "-s", self.s["keychain"], "-w"],
-                capture_output=True, text=True, check=True).stdout.strip()
-        except subprocess.CalledProcessError:
-            sys.exit(f"no Zenodo token in the keychain under {self.s['keychain']}")
+        self.token = read_token(self.s)
+        if not self.token:
+            sys.exit(f"no Zenodo token: set {self.s['env']}, or store it under the name "
+                     f"{self.s['token']} (see osheaf zenodo --help)")
 
     def call(self, method, url, data=None, raw=None):
         if not url.startswith("http"):

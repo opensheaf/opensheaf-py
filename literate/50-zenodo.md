@@ -50,9 +50,14 @@ summarises what happens.
     temporary copy of the object, so that test DOIs never enter the archive; the
     copy is printed and removed unless --keep is given.
 
-    Tokens are read from the macOS keychain: `zenodo-token` (production) and
-    `zenodo-sandbox-token` (sandbox), created with
-        security add-generic-password -a "$USER" -s zenodo-token -w
+    Tokens: the environment variable ZENODO_TOKEN (production) or
+    ZENODO_SANDBOX_TOKEN (sandbox); otherwise the system's credential store,
+    under the service name zenodo-token or zenodo-sandbox-token and the login
+    name, read through the Python package keyring (pip install
+    'opensheaf[zenodo]': macOS keychain, Windows Credential Manager, Secret
+    Service on Linux); on macOS also the keychain directly. To store a token:
+        keyring set zenodo-token "$USER"                              (any system)
+        security add-generic-password -a "$USER" -s zenodo-token -w   (macOS)
 
     If publication succeeds and the commit fails, the staging folder
     zenodo-staging/ID/ is kept, and the next run completes the object version
@@ -67,8 +72,10 @@ sandbox safe, as we shall see.
     <<Zenodo: what the binding does>>
 
     import datetime
+    import getpass
     import html
     import json
+    import os
     import shutil
     import subprocess
     import sys
@@ -81,6 +88,9 @@ sandbox safe, as we shall see.
 
     <<Zenodo: the production and sandbox services>>
     <<Zenodo: vocabularies of the deposit metadata>>
+
+
+    <<Zenodo: the token>>
 
 
     <<Zenodo: talking to the API>>
@@ -135,22 +145,66 @@ Sandbox and production
 Zenodo has a sandbox, `sandbox.zenodo.org`, a separate copy of the service
 for trying things out. Its DOIs are test DOIs, with the prefix `10.5072`,
 which do not resolve; production DOIs have Zenodo's prefix `10.5281`. The
-two have separate accounts and tokens, which we keep in the macOS keychain
-rather than in a file of the archive or on the command line, where they
-could end up in a repository or in the shell history. `SERVICE_NAME` is
-the name of the service in the `external` entries of `object.json`; the
-other constants are explained where they are used.
+two have separate accounts and tokens, each with a name under which it is
+stored and an environment variable that can carry it (see the next
+section). `SERVICE_NAME` is the name of the service in the `external`
+entries of `object.json`; the other constants are explained where they are
+used.
 
     # in Zenodo: the production and sandbox services:
     SERVICES = {
         False: {"api": "https://sandbox.zenodo.org/api", "records": "https://sandbox.zenodo.org/records/",
-                "keychain": "zenodo-sandbox-token", "prefix": "10.5072"},
+                "token": "zenodo-sandbox-token", "env": "ZENODO_SANDBOX_TOKEN", "prefix": "10.5072"},
         True: {"api": "https://zenodo.org/api", "records": "https://zenodo.org/records/",
-               "keychain": "zenodo-token", "prefix": "10.5281"},
+               "token": "zenodo-token", "env": "ZENODO_TOKEN", "prefix": "10.5281"},
     }
     SERVICE_NAME = "Zenodo"
     MAX_FILES = 100          # Zenodo's limit on files per record
     METADATA_FILES = ("datacite.json", "object.json")
+
+Where tokens are kept
+--------------------
+
+A token is never kept in a file of the archive or given on the command
+line, where it could end up in a repository or in the shell history. It is
+looked for in three places, in order:
+
+1. **The environment**, `ZENODO_TOKEN` or `ZENODO_SANDBOX_TOKEN`. This works
+   on every system, and it is how continuous integration passes secrets:
+   a workflow of GitHub Actions sets it from a secret of the repository.
+2. **The system's credential store**, through the Python package
+   [keyring](https://pypi.org/project/keyring/): the keychain on macOS,
+   the Credential Manager on Windows, the Secret Service (GNOME Keyring,
+   KWallet) on Linux. The token is stored under the name of the service,
+   `zenodo-token` or `zenodo-sandbox-token`, and the login name of the
+   user. keyring is optional (`pip install 'opensheaf[zenodo]'`); without
+   it, or without a working store, this step is skipped.
+3. **On macOS, the keychain directly**, with the `security` command, which
+   needs no package. This finds the tokens stored with
+   `security add-generic-password`, under any account name.
+
+The first token found is used. When there is none, the message names the
+variable and the stored name, so that the user knows where to put it.
+
+    # in Zenodo: the token:
+    def read_token(s):
+        """The token of the service s (an entry of SERVICES), or None."""
+        token = os.environ.get(s["env"], "").strip()
+        if token:
+            return token
+        try:
+            import keyring
+            token = keyring.get_password(s["token"], getpass.getuser())
+        except Exception:   # no keyring, no store, or a store that refuses
+            token = None
+        if token and token.strip():
+            return token.strip()
+        if sys.platform == "darwin" and shutil.which("security"):
+            r = subprocess.run(["security", "find-generic-password", "-s", s["token"], "-w"],
+                               capture_output=True, text=True)
+            if r.returncode == 0 and r.stdout.strip():
+                return r.stdout.strip()
+        return None
 
 The API is Zenodo's REST API for deposits. Requests and answers are JSON,
 except uploads, which send the bytes of a file. An HTTP error becomes an
@@ -162,12 +216,10 @@ record is made from its number, as Zenodo makes it.
         def __init__(self, production):
             self.production = production
             self.s = SERVICES[production]
-            try:
-                self.token = subprocess.run(
-                    ["security", "find-generic-password", "-s", self.s["keychain"], "-w"],
-                    capture_output=True, text=True, check=True).stdout.strip()
-            except subprocess.CalledProcessError:
-                sys.exit(f"no Zenodo token in the keychain under {self.s['keychain']}")
+            self.token = read_token(self.s)
+            if not self.token:
+                sys.exit(f"no Zenodo token: set {self.s['env']}, or store it under the name "
+                         f"{self.s['token']} (see osheaf zenodo --help)")
 
         def call(self, method, url, data=None, raw=None):
             if not url.startswith("http"):
