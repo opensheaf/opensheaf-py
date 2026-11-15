@@ -3,7 +3,6 @@
 [![tests](https://github.com/opensheaf/opensheaf-py/actions/workflows/tests.yml/badge.svg)](https://github.com/opensheaf/opensheaf-py/actions/workflows/tests.yml)
 [![pages](https://github.com/opensheaf/opensheaf-py/actions/workflows/pages.yml/badge.svg)](https://github.com/opensheaf/opensheaf-py/actions/workflows/pages.yml)
 [![archive examples](https://github.com/opensheaf/archive-template/actions/workflows/examples.yml/badge.svg)](https://github.com/opensheaf/archive-template/actions/workflows/examples.yml)
-[![collection examples](https://github.com/opensheaf/collection-template/actions/workflows/examples.yml/badge.svg)](https://github.com/opensheaf/collection-template/actions/workflows/examples.yml)
 [![Python](https://img.shields.io/badge/python-3.9%E2%80%933.13-blue)](pyproject.toml)
 [![licence: GPL v3+](https://img.shields.io/badge/licence-GPL--3.0--or--later-blue)](LICENSE)
 
@@ -143,11 +142,15 @@ osheaf arxiv import DOWNLOADS [ARXIV-ID ...] [--update] [--versions v1,v3]
   selection` pins the revisions vetted (`revisions: [2, 3]`, document
   versions, or object versions such as `v4`), which `sync` writes exactly
   and `update` never changes: it reports the versions not vetted.
-  `osheaf init --curated` makes an archive whose main collection is curated;
-  `osheaf verify --remote` fetches every member and checks its pins, trying
-  the mirrors listed in the member and in its archive's discovery document
-  when the archive fails. See `osheaf collection --help` and the template
-  [opensheaf/collection-template](https://github.com/opensheaf/collection-template).
+  A collection of the archive other than the main one is named by its
+  identifier (`osheaf collection sync reading-list --from FILE`), and may be
+  featured on the home page, before the main collection
+  (`"featured": "reading-list"` under `index.html` in `osheaf.json`);
+  `osheaf init --curated` makes an archive whose main collection itself is
+  curated; `osheaf verify --remote` fetches every member and checks its pins,
+  trying the mirrors listed in the member and in its archive's discovery
+  document when the archive fails. See `osheaf collection --help` and the
+  template [opensheaf/archive-template](https://github.com/opensheaf/archive-template).
 - **accept** (a journal, a series): copies exactly one version of another
   archive's object (the version that was vetted) into a document of this
   archive, byte for byte, recording its source and pin in `object.json`
