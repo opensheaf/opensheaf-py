@@ -654,6 +654,32 @@ with its PDF, and a deposit of a LaTeX source alone is refused.
         with pytest.raises(SystemExit):
             run("--root", str(root), "deposit", "p", str(src), "--title", "T", "--author", "Doe, J")
 
+A deposit may point to the file of its sources that holds the licence
+(section 9: `licence`): a `LICENSE` given with `--extra-source` becomes the
+licence note of `object.json`, and the verifier finds it among the files.
+A licence file that is not among the files deposited is refused.
+
+    # in test: deposits through osheaf:
+    def test_licence_file_of_a_deposit(tmp_path):
+        root = tmp_path / "archive"
+        run("init", str(root), "--archive-id", "tag:example.org,2026:t", "--name", "T",
+            "--base-url", "https://example.org/", "--curator", "Doe, Jane")
+        src, pdf, lic = tmp_path / "main.tex", tmp_path / "p.pdf", tmp_path / "LICENSE"
+        src.write_text("x")
+        pdf.write_bytes(b"%PDF-1.4 p")
+        lic.write_text("Licence terms of the sources.")
+        base = ["--root", str(root), "deposit", "p", str(src), "--pdf", str(pdf), "--title", "T",
+                "--author", "Doe, J", "--rights", "Licence of the authors", "--extra-source", str(lic)]
+        with pytest.raises(SystemExit):
+            run(*base, "--licence-file", "COPYING")
+        run(*base, "--licence-file", "LICENSE")
+        d = root / "ocfl" / "p"
+        obj = P.read_json(d, P.load_inventory(d), P.OBJ)
+        assert obj["licence"] == {"path": "LICENSE", "mediaType": "text/plain"}
+        run("--root", str(root), "collect")
+        run("--root", str(root), "index")
+        assert P.verify_errors() == []
+
 The website finds the PDF of a version among the renditions of its
 `object.json`, whatever its name. A document written by hand has its PDF
 as `article.pdf`, as an accepted copy of a document of another archive

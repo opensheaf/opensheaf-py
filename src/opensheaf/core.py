@@ -721,6 +721,13 @@ def deposit(args):
                             "date": available or args.created or TODAY, "method": args.agreement}
     if args.stage:
         obj["stage"] = {"scheme": "NISO-JAV", "value": args.stage}
+    if getattr(args, "licence_file", None):
+        if args.licence_file not in files:
+            sys.exit(f"--licence-file {args.licence_file} is not a file of the deposit "
+                     f"(give it as the main source or with --extra-source; files: {', '.join(sorted(files))})")
+        obj["licence"] = {"path": args.licence_file, "mediaType": {
+            ".pdf": "application/pdf", ".md": "text/markdown", ".txt": "text/plain", ".html": "text/html",
+        }.get(Path(args.licence_file).suffix.lower(), "text/plain")}
     carry_forward(prev_obj, obj, inv, next_object_version(inv), args.after)
     for lp, f in carried_files(obj_id, inv).items():
         files.setdefault(lp, f)

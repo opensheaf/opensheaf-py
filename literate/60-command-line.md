@@ -234,7 +234,10 @@ core's table `RIGHTS`, or free text), relations to the same work
 elsewhere, further sources at the logical path the main source refers to,
 the message of the inventory, and the record of the authors' agreement
 (section 9: `agreement`), which a journal depositing its version of record
-needs. Finally `--from` names a file of options, and the function of the
+needs. `--licence-file` names the file of the deposit, among its sources,
+that holds the full text or terms of the licence (section 9: `licence`), for
+instance the `LICENSE` of a package of sources, or a licence without an SPDX
+identifier. Finally `--from` names a file of options, and the function of the
 command is `core.deposit`.
 
     # in the licence, relations and agreement of a deposit:
@@ -248,6 +251,10 @@ command is `core.deposit`.
     d.add_argument("--message")
     d.add_argument("--agreement", metavar="METHOD",
                    help="record the authors' agreement (object.json), e.g. a journal's publication terms")
+    d.add_argument("--licence-file", metavar="PATH",
+                   help="the file of the deposit that holds the full text or terms of the licence "
+                        "(the main source or an --extra-source, by its path in the deposit, e.g. LICENSE): "
+                        "object.json licence")
     d.add_argument("--from", dest="from_file", metavar="FILE",
                     help="take the options from a YAML or JSON file (a list: several, in order)")
     d.set_defaults(func=core.deposit)

@@ -385,7 +385,11 @@ declares); and the state, `active`. The optional parts follow the
 options: the change note, the stage of the version in the NISO scheme
 (an author's original, an accepted manuscript, ...), and the record of the
 authors' agreement, which a journal accepting a paper needs (section 9:
-names, a date and how, no personal data).
+names, a date and how, no personal data), and the licence note, which
+points to the file of the deposit that holds the full text or terms of the
+licence (section 9: `licence`); that file must be one of the files
+deposited, a source or an extra source, since the note refers to the
+package.
 
     # in the object.json of a deposited version:
     obj = {
@@ -413,6 +417,13 @@ names, a date and how, no personal data).
                             "date": available or args.created or TODAY, "method": args.agreement}
     if args.stage:
         obj["stage"] = {"scheme": "NISO-JAV", "value": args.stage}
+    if getattr(args, "licence_file", None):
+        if args.licence_file not in files:
+            sys.exit(f"--licence-file {args.licence_file} is not a file of the deposit "
+                     f"(give it as the main source or with --extra-source; files: {', '.join(sorted(files))})")
+        obj["licence"] = {"path": args.licence_file, "mediaType": {
+            ".pdf": "application/pdf", ".md": "text/markdown", ".txt": "text/plain", ".html": "text/html",
+        }.get(Path(args.licence_file).suffix.lower(), "text/plain")}
 
 ### Recording the version
 

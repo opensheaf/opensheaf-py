@@ -82,6 +82,10 @@ def build_parser():
     d.add_argument("--message")
     d.add_argument("--agreement", metavar="METHOD",
                    help="record the authors' agreement (object.json), e.g. a journal's publication terms")
+    d.add_argument("--licence-file", metavar="PATH",
+                   help="the file of the deposit that holds the full text or terms of the licence "
+                        "(the main source or an --extra-source, by its path in the deposit, e.g. LICENSE): "
+                        "object.json licence")
     d.add_argument("--from", dest="from_file", metavar="FILE",
                     help="take the options from a YAML or JSON file (a list: several, in order)")
     d.set_defaults(func=core.deposit)
