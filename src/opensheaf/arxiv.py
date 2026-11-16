@@ -501,7 +501,7 @@ def import_paper(folder, taken, report, dry, texmacs=None, licences=None, existi
             "publicationYear": int(first_date[:4]),
             "types": {"resourceTypeGeneral": "Preprint"},
             "version": str(docn),
-            "url": f"https://arxiv.org/abs/{aid}{vid}",
+            "url": P.landing_url(obj_id),
             "dates": [{"date": first_date, "dateType": "Issued"},
                       {"date": v["date"][:10], "dateType": "Available"}],
             "language": "en",

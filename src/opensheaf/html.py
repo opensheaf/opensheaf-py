@@ -302,7 +302,7 @@ def remote_entry(m):
     from . import collections
     cite = m.get("cite", {})
     title, by, year = cite.get("title", m["id"]), P.names_joined(cite.get("creators", [])), cite.get("year", "")
-    links, abstract, archive_name, status = [], "", m.get("archiveUrl", ""), {}
+    links, abstract, archive_name, status, landing = [], "", m.get("archiveUrl", ""), {}, ""
     pin = P.member_pins(m)[-1][1]
     minv = P.load_inventory(P.OCFL / m["id"])
     here = P.ARCHIVE["baseUrl"] in m.get("mirrors", []) and minv is not None \
@@ -330,7 +330,8 @@ def remote_entry(m):
             if cp:
                 links.append(f'<a href="{esc(r.root + m["id"] + "/" + cp)}">PDF</a>')
         if rdc.get("url"):
-            links.insert(0, f'<a href="{esc(rdc["url"])}">landing page</a>')
+            landing = rdc["url"]
+            links.insert(0, f'<a href="{esc(landing)}">landing page</a>')
     except Exception:  # noqa: BLE001 - the copy or the cached citation is shown
         links.append('<span class="missing">'
                      + ("its archive is unavailable" if here else "archive unavailable: cached citation")
@@ -342,7 +343,8 @@ def remote_entry(m):
                      f'</strong> {esc(w.get("reason", {}).get("text", ""))}</div>')
     return "\n".join([
         f'<li class="paper member{" withdrawn" if withdrawn else ""}">',
-        f'<span class="paper-title">{esc(title)}</span>',
+        (f'<a class="paper-title" href="{esc(landing)}">{esc(title)}</a>' if landing
+         else f'<span class="paper-title">{esc(title)}</span>'),
         f'<div class="paper-authors">{esc(by)}</div>',
         f'<div class="paper-meta">{esc(str(year))} · in <a href="{esc(m["archiveUrl"])}">{esc(archive_name)}</a>'
         + (f' · {versions_line(m, {})}' if m.get("revisions") else "")

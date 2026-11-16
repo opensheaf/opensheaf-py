@@ -472,9 +472,11 @@ of arXiv: `Issued`, the first public appearance of the paper, is the date
 of its first arXiv version, and `Available`, when this version became
 public, is the date of this arXiv version. The subjects are arXiv's
 categories, under the scheme `arXiv`; the journal reference, a free text,
-becomes a description of type `SeriesInformation`. The `url` is arXiv's
-page of the version; the archive has no DOI for it yet (the chapter on
-Zenodo gives it one).
+becomes a description of type `SeriesInformation`. The `url` is the
+paper's landing page in this archive, as for a deposit: readers are sent to
+the archive, and arXiv's page of the version is recorded by the relation
+`IsIdenticalTo` and in `object.json`. The archive has no DOI for it yet (the
+chapter on Zenodo gives it one).
 
     # in arXiv: the datacite.json of a version:
     datacite = {
@@ -484,7 +486,7 @@ Zenodo gives it one).
         "publicationYear": int(first_date[:4]),
         "types": {"resourceTypeGeneral": "Preprint"},
         "version": str(docn),
-        "url": f"https://arxiv.org/abs/{aid}{vid}",
+        "url": P.landing_url(obj_id),
         "dates": [{"date": first_date, "dateType": "Issued"},
                   {"date": v["date"][:10], "dateType": "Available"}],
         "language": "en",
