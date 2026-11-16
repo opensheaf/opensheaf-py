@@ -1134,8 +1134,14 @@ the archive stops `osheaf index`.
         for m in reading + main:
             assert P.member_pins(m)[-1][1][:32] in home
         assert P.verify_errors() == []
-        # a collection of the archive inside the featured one gets a landing page, which stays
-        (tmp_path / "sub.yaml").write_text("title: Part one\ntype: catalogue\nmembers: []\n")
+        # a collection of the archive inside the featured one gets a landing page, which stays;
+        # it lists its members, linked, and a collection inside it gets a landing page too
+        (tmp_path / "sub2.yaml").write_text("title: Part two\ntype: catalogue\nmembers: []\n")
+        run("--root", str(a), "collection", "sync", "part-two", "--from", str(tmp_path / "sub2.yaml"))
+        (tmp_path / "sub.yaml").write_text(
+            "title: Part one\ndescription: The first part.\ntype: catalogue\n"
+            f"members:\n  - {{archive: {a}, id: mine}}\n  - {{archive: {p}, id: one}}\n"
+            f"  - {{archive: {a}, id: part-two}}\n")
         run("--root", str(a), "collection", "sync", "part-one", "--from", str(tmp_path / "sub.yaml"))
         (tmp_path / "reading.yaml").write_text(
             "title: A reading list\ndescription: Papers to read first.\ntype: selection\n"
@@ -1146,6 +1152,12 @@ the archive stops `osheaf index`.
         run("--root", str(a), "index")
         assert (a / "paper" / "part-one" / "index.html").exists()
         assert (a / "paper" / "mine" / "index.html").exists()
+        part = (a / "paper" / "part-one" / "index.html").read_text()
+        assert "A catalogue curated by" in part and "3 members" in part and "The first part." in part
+        assert 'href="../../paper/mine/"' in part and 'href="../../paper/part-two/"' in part
+        assert ">One</a>" in part and "PDF</a>" not in part.split("<h2>Members</h2>")[0]
+        assert (a / "paper" / "part-two" / "index.html").exists()
+        assert P.verify_errors() == []
         cfg["index"]["html"]["featured"] = "mine"
         (a / "osheaf.json").write_text(json.dumps(cfg))
         with pytest.raises(SystemExit):

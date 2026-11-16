@@ -1,9 +1,10 @@
 The templates of the website
 ============================
 
-The pages of the [website](30-website.md) are filled into three default
+The pages of the [website](30-website.md) are filled into four default
 templates, kept in the package under `src/opensheaf/templates/`: the
-home page, the landing page of a document, and the style sheet. `osheaf
+home page, the landing page of a document, the landing page of a
+collection, and the style sheet. `osheaf
 init` copies them into the new archive's `templates` folder, where the
 curator may change them freely; the copies, not these files, are then
 used. An archive whose home page is a [TeXmacs index](16-index.md) uses
@@ -190,6 +191,66 @@ and compare.
       <p class="small">Pin in the collection (SHA-512 of the inventory it fixes):
       <a href="{{pin_url}}"><code>{{pin}}</code></a></p>
     </section>
+
+The landing page of a collection
+--------------------------------
+
+A collection of the archive (a reading list, a journal issue, a
+subcollection) has a landing page of its own kind, `collection.html`:
+what a reader comes for is its list of members. An archive made before
+this template existed has no copy of it, and the default is used. It
+receives the placeholders of a landing page that a collection has
+(`{{root}}`, `{{archive_name}}`, `{{base_url}}`, `{{head}}`, `{{title}}`,
+`{{issued}}`, `{{withdrawn}}`, `{{versions}}`, `{{cite}}`, `{{licence}}`,
+`{{pin}}`, `{{pin_url}}`), and:
+
+- `{{kind}}`, what it is and who curates it ("A selection curated by Jane
+  Doe");
+- `{{count}}`, the number of its members ("3 members");
+- `{{description}}`, its description, in paragraphs;
+- `{{members}}`, its members, as items of a list, in the form of the
+  entries of the home page.
+
+    <!-- in src/opensheaf/templates/collection.html: -->
+    <!doctype html>
+    <html lang="en">
+    <head>
+    <<the character set and viewport of a page>>
+    <title>{{title}} · {{archive_name}}</title>
+    {{head}}
+    <link rel="stylesheet" href="{{root}}style.css">
+    <<MathJax for the mathematics of a page>>
+    </head>
+    <body>
+    <nav><a href="{{root}}">{{archive_name}}</a></nav>
+    <main class="paper-page collection-page">
+      <h1>{{title}}</h1>
+      <p class="paper-authors">{{kind}}</p>
+      <p class="paper-meta">Since {{issued}} · {{count}}</p>
+      {{withdrawn}}
+      <section class="abstract">
+        {{description}}
+      </section>
+      <section>
+        <h2>Members</h2>
+        <ol class="papers">
+    {{members}}
+        </ol>
+      </section>
+      <section>
+        <h2>Versions</h2>
+        <ol class="versions">
+    {{versions}}
+        </ol>
+      </section>
+      <<the citation on a landing page>>
+    </main>
+    <footer>
+      <p>An <a href="https://opensheaf.org">OpenSheaf</a> archive (format 0.1, a draft, which may still change) ·
+      made with <a href="https://github.com/opensheaf/opensheaf-py">opensheaf-py</a></p>
+    </footer>
+    </body>
+    </html>
 
 The style sheet
 ---------------

@@ -299,16 +299,19 @@ the base URL.
     <<the withdrawal notice of a landing page>>
     <<the licence and citation of a landing page>>
     <<the HTML version of a document, if any>>
-    page = fill(page_t, {
-        "root": root, "archive_name": esc(P.ARCHIVE["name"]), "base_url": esc(base),
-        "head": meta_tags(obj_id, d, inv, cur, obj, dc),
-        "title": esc(dc["titles"][0]["title"]), "authors": esc(authors(dc)),
-        "issued": esc(fmt_date(issued)), "abstract": abstract_html(dc),
-        "withdrawn": withdrawn, "versions": versions, "licence": licence,
-        "pdf": esc(pdf_address(root, obj_id, inv, cur, obj) or f"#v{obj['documentVersion']}"),
-        "cite": esc(cite), "pin": pin, "pin_url": f"{root}ocfl/{obj_id}/{pin_ver}/inventory.json",
-        "html_link": html_link,
-    })
+    if obj.get("kind") == "collection":
+        <<the landing page of a collection>>
+    else:
+        page = fill(page_t, {
+            "root": root, "archive_name": esc(P.ARCHIVE["name"]), "base_url": esc(base),
+            "head": meta_tags(obj_id, d, inv, cur, obj, dc),
+            "title": esc(dc["titles"][0]["title"]), "authors": esc(authors(dc)),
+            "issued": esc(fmt_date(issued)), "abstract": abstract_html(dc),
+            "withdrawn": withdrawn, "versions": versions, "licence": licence,
+            "pdf": esc(pdf_address(root, obj_id, inv, cur, obj) or f"#v{obj['documentVersion']}"),
+            "cite": esc(cite), "pin": pin, "pin_url": f"{root}ocfl/{obj_id}/{pin_ver}/inventory.json",
+            "html_link": html_link,
+        })
     out = root_out / "paper" / obj_id / "index.html"
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(page, encoding="utf-8")
@@ -355,6 +358,39 @@ page otherwise.
     cite = f"{authors(dc)}. {dc['titles'][0]['title']}. {P.ARCHIVE['name']}, " \
            f"{(issued or '')[:4]}, version {obj['documentVersion']}. " \
            + (f"https://doi.org/{dc['doi']}" if dc.get("doi") else f"{base}paper/{obj_id}/")
+
+### The landing page of a collection
+
+A collection of this archive (a reading list, a journal issue, a
+subcollection) has a landing page at the same place, `paper/<id>/`, but
+from its own template, `collection.html`, since what a reader looks for
+there is its members, not a PDF. The page names its kind and curator,
+gives its description, and lists its members as the home page does: each
+with its title linked to its landing page (here, or in its own archive),
+its authors, the versions vetted for a selection, and its pin. Then come
+its versions, its citation and licence (CC0, section 10), and the pin of
+the collection itself. An archive whose `templates/` folder has no
+`collection.html` uses the default one, so archives made before it get
+these pages too.
+
+    # in the landing page of a collection:
+    cmembers = P.read_json(d, inv, "members.json", cur)
+    kind = {"selection": "A selection", "catalogue": "A catalogue"}.get(cmembers.get("type"), "A collection")
+    items = [local_entry(cm, root) if cm.get("archive") == P.ARCHIVE["archiveId"] else remote_entry(cm)
+             for cm in cmembers["members"]]
+    count = len(items)
+    page = fill(template("collection.html"), {
+        "root": root, "archive_name": esc(P.ARCHIVE["name"]), "base_url": esc(base),
+        "head": meta_tags(obj_id, d, inv, cur, obj, dc),
+        "title": esc(dc["titles"][0]["title"]),
+        "kind": f"{kind} curated by {esc(authors(dc))}",
+        "issued": esc(fmt_date(issued)),
+        "count": f"{count} member{'s' if count != 1 else ''}",
+        "description": abstract_html(dc),
+        "members": "\n".join(items) if items else '<li class="empty">No members yet.</li>',
+        "withdrawn": withdrawn, "versions": versions, "licence": licence,
+        "cite": esc(cite), "pin": pin, "pin_url": f"{root}ocfl/{obj_id}/{pin_ver}/inventory.json",
+    })
 
 ### A version
 
@@ -544,9 +580,11 @@ the home page shows the pin of every member. The abstract is folded in a
 `<details>` element, so that the list stays short.
 
     # in the home-page entry of a document of this archive:
-    def local_entry(m):
-        """The home-page entry of a member of this archive, in the version its
-        collection presents (the main collection's or the featured one's)."""
+    def local_entry(m, root=""):
+        """The entry of a member of this archive, in the version its collection
+        presents (the main collection's, the featured one's, or that of the
+        collection whose landing page lists it); root: the way to the root of
+        the archive from the page ("../../" on a landing page)."""
         obj_id = m["id"]
         d = P.OCFL / obj_id
         inv = P.load_inventory(d)
@@ -556,16 +594,17 @@ the home page shows the pin of every member. The abstract is folded in a
         dc = P.read_json(d, inv, "datacite.json", cur)
         withdrawn = P.read_json(d, inv, P.OBJ).get("status") == "withdrawn"
         issued = P.date_of(dc, "Issued")
-        pdf = pdf_address("", obj_id, inv, cur, obj)
+        pdf = pdf_address(root, obj_id, inv, cur, obj)
         abstract = abstract_html(dc)
+        summary = "Description" if obj.get("kind") == "collection" else "Abstract"
         return "\n".join([
             f'<li class="paper{" withdrawn" if withdrawn else ""}">',
-            f'<a class="paper-title" href="paper/{obj_id}/">{esc(dc["titles"][0]["title"])}</a>',
+            f'<a class="paper-title" href="{root}paper/{obj_id}/">{esc(dc["titles"][0]["title"])}</a>',
             f'<div class="paper-authors">{esc(authors(dc))}</div>',
             f'<div class="paper-meta">{esc((issued or "")[:4])} · {versions_line(m, obj)}'
             + (f' · <a href="{esc(pdf)}">PDF</a>' if pdf else "")
             + f' · <span class="pin" title="{pin}">pin {pin[:32]}…</span></div>',
-            f"<details><summary>Abstract</summary>{abstract}</details>" if abstract else "",
+            f"<details><summary>{summary}</summary>{abstract}</details>" if abstract else "",
             "</li>"])
 
 A featured collection is read from the storage root like the main one.
@@ -573,7 +612,12 @@ Its members of this archive need landing pages too: a document of the
 main collection has one already; another object of this archive (a
 subcollection, a document the main collection does not list) gets one
 as well, in the version the featured collection presents, but no entry in
-the main collection's list.
+the main collection's list. The same holds further down: the landing page
+of a collection lists its members, so every member of this archive of a
+collection that gets a landing page gets one too, in the version that
+collection presents (the first collection that reaches it, if several
+do). Collections are followed once each, so a collection that includes
+itself, directly or not, ends the walk.
 
     # in the members of the featured collection:
     fmembers = []
@@ -582,7 +626,21 @@ the main collection's list.
         finv = P.load_inventory(fdir)
         fmembers = P.read_json(fdir, finv, "members.json")["members"]
     listed = {m["id"] for m in members if m.get("archive") == P.ARCHIVE["archiveId"]}
-    extra = [fm for fm in fmembers if fm.get("archive") == P.ARCHIVE["archiveId"] and fm["id"] not in listed]
+    extra, seen, followed = [], set(listed), set()
+    queue = list(fmembers) + [m for m in members if m.get("archive") == P.ARCHIVE["archiveId"]]
+    while queue:
+        qm = queue.pop(0)
+        if qm.get("archive") != P.ARCHIVE["archiveId"]:
+            continue
+        if qm["id"] not in seen:
+            seen.add(qm["id"])
+            extra.append(qm)
+        if qm.get("kind") == "collection" and qm["id"] not in followed:
+            followed.add(qm["id"])
+            qd = P.OCFL / qm["id"]
+            qinv = P.load_inventory(qd)
+            if qinv:
+                queue += P.read_json(qd, qinv, "members.json", P.presented_version(qm, qd, qinv))["members"]
 
 Its title heads its section, and each member gets an entry, from this
 archive or another, in the version the featured collection presents (the

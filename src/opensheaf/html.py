@@ -187,7 +187,21 @@ def render(members, home=True, featured=None):
         finv = P.load_inventory(fdir)
         fmembers = P.read_json(fdir, finv, "members.json")["members"]
     listed = {m["id"] for m in members if m.get("archive") == P.ARCHIVE["archiveId"]}
-    extra = [fm for fm in fmembers if fm.get("archive") == P.ARCHIVE["archiveId"] and fm["id"] not in listed]
+    extra, seen, followed = [], set(listed), set()
+    queue = list(fmembers) + [m for m in members if m.get("archive") == P.ARCHIVE["archiveId"]]
+    while queue:
+        qm = queue.pop(0)
+        if qm.get("archive") != P.ARCHIVE["archiveId"]:
+            continue
+        if qm["id"] not in seen:
+            seen.add(qm["id"])
+            extra.append(qm)
+        if qm.get("kind") == "collection" and qm["id"] not in followed:
+            followed.add(qm["id"])
+            qd = P.OCFL / qm["id"]
+            qinv = P.load_inventory(qd)
+            if qinv:
+                queue += P.read_json(qd, qinv, "members.json", P.presented_version(qm, qd, qinv))["members"]
     for k, m in enumerate(members + extra):
         if m.get("archive") != P.ARCHIVE["archiveId"]:
             if home:
@@ -222,16 +236,35 @@ def render(members, home=True, featured=None):
         html_link = ""
         if (P.SITE / obj_id / f"{obj_id}.html").exists():
             html_link = f' · <a href="{root}site/{obj_id}/{obj_id}.html">HTML</a>'
-        page = fill(page_t, {
-            "root": root, "archive_name": esc(P.ARCHIVE["name"]), "base_url": esc(base),
-            "head": meta_tags(obj_id, d, inv, cur, obj, dc),
-            "title": esc(dc["titles"][0]["title"]), "authors": esc(authors(dc)),
-            "issued": esc(fmt_date(issued)), "abstract": abstract_html(dc),
-            "withdrawn": withdrawn, "versions": versions, "licence": licence,
-            "pdf": esc(pdf_address(root, obj_id, inv, cur, obj) or f"#v{obj['documentVersion']}"),
-            "cite": esc(cite), "pin": pin, "pin_url": f"{root}ocfl/{obj_id}/{pin_ver}/inventory.json",
-            "html_link": html_link,
-        })
+        if obj.get("kind") == "collection":
+            cmembers = P.read_json(d, inv, "members.json", cur)
+            kind = {"selection": "A selection", "catalogue": "A catalogue"}.get(cmembers.get("type"), "A collection")
+            items = [local_entry(cm, root) if cm.get("archive") == P.ARCHIVE["archiveId"] else remote_entry(cm)
+                     for cm in cmembers["members"]]
+            count = len(items)
+            page = fill(template("collection.html"), {
+                "root": root, "archive_name": esc(P.ARCHIVE["name"]), "base_url": esc(base),
+                "head": meta_tags(obj_id, d, inv, cur, obj, dc),
+                "title": esc(dc["titles"][0]["title"]),
+                "kind": f"{kind} curated by {esc(authors(dc))}",
+                "issued": esc(fmt_date(issued)),
+                "count": f"{count} member{'s' if count != 1 else ''}",
+                "description": abstract_html(dc),
+                "members": "\n".join(items) if items else '<li class="empty">No members yet.</li>',
+                "withdrawn": withdrawn, "versions": versions, "licence": licence,
+                "cite": esc(cite), "pin": pin, "pin_url": f"{root}ocfl/{obj_id}/{pin_ver}/inventory.json",
+            })
+        else:
+            page = fill(page_t, {
+                "root": root, "archive_name": esc(P.ARCHIVE["name"]), "base_url": esc(base),
+                "head": meta_tags(obj_id, d, inv, cur, obj, dc),
+                "title": esc(dc["titles"][0]["title"]), "authors": esc(authors(dc)),
+                "issued": esc(fmt_date(issued)), "abstract": abstract_html(dc),
+                "withdrawn": withdrawn, "versions": versions, "licence": licence,
+                "pdf": esc(pdf_address(root, obj_id, inv, cur, obj) or f"#v{obj['documentVersion']}"),
+                "cite": esc(cite), "pin": pin, "pin_url": f"{root}ocfl/{obj_id}/{pin_ver}/inventory.json",
+                "html_link": html_link,
+            })
         out = root_out / "paper" / obj_id / "index.html"
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(page, encoding="utf-8")
@@ -355,9 +388,11 @@ def remote_entry(m):
         "</li>"])
 
 
-def local_entry(m):
-    """The home-page entry of a member of this archive, in the version its
-    collection presents (the main collection's or the featured one's)."""
+def local_entry(m, root=""):
+    """The entry of a member of this archive, in the version its collection
+    presents (the main collection's, the featured one's, or that of the
+    collection whose landing page lists it); root: the way to the root of
+    the archive from the page ("../../" on a landing page)."""
     obj_id = m["id"]
     d = P.OCFL / obj_id
     inv = P.load_inventory(d)
@@ -367,14 +402,15 @@ def local_entry(m):
     dc = P.read_json(d, inv, "datacite.json", cur)
     withdrawn = P.read_json(d, inv, P.OBJ).get("status") == "withdrawn"
     issued = P.date_of(dc, "Issued")
-    pdf = pdf_address("", obj_id, inv, cur, obj)
+    pdf = pdf_address(root, obj_id, inv, cur, obj)
     abstract = abstract_html(dc)
+    summary = "Description" if obj.get("kind") == "collection" else "Abstract"
     return "\n".join([
         f'<li class="paper{" withdrawn" if withdrawn else ""}">',
-        f'<a class="paper-title" href="paper/{obj_id}/">{esc(dc["titles"][0]["title"])}</a>',
+        f'<a class="paper-title" href="{root}paper/{obj_id}/">{esc(dc["titles"][0]["title"])}</a>',
         f'<div class="paper-authors">{esc(authors(dc))}</div>',
         f'<div class="paper-meta">{esc((issued or "")[:4])} · {versions_line(m, obj)}'
         + (f' · <a href="{esc(pdf)}">PDF</a>' if pdf else "")
         + f' · <span class="pin" title="{pin}">pin {pin[:32]}…</span></div>',
-        f"<details><summary>Abstract</summary>{abstract}</details>" if abstract else "",
+        f"<details><summary>{summary}</summary>{abstract}</details>" if abstract else "",
         "</li>"])
