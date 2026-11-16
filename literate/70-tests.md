@@ -70,6 +70,7 @@ the package do, and the arXiv module for its text functions.
 
     import json
     import shutil
+    import sys
     import tempfile
     from pathlib import Path
 
@@ -225,6 +226,23 @@ Here the second object version reuses number 1 with other files.
         put("paper-a", 1, FILES1)
         put("paper-a", 1, FILES2)
         assert any("other files than document version 1" in e for e in finish())
+
+The converse: an object version holding the same files and change note as
+an earlier document version keeps its number (the rule of new versions,
+section 7.3). Here `paper-a` gives number 3 to the files of document
+version 1. `paper-b` gives number 2 to the files of version 1 with a
+change note of its own, which is a new document version.
+
+    # in test: the rules of document versions:
+    def test_new_number_with_the_same_files_is_an_error(archive):
+        put("paper-a", 1, FILES1)
+        put("paper-a", 2, FILES2)
+        put("paper-a", 3, FILES1)
+        put("paper-b", 1, FILES3)
+        put("paper-b", 2, FILES3, extra_obj={"changes": {"text": "The same files, now refereed."}})
+        errors = finish()
+        assert errors == ["ocfl/paper-a: v3 document version 3 holds the same files and change note"
+                          " as document version 1, whose number it keeps"]
 
 A version found later, earlier in the work than the current one, is
 deposited with `after`: it gets the next number, 3, but its place in the
@@ -397,6 +415,45 @@ missing pin is a note, printed but not counted among the problems.
         monkeypatch.setitem(P.ARCHIVE, "profiles", ["website"])
         P.write_json(archive / "opensheaf.json", P.discovery())
         assert "index.html does not show the pin of paper-a" in P.verify_errors()
+
+An object taken down (section 11.2) leaves the storage root and gets a
+tombstone in the discovery document; a pin to it, here that of the main
+collection, is reported as removed, not as unavailable (section 11.3), in
+a note that does not count among the problems.
+
+    # in test: the rules of document versions:
+    def test_pin_to_a_removed_object_is_reported_as_removed(archive, capsys):
+        put("paper-a", 1, FILES1)
+        put("paper-b", 1, FILES2)
+        assert finish() == []
+        disc = json.loads((archive / "opensheaf.json").read_text())
+        entry = next(o for o in disc["objects"] if o["id"] == "paper-a")
+        disc["objects"].remove(entry)
+        disc["tombstones"] = [{"id": "paper-a", "kind": "document", "lastVersion": entry["head"],
+                               "inventorySha512": entry["inventorySha512"], "date": "2026-03-01",
+                               "reason": "Removed at the request of a rights holder."}]
+        (archive / "opensheaf.json").write_text(json.dumps(disc))
+        shutil.rmtree(P.OCFL / "paper-a")
+        capsys.readouterr()
+        assert P.verify_errors() == []
+        assert "member paper-a v1: removed (a tombstone in this archive)" in capsys.readouterr().out
+
+Formats are checked as assertions (section 14): a contact that is not a
+URI is an error. Without `jsonschema`, the schemas are not checked, and a
+note says so.
+
+    # in test: the rules of document versions:
+    def test_schema_formats_are_checked(archive, monkeypatch, capsys):
+        put("paper-a", 1, FILES1)
+        assert finish() == []
+        disc = json.loads((archive / "opensheaf.json").read_text())
+        disc["contact"] = "not a uri"
+        (archive / "opensheaf.json").write_text(json.dumps(disc))
+        assert "opensheaf.json: 'not a uri' is not a 'uri'" in P.verify_errors()
+        monkeypatch.setitem(sys.modules, "jsonschema", None)
+        capsys.readouterr()
+        assert P.verify_errors() == []
+        assert "the JSON Schemas are not checked: jsonschema is not installed" in capsys.readouterr().out
 
 Small functions
 ---------------
@@ -1430,3 +1487,21 @@ instead of `ocfl/`.
         run("--root", str(j), "collect")
         run("--root", str(j), "index")
         assert P.verify_errors() == []
+
+The record of an accepted copy names the source version, and the
+inventory it pins may lack that version (a record written by hand, or one
+that names the wrong version). That is reported as an error of the copy.
+Here the copy is written directly, with a source in a folder whose
+inventory matches the pin but records only `v1`.
+
+    # in test: collections, mirrors and accepted copies:
+    def test_accepted_copy_of_a_version_the_source_lacks(archive, tmp_path):
+        from opensheaf import collections
+        src = tmp_path / "authors" / "ocfl" / "paper" / "v2"
+        src.mkdir(parents=True)
+        (src / "inventory.json").write_text(json.dumps({"id": "paper", "head": "v1",
+                                                        "versions": {"v1": {"state": {}}}}))
+        ext = {"role": "source", "service": "OpenSheaf", "label": "paper v2", "record": src.as_uri() + "/",
+               "files": [{"name": "inventory.json", "sha512": P.digest(src / "inventory.json")}]}
+        put("paper", 1, FILES1, extra_obj={"external": [ext]})
+        assert collections.check_accepted_copies() == ["paper: accepted copy: the source paper v2 has no version v2"]

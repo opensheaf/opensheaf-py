@@ -964,7 +964,10 @@ an error: the copy exists precisely so as not to depend on it.
         return errors
 
 The state of a version maps digests to logical paths; turned around, it
-gives the digest of each path, which is what is compared.
+gives the digest of each path, which is what is compared. The inventory
+that matches the pin may still lack the version that the record names (a
+record written by hand, or one that names the wrong version): that is an
+error of the copy, reported as such.
 
     # in compare an accepted copy with its source:
     pin = next((f.get("sha512") for f in src.get("files", []) if f.get("name") == "inventory.json"), None)
@@ -977,7 +980,11 @@ gives the digest of each path, which is what is compared.
     if hashlib.sha512(data).hexdigest() != pin:
         errors.append(f"{obj_id}: accepted copy: the source {src.get('label')} does not match its pin")
         continue
+    versions = json.loads(data).get("versions") or {}
+    if ver not in versions:
+        errors.append(f"{obj_id}: accepted copy: the source {src.get('label')} has no version {ver}")
+        continue
     files = lambda state: {p: dg for dg, ps in state.items() for p in ps if p not in ("datacite.json", P.OBJ)}
-    if files(json.loads(data)["versions"][ver]["state"]) != files(inv["versions"][first]["state"]):
+    if files(versions[ver]["state"]) != files(inv["versions"][first]["state"]):
         errors.append(f"{obj_id}: accepted copy: its first version does not hold exactly the files of "
                       f"{src.get('label')}")

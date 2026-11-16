@@ -82,21 +82,33 @@ each object and each of its versions, then two independent checks.
 The JSON files defined by the specification are validated against its JSON
 Schemas (appendix D), with their formats (dates, URIs) checked as
 assertions, as section 14 asks. `jsonschema` is optional: without it this
-check is skipped, silently. `datacite.json` has no JSON Schema (DataCite
-publishes only an XML Schema); its required properties are checked by hand
-below.
+check is skipped, and a note says so and how to install it. `jsonschema`
+checks the formats `uri` and `uri-reference` only when a URI parser is
+installed (`rfc3986-validator`, which the extras `validate` and `test`
+bring); otherwise it accepts any string in them, so the verifier says that
+these formats are not checked rather than pass them in silence. The notes
+are printed, and do not count among the problems. `datacite.json` has no
+JSON Schema (DataCite publishes only an XML Schema); its required
+properties are checked by hand below.
 
     # in check against the JSON Schemas of the specification, when jsonschema is installed:
     try:
         import jsonschema
+        formats = jsonschema.FormatChecker()
     except ImportError:
         jsonschema = None
+        print("  the JSON Schemas are not checked: jsonschema is not installed"
+              " (pip install 'opensheaf[validate]')")
+    else:
+        if "uri" not in formats.checkers:
+            print("  the formats uri and uri-reference are not checked: rfc3986-validator is not installed"
+                  " (pip install 'opensheaf[validate]')")
 
     def check_schema(where, data, name):
         if jsonschema is None:
             return
         schema = json.loads((SCHEMAS / name).read_text())
-        v = jsonschema.Draft202012Validator(schema, format_checker=jsonschema.FormatChecker())
+        v = jsonschema.Draft202012Validator(schema, format_checker=formats)
         for e in v.iter_errors(data):
             errors.append(f"{where}: {e.message}")
 
@@ -294,15 +306,21 @@ it holds the stated document version. A revision set must also be in the
 order of the document's history (section 10.2), which for a member of
 this archive is read from the head. Members of other archives are
 resolved only with `--remote`; members of a mirrored collection belong to
-the archive it copies.
+the archive it copies. A member taken down from this archive has no folder
+any more, but a tombstone in the discovery document: its pins are reported
+as removed, not as unavailable (section 11.3), in a note that does not
+count among the problems, as the explorer reports it as a warning.
 
     # in check the pins of the members of this archive:
+    tombstoned = {t.get("id") for t in disc.get("tombstones", [])}
     for m in mem.get("members", []):
         if m.get("archive") != disc.get("archiveId") or mirror_of(d, inv):
             continue  # members of other archives: resolved as in section 6.4
         for pv, pin, n in member_pins(m):
             md = OCFL / str(m.get("id")) / str(pv) / "inventory.json"
-            if not md.exists():
+            if m.get("id") in tombstoned:
+                print(f"  {where}: {ver} member {m['id']} {pv}: removed (a tombstone in this archive)")
+            elif not md.exists():
                 errors.append(f"{where}: {ver} member {m['id']} {pv}: unavailable")
             elif digest(md) != pin:
                 errors.append(f"{where}: {ver} member {m['id']} {pv}: mismatch")
@@ -366,7 +384,11 @@ sources (a completion "changes or removes no file of the version", section
 A document version seen before must have the same own files and change
 note, except while its sources are missing: then files may be added (a
 [completion](14-description.md)), never changed or removed. A document
-version not seen before must have the next number.
+version not seen before must have the next number, and must be new: an
+object version holding the same own files and change note as an earlier
+document version keeps its number (the rule of new versions, sections 7.3
+and 14). Only this equality is checked; the first such earlier version is
+named.
 
     # in check the number and the files of a document version:
     if n in seen:
@@ -381,6 +403,10 @@ version not seen before must have the next number.
     else:
         if n != highest + 1:
             errors.append(f"{where}: {ver} document version {n} breaks the numbering (expected {highest + 1})")
+        m = next((k for k in seen if files_of[k] == own and seen[k] == change), None)
+        if m is not None:
+            errors.append(f"{where}: {ver} document version {n} holds the same files and change note "
+                          f"as document version {m}, whose number it keeps")
         highest = max(highest, n)
         seen[n], files_of[n], missing_of[n] = change, own, bool(obj.get("sourcesMissing"))
 

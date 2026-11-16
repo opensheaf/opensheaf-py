@@ -1344,6 +1344,10 @@ def document_version_errors(obj_id, d, inv):
         else:
             if n != highest + 1:
                 errors.append(f"{where}: {ver} document version {n} breaks the numbering (expected {highest + 1})")
+            m = next((k for k in seen if files_of[k] == own and seen[k] == change), None)
+            if m is not None:
+                errors.append(f"{where}: {ver} document version {n} holds the same files and change note "
+                              f"as document version {m}, whose number it keeps")
             highest = max(highest, n)
             seen[n], files_of[n], missing_of[n] = change, own, bool(obj.get("sourcesMissing"))
         hist = obj.get("history")
@@ -1374,14 +1378,21 @@ def verify_errors():
     errors = []
     try:
         import jsonschema
+        formats = jsonschema.FormatChecker()
     except ImportError:
         jsonschema = None
+        print("  the JSON Schemas are not checked: jsonschema is not installed"
+              " (pip install 'opensheaf[validate]')")
+    else:
+        if "uri" not in formats.checkers:
+            print("  the formats uri and uri-reference are not checked: rfc3986-validator is not installed"
+                  " (pip install 'opensheaf[validate]')")
 
     def check_schema(where, data, name):
         if jsonschema is None:
             return
         schema = json.loads((SCHEMAS / name).read_text())
-        v = jsonschema.Draft202012Validator(schema, format_checker=jsonschema.FormatChecker())
+        v = jsonschema.Draft202012Validator(schema, format_checker=formats)
         for e in v.iter_errors(data):
             errors.append(f"{where}: {e.message}")
 
@@ -1497,12 +1508,15 @@ def verify_errors():
                                           "version and inventorySha512")
                         elif len({r["documentVersion"] for r in revs}) != len(revs):
                             errors.append(f"{who}: a document version is vetted twice")
+                tombstoned = {t.get("id") for t in disc.get("tombstones", [])}
                 for m in mem.get("members", []):
                     if m.get("archive") != disc.get("archiveId") or mirror_of(d, inv):
                         continue  # members of other archives: resolved as in section 6.4
                     for pv, pin, n in member_pins(m):
                         md = OCFL / str(m.get("id")) / str(pv) / "inventory.json"
-                        if not md.exists():
+                        if m.get("id") in tombstoned:
+                            print(f"  {where}: {ver} member {m['id']} {pv}: removed (a tombstone in this archive)")
+                        elif not md.exists():
                             errors.append(f"{where}: {ver} member {m['id']} {pv}: unavailable")
                         elif digest(md) != pin:
                             errors.append(f"{where}: {ver} member {m['id']} {pv}: mismatch")

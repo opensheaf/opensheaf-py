@@ -33,10 +33,11 @@ pipx install "opensheaf[validate] @ git+https://github.com/opensheaf/opensheaf-p
 ```
 
 (or `pip install` in a virtual environment). Python 3.9 or later (PyYAML is installed with it). The extra
-`validate` adds `jsonschema` and `ocfl-py`, with which `osheaf verify` also
-validates the JSON files against the schemas and the storage root with an
-independent OCFL validator. Depositing TeXmacs documents needs
-[GNU TeXmacs](https://www.texmacs.org) (`TEXMACS_BIN`, by default the macOS
+`validate` adds `jsonschema`, `rfc3986-validator` and `ocfl-py`, with which
+`osheaf verify` also validates the JSON files against the schemas (with
+their formats, URIs included) and the storage root with an independent OCFL
+validator; without the first two, it says which schema checks it skipped.
+Depositing TeXmacs documents needs [GNU TeXmacs](https://www.texmacs.org) (`TEXMACS_BIN`, by default the macOS
 application).
 
 ## An archive

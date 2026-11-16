@@ -471,8 +471,12 @@ def check_accepted_copies():
         if hashlib.sha512(data).hexdigest() != pin:
             errors.append(f"{obj_id}: accepted copy: the source {src.get('label')} does not match its pin")
             continue
+        versions = json.loads(data).get("versions") or {}
+        if ver not in versions:
+            errors.append(f"{obj_id}: accepted copy: the source {src.get('label')} has no version {ver}")
+            continue
         files = lambda state: {p: dg for dg, ps in state.items() for p in ps if p not in ("datacite.json", P.OBJ)}
-        if files(json.loads(data)["versions"][ver]["state"]) != files(inv["versions"][first]["state"]):
+        if files(versions[ver]["state"]) != files(inv["versions"][first]["state"]):
             errors.append(f"{obj_id}: accepted copy: its first version does not hold exactly the files of "
                           f"{src.get('label')}")
     return errors

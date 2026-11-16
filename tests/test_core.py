@@ -4,6 +4,7 @@ folders (no TeXmacs, no network)."""
 
 import json
 import shutil
+import sys
 import tempfile
 from pathlib import Path
 
@@ -100,6 +101,17 @@ def test_same_number_with_other_files_is_an_error(archive):
     put("paper-a", 1, FILES1)
     put("paper-a", 1, FILES2)
     assert any("other files than document version 1" in e for e in finish())
+
+
+def test_new_number_with_the_same_files_is_an_error(archive):
+    put("paper-a", 1, FILES1)
+    put("paper-a", 2, FILES2)
+    put("paper-a", 3, FILES1)
+    put("paper-b", 1, FILES3)
+    put("paper-b", 2, FILES3, extra_obj={"changes": {"text": "The same files, now refereed."}})
+    errors = finish()
+    assert errors == ["ocfl/paper-a: v3 document version 3 holds the same files and change note"
+                      " as document version 1, whose number it keeps"]
 
 
 def test_version_found_later_keeps_the_current_version(archive):
@@ -224,6 +236,36 @@ def test_index_pins_required_by_the_profile_website(archive, monkeypatch, capsys
     monkeypatch.setitem(P.ARCHIVE, "profiles", ["website"])
     P.write_json(archive / "opensheaf.json", P.discovery())
     assert "index.html does not show the pin of paper-a" in P.verify_errors()
+
+
+def test_pin_to_a_removed_object_is_reported_as_removed(archive, capsys):
+    put("paper-a", 1, FILES1)
+    put("paper-b", 1, FILES2)
+    assert finish() == []
+    disc = json.loads((archive / "opensheaf.json").read_text())
+    entry = next(o for o in disc["objects"] if o["id"] == "paper-a")
+    disc["objects"].remove(entry)
+    disc["tombstones"] = [{"id": "paper-a", "kind": "document", "lastVersion": entry["head"],
+                           "inventorySha512": entry["inventorySha512"], "date": "2026-03-01",
+                           "reason": "Removed at the request of a rights holder."}]
+    (archive / "opensheaf.json").write_text(json.dumps(disc))
+    shutil.rmtree(P.OCFL / "paper-a")
+    capsys.readouterr()
+    assert P.verify_errors() == []
+    assert "member paper-a v1: removed (a tombstone in this archive)" in capsys.readouterr().out
+
+
+def test_schema_formats_are_checked(archive, monkeypatch, capsys):
+    put("paper-a", 1, FILES1)
+    assert finish() == []
+    disc = json.loads((archive / "opensheaf.json").read_text())
+    disc["contact"] = "not a uri"
+    (archive / "opensheaf.json").write_text(json.dumps(disc))
+    assert "opensheaf.json: 'not a uri' is not a 'uri'" in P.verify_errors()
+    monkeypatch.setitem(sys.modules, "jsonschema", None)
+    capsys.readouterr()
+    assert P.verify_errors() == []
+    assert "the JSON Schemas are not checked: jsonschema is not installed" in capsys.readouterr().out
 
 
 def test_member_order():
@@ -981,3 +1023,15 @@ def test_accept_keeps_notice_files_and_storage_root(tmp_path):
     run("--root", str(j), "collect")
     run("--root", str(j), "index")
     assert P.verify_errors() == []
+
+
+def test_accepted_copy_of_a_version_the_source_lacks(archive, tmp_path):
+    from opensheaf import collections
+    src = tmp_path / "authors" / "ocfl" / "paper" / "v2"
+    src.mkdir(parents=True)
+    (src / "inventory.json").write_text(json.dumps({"id": "paper", "head": "v1",
+                                                    "versions": {"v1": {"state": {}}}}))
+    ext = {"role": "source", "service": "OpenSheaf", "label": "paper v2", "record": src.as_uri() + "/",
+           "files": [{"name": "inventory.json", "sha512": P.digest(src / "inventory.json")}]}
+    put("paper", 1, FILES1, extra_obj={"external": [ext]})
+    assert collections.check_accepted_copies() == ["paper: accepted copy: the source paper v2 has no version v2"]
