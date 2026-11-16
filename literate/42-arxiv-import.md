@@ -274,7 +274,8 @@ version. What it did is appended to a report, one entry per version, and
 summarised in one printed line per paper.
 
     # in arXiv: importing a paper:
-    def import_paper(folder, taken, report, dry, texmacs=None, licences=None, existing=None, only=None, ids=None):
+    def import_paper(folder, taken, report, dry, texmacs=None, licences=None, existing=None, only=None, ids=None,
+                     agreement=None):
         """Import the arXiv versions of a paper; with EXISTING (an object id), only
         the versions not yet in that object are added, as new object versions."""
         texmacs = texmacs or {}
@@ -523,6 +524,17 @@ with arXiv's label and the files received.
                         "files": [{"name": f.name, "sha512": sha(f, "sha512"), "md5": sha(f, "md5"),
                                    "bytes": f.stat().st_size} for f in received]}]
     obj["status"] = "active"
+    if agreement:
+        obj["agreement"] = {"by": agreement.get("by") or [c["name"] for c in datacite["creators"]],
+                            "date": P.TODAY, "method": agreement["method"]}
+
+Whoever imports a paper from arXiv needs the right to redistribute it: an
+arXiv licence other than an open one (arXiv's default licence is granted to
+arXiv alone) does not give it. With `--agreement` the importer records on
+what grounds: the method (for instance "deposited by an author", "the
+authors gave permission by e-mail") and, with `--agreed-by`, who agreed
+(by default, all the authors). It becomes the `agreement` of each imported
+version (section 9), as for a deposit.
 
 Unless the run is a dry run, the version is committed. The new
 `object.json` first carries forward what later object versions must keep
@@ -599,7 +611,15 @@ source, notes and object version.
                         " (default: DOWNLOADS/identifiers.json)")
         ap.add_argument("--rebuild", action="store_true",
                         help="delete the objects of the given papers first (only before publication)")
+        ap.add_argument("--agreement", metavar="METHOD",
+                        help="record in each imported version on what grounds it is deposited (object.json"
+                             " agreement), e.g. 'deposited by an author'")
+        ap.add_argument("--agreed-by", action="append", metavar="NAME",
+                        help="who agreed, Family, Given (repeatable; default: all the authors)")
         a = ap.parse_args(argv)
+        if a.agreed_by and not a.agreement:
+            sys.exit("--agreed-by needs --agreement")
+        agreement = {"method": a.agreement, "by": a.agreed_by} if a.agreement else None
         dl = Path(a.downloads)
         P.init_storage_root()
         licences = json.loads((dl / "version-licences.json").read_text())
@@ -635,6 +655,6 @@ source, notes and object version.
         # history follows the papers' history
         for _, f, existing in sorted(recs, key=lambda x: (x[0], str(x[1]))):
             import_paper(f, taken, report, a.dry_run, texmacs, licences, existing,
-                         set(a.versions.split(",")) if a.versions else None, ids)
+                         set(a.versions.split(",")) if a.versions else None, ids, agreement)
         name = "import-report" + ("-dry" if a.dry_run else "") + ("-partial" if a.ids else "") + ".json"
         P.write_json(dl / name, report)
