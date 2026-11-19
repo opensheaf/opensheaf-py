@@ -10,7 +10,7 @@ An archive is a folder with a configuration file `osheaf.json`:
                                          its documents and its main catalogue
       "owners": ["<owner name>", ...],   optional: other owners it hosts
       "name": "...", "contact": "https://...", "baseUrl": "https://.../",
-      "profiles": ["texmacs"],
+      "profiles": ["website", "texmacs"],
       "storageLayout": "opensheaf-owner-name-storage-layout",   or
                        "0003-hash-and-id-n-tuple-storage-layout" (section 3.2)
       "mainCollection": "main",          the label of the main catalogue
@@ -38,9 +38,11 @@ current key of this device is kept in the system's credential store (or in
 folder outside the archive (`osheaf owner init --export DIR`).
 
 The index is either a TeXmacs document made from a template, as above, or
-the website: "index": {"html": {"templates": "templates"}}. Both are not
-yet available for specification 0.2: `osheaf index` writes the discovery
-document only.
+the website (the profile website, appendix A.3), which osheaf init sets up:
+"index": {"html": {"templates": "templates", "featured": "<label>"}}, featured
+optional. Either way the website writes the landing pages paper/<label>/, the
+owner pages owner/<owner>/ and sitemap.xml, after every change, and osheaf index
+writes everything again.
 """
 
 import datetime
@@ -393,13 +395,17 @@ def read_logical(obj_dir, inv, logical, version=None):
     return (obj_dir / cp) if cp else None
 
 
-def add_version(obj_id, files, obj, message, *, acknowledged=False):
+def add_version(obj_id, files, obj, message, *, acknowledged=False, stage_in=None):
     """Add an object version of the line OBJ_ID whose state is FILES ({logical path:
     file or bytes}) and OBJ as object.json, signed by the owner of the line; unchanged
-    content is not stored again. Returns the inventory."""
+    content is not stored again. Returns the inventory. With STAGE_IN (a new folder),
+    the version is built and signed there, and install_version adds it later."""
     d = obj_dir(obj_id)
     inv = load_inventory(d)
     draft = obj_id.startswith("sheaf:draft:")
+    if stage_in is None and zenodo_pending(obj_id):
+        sys.exit(f"{label_of(obj_id) or obj_id}: a Zenodo deposit was published and its version is not "
+                 f"added yet: osheaf zenodo {label_of(obj_id) or obj_id} completes it first (appendix A.1)")
     log, latest, signers = (None, None, []) if draft else signing_keys(obj["owner"])
     obj = {k: v for k, v in obj.items() if k != "previous"}
     if inv is None:
@@ -411,7 +417,11 @@ def add_version(obj_id, files, obj, message, *, acknowledged=False):
         check_before_extending(obj_id, d, inv, acknowledged)
         obj["previous"] = owners.sidecar_digest((d / inv["head"] / "inventory.json.sha512").read_bytes())
     ver = f"v{int(inv['head'][1:]) + 1}"
-    stage = Path(tempfile.mkdtemp(dir=ROOT, prefix=".staging-"))
+    if stage_in is not None:
+        stage = Path(stage_in)
+        stage.mkdir(parents=True)
+    else:
+        stage = Path(tempfile.mkdtemp(dir=ROOT, prefix=".staging-"))
     try:
         content = dict(files, **{OBJ: json_bytes(obj)})
         state = {}
@@ -446,30 +456,67 @@ def add_version(obj_id, files, obj, message, *, acknowledged=False):
         for key in signers:
             (wdir / sign.file_name(key.did)).write_bytes(
                 sign.signature_file(key, obj_id, ver, dig, obj["owner"], pin))
-        if ver == "v1":
-            new = stage / "object"
-            new.mkdir()
-            (new / "0=ocfl_object_1.1").write_text("ocfl_object_1.1\n")
-            os.rename(stage / ver, new / ver)
-            if not draft:
-                (new / sign.WITNESSES).parent.mkdir(parents=True)
-                (new / sign.WITNESSES).mkdir()
-                os.rename(wdir, new / sign.WITNESSES / ver)
-            (new / "inventory.json").write_bytes(data)
-            (new / "inventory.json.sha512").write_bytes(sidecar)
-            d.parent.mkdir(parents=True, exist_ok=True)
-            os.rename(new, d)
-        else:
-            os.rename(stage / ver, d / ver)
-            if not draft:
-                (d / sign.WITNESSES).mkdir(parents=True, exist_ok=True)
-                os.rename(wdir, d / sign.WITNESSES / ver)
-            for name, b in (("inventory.json", data), ("inventory.json.sha512", sidecar)):
-                (stage / name).write_bytes(b)
-                os.replace(stage / name, d / name)
+        if stage_in is None:
+            move_staged(d, stage, ver, draft)
     finally:
-        shutil.rmtree(stage, ignore_errors=True)
+        if stage_in is None:
+            shutil.rmtree(stage, ignore_errors=True)
     return inv
+
+
+def move_staged(d, stage, ver, draft):
+    """Move the version VER built in STAGE into the object folder D."""
+    data = (stage / ver / "inventory.json").read_bytes()
+    sidecar = (stage / ver / "inventory.json.sha512").read_bytes()
+    wdir = stage / "witnesses"
+    if ver == "v1":
+        new = stage / "object"
+        new.mkdir()
+        (new / "0=ocfl_object_1.1").write_text("ocfl_object_1.1\n")
+        os.rename(stage / ver, new / ver)
+        if not draft:
+            (new / sign.WITNESSES).parent.mkdir(parents=True)
+            (new / sign.WITNESSES).mkdir()
+            os.rename(wdir, new / sign.WITNESSES / ver)
+        (new / "inventory.json").write_bytes(data)
+        (new / "inventory.json.sha512").write_bytes(sidecar)
+        d.parent.mkdir(parents=True, exist_ok=True)
+        os.rename(new, d)
+    else:
+        os.rename(stage / ver, d / ver)
+        if not draft:
+            (d / sign.WITNESSES).mkdir(parents=True, exist_ok=True)
+            os.rename(wdir, d / sign.WITNESSES / ver)
+        for name, b in (("inventory.json", data), ("inventory.json.sha512", sidecar)):
+            (stage / name).write_bytes(b)
+            os.replace(stage / name, d / name)
+
+
+def install_version(obj_id, stage):
+    """Add to the storage root the version that add_version(..., stage_in=STAGE) built;
+    returns its inventory."""
+    stage = Path(stage)
+    ver = next(p.name for p in stage.iterdir() if p.is_dir() and re.match(r"^v[1-9][0-9]*$", p.name))
+    inv = json.loads((stage / ver / "inventory.json").read_text(encoding="utf-8"))
+    d = obj_dir(obj_id)
+    before = load_inventory(d)
+    if (before["head"] if before else "v0") != f"v{int(ver[1:]) - 1}":
+        sys.exit(f"{obj_id}: the line has moved since {ver} was built in {stage}: it cannot be added")
+    move_staged(d, stage, ver, obj_id.startswith("sheaf:draft:"))
+    shutil.rmtree(stage, ignore_errors=True)
+    return inv
+
+
+def zenodo_pending(obj_id):
+    """Whether a Zenodo deposit of OBJ_ID was published and its version not yet added."""
+    try:
+        p = ROOT / "zenodo-staging" / path_of(obj_id) / "state.json"
+    except ValueError:
+        return False
+    try:
+        return p.is_file() and json.loads(p.read_text(encoding="utf-8")).get("phase") == "published"
+    except ValueError:
+        return False
 
 
 def key_log(owner):
