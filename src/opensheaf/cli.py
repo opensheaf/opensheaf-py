@@ -18,13 +18,23 @@ Commands:
   withdraw LABEL         withdraw a document (the content stays)
   complete LABEL         add the sources of a version deposited without them
   collect                new version of the main catalogue when needed
-  index                  write opensheaf.json (the readable index: not yet for 0.2)
+  collection new|add|remove|follow|update|status|sync
+                         catalogues and selections, with members of any archive
+  resolve URI            find and check what a sheaf: URI names, in any archive
+  mirror URI | --all     copy a line written elsewhere, with its owner's key log
+  branch URI --label L   a branch of a signed version of another line, or move its branch point
+  accept URI --selection S   an accepted copy (a branch) listed by a selection
+  owner pull URL|PATH    meet another copy of a key log: extend it, or record a fork
+  sign LABEL --version vN    sign again a version contested by an exposed key
+  draft new|deposit|delete ID   unsigned work in progress, at draft/<id>/
+  seal ID --label L      seal the work of a draft as a new line
+  takedown LABEL --reason TEXT   delete an object, leaving a tombstone
+  index                  write opensheaf.json and the indexes (the readable index: not yet for 0.2)
   verify                 check the archive (section 14 of the specification)
   arxiv fetch            download papers from arXiv (no archive needed)
   help-config            describe osheaf.json
 
-Not yet available for specification 0.2: accept, mirror, collection, zenodo,
-arxiv import, the website.
+Not yet available for specification 0.2: zenodo, arxiv import, the website.
 
 deposit, relicense, relate, describe and init also take their options from a
 YAML or JSON file: --from FILE (a list of entries: several, in order).
@@ -48,52 +58,11 @@ def build_parser():
 
     d = sub.add_parser("deposit", help="deposit a document, or a new document version",
                        description=core.deposit.__doc__)
-    d.add_argument("id", nargs="?", metavar="LABEL", help="the label of the line in the archive")
-    d.add_argument("source", nargs="?", help="the main source (.tm: typeset by the archive; "
-                   "anything else: give the PDF with --pdf)")
-    d.add_argument("--pdf", help="the PDF of this version (required unless the source is TeXmacs)")
-    d.add_argument("--no-source", metavar="REASON",
-                   help="deposit only the PDF, saying why the sources are not available")
-    d.add_argument("--source-format", help="media type of the main source (default: from its extension)")
-    d.add_argument("--abstract", help="the abstract (plain text, mathematics in $...$)")
-    d.add_argument("--abstract-file", help="a UTF-8 file with the abstract (paragraphs separated by blank lines)")
-    d.add_argument("--keyword", action="append", help="a keyword (repeatable)")
-    d.add_argument("--language", help="default: en")
-    d.add_argument("--toolchain", action="append", metavar="NAME=VERSION",
-                   help="a tool that produced the PDF (repeatable), e.g. pdflatex=TeX Live 2025")
-    d.add_argument("--title")
-    d.add_argument("--author", action="append",
-                   help='"Family, Given|Affiliation", as printed in the document')
-    d.add_argument("--available", "--date", dest="available",
-                   help="when this version first became public (default: today, the deposit)")
-    d.add_argument("--created", help="when this version was written, for a version not public at the time")
-    d.add_argument("--issued", help="first public appearance of the work (default: as before, or --available)")
-    d.add_argument("--date-info", help="how the date is known, e.g. 'from the file's modification time'")
-    d.add_argument("--stage", choices=["AO", "SMUR", "AM", "P", "VoR", "CVoR", "EVoR"],
-                   help="NISO-JAV stage of this version")
-    d.add_argument("--changes", help="change note of this version")
-    d.add_argument("--after", type=int, help="place this version after document version N in the"
-                   " history (a version found later); otherwise it becomes the current version")
-    d.add_argument("--type", default="Preprint")
-    d.add_argument("--rights", help="free text, or one of " + ", ".join(sorted(core.RIGHTS))
-                   + " (default: as the previous version, or 'All rights reserved')")
-    d.add_argument("--related", action="append",
-                   help="arxiv=ID (IsVariantFormOf), or RELATION:doi:DOI, RELATION:arxiv:ID")
-    d.add_argument("--extra-source", action="append",
-                   help="FILE[=LOGICAL/PATH], another source at the path the main source refers to")
-    d.add_argument("--message")
-    d.add_argument("--agreement", metavar="METHOD",
-                   help="record the authors' agreement (object.json), e.g. a journal's publication terms")
-    d.add_argument("--licence-file", metavar="PATH",
-                   help="the file of the deposit that holds the full text or terms of the licence "
-                        "(the main source or an --extra-source, by its path in the deposit, e.g. LICENSE): "
-                        "object.json licence")
+    deposit_options(d)
     d.add_argument("--new", action="store_true",
                    help="seal a new work under the new label LABEL (section 10.2)")
     d.add_argument("--owner", help="--new: the owner of the new line, an owner the archive hosts "
                    "(default: the archive's)")
-    d.add_argument("--i-know", dest="i_know", action="store_true",
-                   help="extend versions that are not signed, or are contested, having looked at them (section 7.3)")
     d.add_argument("--from", dest="from_file", metavar="FILE",
                     help="take the options from a YAML or JSON file (a list: several, in order)")
     d.set_defaults(func=core.deposit)
@@ -169,42 +138,99 @@ def build_parser():
     c.add_argument("--i-know", dest="i_know", action="store_true",
                     help="extend versions that are not signed, or are contested (section 7.3)")
     c.set_defaults(func=core.complete)
-    ac = sub.add_parser("accept", help="copy one vetted version of another archive's object into a "
-                        "document of this archive (a journal)")
-    ac.add_argument("url", help="the archive's base URL (or a local folder)")
-    ac.add_argument("id")
-    ac.add_argument("--version", required=True, help="the object version that was vetted, e.g. v2")
-    ac.add_argument("--as", dest="as_id", help="the identifier here (default: the same)")
-    ac.add_argument("--stage", choices=["AO", "SMUR", "AM", "P", "VoR", "CVoR", "EVoR"])
-    ac.add_argument("--type", help="resourceTypeGeneral, e.g. JournalArticle (default: as the source)")
-    ac.add_argument("--available", help="when this archive published it (default: today)")
-    ac.add_argument("--agreement", metavar="METHOD", help="record the authors' agreement")
-    ac.add_argument("--changes", help="the change note (default: says what was accepted)")
-    ac.add_argument("--licence-checked", action="store_true",
-                    help="redistribution is allowed although the licence is not an open one")
-    ac.add_argument("--message")
-    ac.set_defaults(func=None)
-    mi = sub.add_parser("mirror", help="copy another archive's object (with open licences) into this archive")
-    mi.add_argument("url", help="the archive's base URL (or a local folder)")
-    mi.add_argument("id")
+    rv = sub.add_parser("resolve", help="find and check what a sheaf: URI names (section 12.3)")
+    rv.add_argument("uri", help="a sheaf: URI, possibly a short form")
+    rv.add_argument("--at", action="append", metavar="URL", help="a place to look: a base URL or a folder")
+    rv.add_argument("--json", action="store_true", help="print the result as JSON")
+    rv.set_defaults(func=None)
+    co = sub.add_parser("collection", help="catalogues and selections, with members of any archive")
+    cosub = co.add_subparsers(dest="action", required=True)
+    cn = cosub.add_parser("new", help="a new, empty collection")
+    cn.add_argument("label")
+    cn.add_argument("--type", choices=["catalogue", "selection"], required=True)
+    cn.add_argument("--title", required=True)
+    cn.add_argument("--description")
+    cn.add_argument("--order", choices=["manual", "issued-desc", "issued-asc"])
+    cn.add_argument("--owner", help="the owner of the collection, an owner the archive hosts")
+    for name, helptext in (("add", "add members, or revisions of a member of a selection"),
+                           ("remove", "remove members, or revisions"),
+                           ("follow", "members of a catalogue that follow their lines")):
+        ca = cosub.add_parser(name, help=helptext)
+        ca.add_argument("collection", metavar="LABEL")
+        ca.add_argument("uri", nargs="+", metavar="URI", help="a sheaf: URI, or the label of a line here")
+        if name != "follow":
+            ca.add_argument("--revision", type=int, action="append", metavar="N",
+                            help="a document version (selections; repeatable)")
+        if name == "add":
+            ca.add_argument("--at", action="append", metavar="URL", help="where copies are found (repeatable)")
+            ca.add_argument("--follow", action="store_true", help="follow the line (catalogues)")
+        if name == "follow":
+            ca.add_argument("--off", action="store_true", help="stop following")
+        ca.add_argument("--message")
+    cu = cosub.add_parser("update", help="follow the members that follow their lines")
+    cu.add_argument("collection", nargs="*", metavar="LABEL")
+    cs = cosub.add_parser("status", help="the status of every member (section 8.5)")
+    cs.add_argument("collection", metavar="LABEL")
+    cy = cosub.add_parser("sync", help="write a collection from collection.yaml")
+    cy.add_argument("collection", metavar="LABEL")
+    cy.add_argument("--from", dest="from_file", metavar="FILE", required=True)
+    cy.add_argument("--message")
+    co.set_defaults(func=None)
+    mi = sub.add_parser("mirror", help="copy a line written elsewhere, with its owner's key log (section 11)")
+    mi.add_argument("uri", nargs="?", help="the sheaf: URI of the line")
+    mi.add_argument("--at", action="append", metavar="URL", help="where copies are found (repeatable)")
+    mi.add_argument("--label", help="a label for the line here")
+    mi.add_argument("--all", action="store_true", help="bring every mirror up to date")
     mi.add_argument("--licence-checked", action="store_true",
                     help="redistribution is allowed although a licence is not an open one")
     mi.set_defaults(func=None)
-    co = sub.add_parser("collection", help="curated collections (catalogues or selections), "
-                        "with members from any archive")
-    co.add_argument("action", choices=["sync", "update"])
-    co.add_argument("collection", nargs="?", help="the collection object (default: the main collection)")
-    co.add_argument("--from", dest="from_file", metavar="FILE", help="sync: collection.yaml")
-    co.add_argument("--message")
-    co.set_defaults(func=None)
+    for name, helptext in (("branch", "a branch of a signed version of another line (section 9)"),
+                           ("accept", "an accepted copy, listed in a selection (section 9.6)")):
+        b = sub.add_parser(name, help=helptext)
+        b.add_argument("uri", help="the sheaf: URI of the parent version")
+        b.add_argument("--at", action="append", metavar="URL", help="where copies are found (repeatable)")
+        b.add_argument("--label", help="the label of the branch here")
+        b.add_argument("--message")
+        if name == "branch":
+            b.add_argument("--owner", help="the owner of the branch, an owner the archive hosts")
+        else:
+            b.add_argument("--selection", required=True, help="the label of the selection")
+            b.add_argument("--with-original", action="store_true",
+                           help="also list the original revision set (section 9.6)")
+        b.set_defaults(func=None)
+    dr = sub.add_parser("draft", help="unsigned work in progress at draft/<id>/ (section 10.1)")
+    drsub = dr.add_subparsers(dest="action", required=True)
+    for name, helptext in (("new", "make a draft with a first deposit"),
+                           ("deposit", "deposit a new version into a draft")):
+        x = drsub.add_parser(name, help=helptext)
+        deposit_options(x)
+        if name == "deposit":
+            x.add_argument("--replace", action="store_true", help="rewrite the head of the draft")
+    x = drsub.add_parser("delete", help="delete a draft (no tombstone)")
+    x.add_argument("id", metavar="ID")
+    dr.set_defaults(func=None)
+    se = sub.add_parser("seal", help="seal the work of a draft as a new line (section 10.2)")
+    se.add_argument("id", metavar="DRAFT")
+    se.add_argument("--label", required=True, help="the label of the new line")
+    se.add_argument("--owner", help="the owner of the new line, an owner the archive hosts")
+    se.add_argument("--delete-draft", action="store_true", help="delete the draft once sealed")
+    se.add_argument("--message")
+    se.set_defaults(func=None)
+    td = sub.add_parser("takedown", help="delete an object, leaving a tombstone (section 13.2)")
+    td.add_argument("id", metavar="LABEL", help="the label or identifier of the object")
+    td.add_argument("--reason", required=True, help="a plain text, not repeating what is taken down")
+    who = td.add_mutually_exclusive_group()
+    who.add_argument("--by-law", action="store_true", help="a key log taken down by law")
+    who.add_argument("--keeper", action="store_true", help="a key log taken down at its keeper's request")
+    td.add_argument("--yes", action="store_true", help="do not ask to confirm")
+    td.set_defaults(func=None)
     sub.add_parser("collect", help="new version of the main collection when needed").set_defaults(func=core.collect)
-    i = sub.add_parser("index", help="write opensheaf.json and the readable index")
+    i = sub.add_parser("index", help="write opensheaf.json, the indexes and the readable index")
     i.add_argument("--no-html", action="store_true")
     i.set_defaults(func=core.index)
     v = sub.add_parser("verify", help="check the archive")
     v.add_argument("--remote", action="store_true",
-                   help="also fetch the members of collections from their archives and check their pins "
-                   "(not yet available for specification 0.2)")
+                   help="also resolve the members of collections held in other archives (section 14.5)")
     v.add_argument("--json", action="store_true", help="print the findings as JSON")
     v.set_defaults(func=core.verify)
 
@@ -256,7 +282,15 @@ def build_parser():
     rotation_options(oe, export=False)
     osh = osub.add_parser("show", help="the key log of the owner")
     osh.add_argument("--owner", help="an owner the archive hosts (default: the archive's)")
+    op = osub.add_parser("pull", help="meet another copy of the key log: extend it, or record a fork")
+    op.add_argument("source", metavar="URL|PATH", help="an archive, or the folder of the owner object")
+    op.add_argument("--owner", help="the owner (default: the archive's)")
     ow.set_defaults(func=None)
+    sg = sub.add_parser("sign", help="sign again a version contested by an exposed key (section 7.1)")
+    sg.add_argument("id", metavar="LABEL")
+    sg.add_argument("--version", required=True, help="the object version, e.g. v2")
+    sg.add_argument("--yes", action="store_true", help="do not ask to confirm that the owner made it")
+    sg.set_defaults(func=core.sign_again)
     k = sub.add_parser("key", help="current keys of this device")
     ksub = k.add_subparsers(dest="action", required=True)
     kn = ksub.add_parser("new", help="a new current key for this device; prints its did:key")
@@ -264,6 +298,52 @@ def build_parser():
     k.set_defaults(func=None)
     sub.add_parser("help-config", help="describe osheaf.json").set_defaults(func=None)
     return p
+
+
+def deposit_options(d):
+    """The options of a deposit, shared by osheaf deposit and osheaf draft."""
+    d.add_argument("id", nargs="?", metavar="LABEL", help="the label of the line in the archive")
+    d.add_argument("source", nargs="?", help="the main source (.tm: typeset by the archive; "
+                   "anything else: give the PDF with --pdf)")
+    d.add_argument("--pdf", help="the PDF of this version (required unless the source is TeXmacs)")
+    d.add_argument("--no-source", metavar="REASON",
+                   help="deposit only the PDF, saying why the sources are not available")
+    d.add_argument("--source-format", help="media type of the main source (default: from its extension)")
+    d.add_argument("--abstract", help="the abstract (plain text, mathematics in $...$)")
+    d.add_argument("--abstract-file", help="a UTF-8 file with the abstract (paragraphs separated by blank lines)")
+    d.add_argument("--keyword", action="append", help="a keyword (repeatable)")
+    d.add_argument("--language", help="default: en")
+    d.add_argument("--toolchain", action="append", metavar="NAME=VERSION",
+                   help="a tool that produced the PDF (repeatable), e.g. pdflatex=TeX Live 2025")
+    d.add_argument("--title")
+    d.add_argument("--author", action="append",
+                   help='"Family, Given|Affiliation", as printed in the document')
+    d.add_argument("--available", "--date", dest="available",
+                   help="when this version first became public (default: today, the deposit)")
+    d.add_argument("--created", help="when this version was written, for a version not public at the time")
+    d.add_argument("--issued", help="first public appearance of the work (default: as before, or --available)")
+    d.add_argument("--date-info", help="how the date is known, e.g. 'from the file's modification time'")
+    d.add_argument("--stage", choices=["AO", "SMUR", "AM", "P", "VoR", "CVoR", "EVoR"],
+                   help="NISO-JAV stage of this version")
+    d.add_argument("--changes", help="change note of this version")
+    d.add_argument("--after", type=int, help="place this version after document version N in the"
+                   " history (a version found later); otherwise it becomes the current version")
+    d.add_argument("--type", default="Preprint")
+    d.add_argument("--rights", help="free text, or one of " + ", ".join(sorted(core.RIGHTS))
+                   + " (default: as the previous version, or 'All rights reserved')")
+    d.add_argument("--related", action="append",
+                   help="arxiv=ID (IsVariantFormOf), or RELATION:doi:DOI, RELATION:arxiv:ID")
+    d.add_argument("--extra-source", action="append",
+                   help="FILE[=LOGICAL/PATH], another source at the path the main source refers to")
+    d.add_argument("--message")
+    d.add_argument("--agreement", metavar="METHOD",
+                   help="record the authors' agreement (object.json), e.g. a journal's publication terms")
+    d.add_argument("--licence-file", metavar="PATH",
+                   help="the file of the deposit that holds the full text or terms of the licence "
+                        "(the main source or an --extra-source, by its path in the deposit, e.g. LICENSE): "
+                        "object.json licence")
+    d.add_argument("--i-know", dest="i_know", action="store_true",
+                   help="extend versions that are not signed, or are contested, having looked at them (section 7.3)")
 
 
 def owner_init_options(p):
@@ -317,9 +397,12 @@ def runs(p, args):
     return out
 
 
-NOT_YET = ("accept", "mirror", "collection", "zenodo")
+NOT_YET = ("zenodo",)
 OWNER_ACTIONS = {"init": "owner_init_command", "rotate": "owner_rotate", "expose": "owner_expose",
                  "end": "owner_end", "show": "owner_show"}
+LAZY = {"collection": ("collections", None), "mirror": ("mirror", "main"), "branch": ("branch", "main"),
+        "accept": ("branch", "accept"), "draft": ("drafts", None), "seal": ("drafts", "seal"),
+        "takedown": ("takedown", "main")}
 
 
 def main(argv=None):
@@ -343,7 +426,18 @@ def main(argv=None):
     if args.cmd == "arxiv" and args.action == "fetch":
         from . import arxiv
         return arxiv.fetch_main(args.rest)
+    if args.cmd == "resolve":
+        from . import remote
+        try:
+            configure(args)
+        except SystemExit:
+            if args.root:
+                raise
+        return remote.main(args)
     configure(args)
+    if args.cmd == "owner" and args.action == "pull":
+        from . import mirror
+        return mirror.owner_pull(args)
     if args.cmd == "owner":
         getattr(core, OWNER_ACTIONS[args.action])(args)
         return
@@ -353,21 +447,13 @@ def main(argv=None):
     if args.cmd == "arxiv":
         from . import arxiv
         return arxiv.main(args.rest)
-    if args.cmd == "accept":
-        from . import accept
-        core.configure(core.find_root(args.root))
-        return accept.accept(args)
-    if args.cmd == "mirror":
-        from . import mirror
-        core.configure(core.find_root(args.root))
-        return mirror.main(args)
-    if args.cmd == "collection":
-        from . import collections
-        if args.action == "sync":
-            if not args.from_file:
-                p.error("collection sync needs --from collection.yaml")
-            return collections.sync(args)
-        return collections.update(args)
+    if args.cmd in LAZY:
+        import importlib
+        module, name = LAZY[args.cmd]
+        m = importlib.import_module(f".{module}", __package__)
+        if args.cmd == "draft":
+            return m.delete(args) if args.action == "delete" else m.deposit(args, new=args.action == "new")
+        return getattr(m, name or args.action)(args)
     args.func(args)
 
 
