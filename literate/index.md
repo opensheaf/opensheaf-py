@@ -33,9 +33,10 @@ metadata; collections list documents, of the same archive or of others,
 pinned by digests; a discovery document and a website make it all findable.
 The chapters follow that order, after the identity that version 0.2 of the
 specification gives works and owners: names, owners and their keys,
-signatures; then the archive and its documents, collections and copies
-across archives, the website, the services the tools talk to (arXiv and
-Zenodo), the command line, and the tests.
+signatures; then the archive and its documents; the work across archives
+(resolution, collections, copies, branches) with drafts and takedowns; the
+website, the services the tools talk to (arXiv and Zenodo), the command
+line, and the tests.
 
 Reading the code
 ----------------
@@ -84,32 +85,36 @@ The archive
 Across archives
 ---------------
 
-15. [Collections across archives](20-collections.md).
-16. [Mirrors](21-mirrors.md).
-17. [Accepted copies](22-accepted-copies.md).
+15. [Resolution: other archives and sheaf: URIs](20-resolution.md).
+16. [Collections across archives](21-collections.md).
+17. [Copies: mirrors and key logs](22-mirrors.md).
+18. [Branches and accepted copies](23-branches.md).
+19. [Drafts and sealing](24-drafts.md).
+20. [Takedowns and tombstones](25-takedown.md).
 
 The website
 -----------
 
-18. [The website](30-website.md): the home page, and the landing pages
+21. [The website](30-website.md): the home page, and the landing pages
     and sitemap, also written beside a TeXmacs index.
-19. [The templates of the website](31-templates.md).
+22. [The templates of the website](31-templates.md).
 
 Services
 --------
 
-20. [Importing from arXiv: fetching](40-arxiv.md).
-21. [Importing from arXiv: the metadata](41-arxiv-metadata.md).
-22. [Importing from arXiv: the object versions](42-arxiv-import.md).
-23. [Zenodo: DOIs for document versions](50-zenodo.md).
+23. [Importing from arXiv: fetching](40-arxiv.md).
+24. [Importing from arXiv: the metadata](41-arxiv-metadata.md).
+25. [Importing from arXiv: the object versions](42-arxiv-import.md).
+26. [Zenodo: DOIs for document versions](50-zenodo.md).
 
 The command line and the tests
 ------------------------------
 
-24. [The command line](60-command-line.md), with options read from YAML
+27. [The command line](60-command-line.md), with options read from YAML
     files.
-25. [The tests](70-tests.md), and
-26. [the tests of names, owners, keys and signatures](71-tests-identity.md).
+28. [The tests](70-tests.md),
+29. [the tests of names, owners, keys and signatures](71-tests-identity.md), and
+30. [the tests across archives](72-tests-across.md).
 
 The literate tools, tangling and weaving, are described in their own
 literate program, [opensheaf-literate](https://opensheaf.org/literate/).
