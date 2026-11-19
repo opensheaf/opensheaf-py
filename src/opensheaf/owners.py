@@ -4,6 +4,7 @@ each key-log version, the computed first version, later versions signed
 by rotation keys (rotating, exposing, ending), fork records, the checks
 of section 14.3, and key logs read from and written to OCFL object folders."""
 
+import copy
 import json
 import os
 from dataclasses import dataclass, field
@@ -604,6 +605,53 @@ class KeyLog:
         inv = inventory(json.loads(prev.inventory), self.id, n, content, created or names.utc_now(), message, user)
         inv_bytes = inventory_file(inv)
         return self._append(Version(n, content, inv_bytes, sidecar(inv_bytes)))
+
+    def pull(self, other, *, user, created=None):
+        """Meet OTHER, another copy of this key log (sections 6.3 and 6.5): append the versions
+        it has beyond this one, or a fork record; returns (what, number)."""
+        if other.genesis != self.genesis:
+            raise OwnerError("the other copy is the key log of another owner")
+        errors, _ = self.check()
+        if errors:
+            raise OwnerError("the key log has errors: " + "; ".join(errors))
+        other.check()
+        mine, theirs = self.side(), other.side()
+        for a, b in zip(mine, theirs):
+            if a.digest != b.digest:
+                return self._met_fork(theirs[a.number - 1:], user, created)
+        their_fr = other.fork_record
+        if len(theirs) > len(mine):
+            if self.fork_record is not None:
+                return "reported", len(mine) + 1
+            for v in theirs[len(mine):] + ([their_fr] if their_fr else []):
+                self._append(copy.deepcopy(v))
+            return "extended", len(theirs) - len(mine) + (1 if their_fr else 0)
+        if their_fr is not None:
+            first = their_fr.carried[0]
+            held = mine[first.number - 1] if first.number <= len(mine) else None
+            if held is not None and held.digest != first.digest:
+                if self.fork_record is not None:
+                    return "reported", first.number
+                if len(theirs) == len(mine) and self.versions[-1] is mine[-1]:
+                    self._append(copy.deepcopy(their_fr))
+                    return "fork", first.number
+                return self._met_fork(their_fr.carried, user, created)
+        return ("same" if len(theirs) == len(mine) else "behind"), 0
+
+    def _met_fork(self, other_side, user, created):
+        if self.fork_record is not None:
+            return "reported", other_side[0].number
+        self.record_fork(other_side, user=user, created=created)
+        return "fork", other_side[0].number
+
+    def met(self, other):
+        """A copy of this key log, in memory, having met OTHER as a reader does (no file written)."""
+        out = copy.deepcopy(self)
+        try:
+            out.pull(other, user={"name": "reader"})
+        except OwnerError:
+            pass
+        return out
 
 
 def new_owner(current, rotation, *, threshold=1, next_threshold=None, keeper=None, extensions=None,

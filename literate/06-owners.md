@@ -57,6 +57,7 @@ The module builds on the names and on the signatures.
     by rotation keys (rotating, exposing, ending), fork records, the checks
     of section 14.3, and key logs read from and written to OCFL object folders."""
 
+    import copy
     import json
     import os
     from dataclasses import dataclass, field
@@ -467,6 +468,8 @@ the errors of the checks.
         <<owners: rotating, exposing and ending>>
 
         <<owners: recording a fork>>
+
+        <<owners: meeting another copy of the key log>>
 
 ### What a key log says
 
@@ -908,6 +911,93 @@ reported, not recorded.
         inv = inventory(json.loads(prev.inventory), self.id, n, content, created or names.utc_now(), message, user)
         inv_bytes = inventory_file(inv)
         return self._append(Version(n, content, inv_bytes, sidecar(inv_bytes)))
+
+### Meeting another copy
+
+Copies of a key log travel with the objects they sign (section 6.5), and an
+archive or a reader often holds one copy and meets another: a fresher one
+beside a mirror, the owner's own archive, the copy of a parent's key log
+beside a branch. Of two copies, compared up to their fork records, either
+one extends the other, and the longer is used, or they differ from a fork
+point (sections 6.3 and 6.5). `pull` meets the copy OTHER and changes this
+one as an archive must:
+
+1. the two sides (the versions of each copy, fork records left out) are
+   compared version by version; at the first number where their inventory
+   files differ, the copies fork. The archive keeps its own side and
+   appends a fork record carrying the versions of the other side from the
+   fork point to its latest signed one; if it holds a fork record already,
+   the fork is reported, not recorded (section 6.3);
+2. when the sides agree and the other is longer, its later versions are
+   appended byte for byte, with its fork record if it has one, so that
+   every copy shows the fork; nothing is appended after a fork record of
+   this copy, which ends the key log;
+3. when the other copy is not longer, but its fork record carries a
+   version that differs from the one this copy holds at that number, the
+   fork is met through that record: this copy appends the other's fork
+   record itself when the two copies end at the same version, and
+   otherwise a fork record of its own carrying the same versions
+   (rule 4 of section 6.3: a version held at the number of a fork record,
+   or after it, is no fork).
+
+Every version appended is checked again by `_append`, as any version is;
+the other copy's versions that are not versions of the key log (its
+`side` leaves them out) are never taken. The answer says what happened:
+`same`, `behind` (the other copy is older), `extended`, `fork` or
+`reported`, with the number of versions appended or the fork point.
+
+Readers meet copies in the same way, on a copy of the key log in memory
+(`met`), so that the signatures naming either side of a fork are judged
+against it and the versions they sign are contested from the fork point
+on (section 7.3), without anything being written.
+
+    # in owners: meeting another copy of the key log:
+    def pull(self, other, *, user, created=None):
+        """Meet OTHER, another copy of this key log (sections 6.3 and 6.5): append the versions
+        it has beyond this one, or a fork record; returns (what, number)."""
+        if other.genesis != self.genesis:
+            raise OwnerError("the other copy is the key log of another owner")
+        errors, _ = self.check()
+        if errors:
+            raise OwnerError("the key log has errors: " + "; ".join(errors))
+        other.check()
+        mine, theirs = self.side(), other.side()
+        for a, b in zip(mine, theirs):
+            if a.digest != b.digest:
+                return self._met_fork(theirs[a.number - 1:], user, created)
+        their_fr = other.fork_record
+        if len(theirs) > len(mine):
+            if self.fork_record is not None:
+                return "reported", len(mine) + 1
+            for v in theirs[len(mine):] + ([their_fr] if their_fr else []):
+                self._append(copy.deepcopy(v))
+            return "extended", len(theirs) - len(mine) + (1 if their_fr else 0)
+        if their_fr is not None:
+            first = their_fr.carried[0]
+            held = mine[first.number - 1] if first.number <= len(mine) else None
+            if held is not None and held.digest != first.digest:
+                if self.fork_record is not None:
+                    return "reported", first.number
+                if len(theirs) == len(mine) and self.versions[-1] is mine[-1]:
+                    self._append(copy.deepcopy(their_fr))
+                    return "fork", first.number
+                return self._met_fork(their_fr.carried, user, created)
+        return ("same" if len(theirs) == len(mine) else "behind"), 0
+
+    def _met_fork(self, other_side, user, created):
+        if self.fork_record is not None:
+            return "reported", other_side[0].number
+        self.record_fork(other_side, user=user, created=created)
+        return "fork", other_side[0].number
+
+    def met(self, other):
+        """A copy of this key log, in memory, having met OTHER as a reader does (no file written)."""
+        out = copy.deepcopy(self)
+        try:
+            out.pull(other, user={"name": "reader"})
+        except OwnerError:
+            pass
+        return out
 
 Creating an owner
 -----------------
