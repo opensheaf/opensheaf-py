@@ -39,10 +39,13 @@ A few helpers turn what a depositor types into DataCite properties.
 
     <<the landing address of a document>>
 
+
+    <<seal a new work>>
+
 An author is given as printed in the document, family name first, with an
 optional affiliation: `"Noether, Emmy|University of Erlangen"`.
 DataCite wants the name as `Family, Given` and the parts separately
-(section 8); a name without a comma is kept whole as the family name, which
+(section 4.4); a name without a comma is kept whole as the family name, which
 also covers names that are not split this way.
 
     # in a DataCite creator from a name and an affiliation:
@@ -86,7 +89,7 @@ presentation that guesses.
         """The creators of a description as readers write them: 'A, B and C'."""
         return names_joined(display_name(c) for c in dc["creators"])
 
-Relations (section 8.1) link the document to the same work elsewhere. The
+Relations (section 4.4) link the document to the same work elsewhere. The
 common case, a paper also on arXiv, is written `arxiv=ID` and gives
 `IsVariantFormOf` (the same work, possibly different in form); any other
 relation is written in full, `IsIdenticalTo:doi:10.1234/x`. Relations added
@@ -124,7 +127,7 @@ unless given: it is `sourceFormat` in `object.json` and one of the
 
 ### Licences
 
-Licences with an SPDX identifier are recorded as section 8 asks: the
+Licences with an SPDX identifier are recorded as section 4.4 asks: the
 identifier in lower case, with the URL of the licence. The tools know a few
 by name, those an author of scholarly documents is likely to choose; any
 other licence is given as a statement, which is recorded as it stands.
@@ -151,7 +154,7 @@ other licence is given as a statement, which is recorded as it stands.
 A new version keeps the licence of the previous one unless another is
 given: a licence is a decision of the authors, not something to forget at
 the next version. A first version without a licence is "All rights
-reserved", which the specification allows (section 16): deposit grants
+reserved", which the specification allows (section 15.6): deposit grants
 access, not reuse.
 
     # in the licence of a new document version:
@@ -172,13 +175,51 @@ Landing pages are written by `osheaf index` with either kind of index:
 with the [website](30-website.md), and also beside a
 [TeXmacs index](16-index.md), which has no landing pages of its own. The [accepted copies](22-accepted-copies.md) use it too.
 
+The address is made from the label of the line (section 3.1), which is
+the archive's choice for readable URLs; permanent links are `sheaf:` URIs
+(section 12), which the landing pages will give.
+
     # in the landing address of a document:
-    def landing_url(obj_id):
+    def landing_url(label):
         """The address readers are sent to: the landing page, written with either
         kind of index, or else the HTML version of a TeXmacs document."""
         if INDEX.get("html") or INDEX.get("template"):
-            return f"{ARCHIVE['baseUrl']}paper/{obj_id}/"
-        return f"{ARCHIVE['baseUrl']}site/{obj_id}/{obj_id}.html"
+            return f"{ARCHIVE['baseUrl']}paper/{label}/"
+        return f"{ARCHIVE['baseUrl']}site/{label}/{label}.html"
+
+Sealing
+-------
+
+A new work is *sealed* (section 10.2): the tool writes its genesis record,
+naming the owner as `originator`, with a nonce of 128 bits from a secure
+generator, and makes the object of the line `sheaf:<name>:<owner>`, whose
+first version holds the genesis record and is signed by the owner. The name
+is that of algorithm 0, the *genesis name* (section 5.2), so that the
+originator's line is always named by it. If the line is taken in the
+archive, by an object or by a tombstone, the tool draws a new nonce
+(section 5.3); and since an archive refuses a work whose genesis name it
+holds already, for any owner (section 5.4), a name held by any object or
+tombstone counts as taken too. With 256 bits of digest, this never happens
+but by a broken generator; the loop is there because the specification asks
+for it. The genesis record is written once, and its bytes are carried into
+every later version, never re-serialised.
+
+    # in seal a new work:
+    def seal(kind, owner):
+        """A new genesis record of a work of OWNER, of KIND, and the identifier of its line,
+        free in this archive (sections 5.3, 5.4 and 10.2)."""
+        taken = set()
+        for obj_id, _, _ in objects():
+            taken.update((obj_id or "").split(":")[1:2])
+        disc = ROOT / "opensheaf.json"
+        tombs = json.loads(disc.read_text(encoding="utf-8")).get("tombstones", []) if disc.exists() else []
+        taken.update(t.get("genesisName") for t in tombs)
+        taken.update(t.get("name") for t in tombs)
+        while True:
+            genesis = names.genesis_record(kind, originator=owner)
+            nm = names.name(genesis)
+            if nm not in taken:
+                return genesis, names.object_id(nm, owner)
 
 The deposit
 -----------
@@ -186,7 +227,7 @@ The deposit
 A deposit takes one of three forms: a TeXmacs source, which the archive
 typesets; any other source with its PDF (`--pdf`), since the archive
 cannot reproduce a LaTeX build faithfully; or a PDF alone, with the reason
-why the sources are missing (`--no-source REASON`, section 9), which a
+why the sources are missing (`--no-source REASON`, section 4.3), which a
 later [completion](14-description.md) may remedy. The function reads as a
 sequence of steps.
 
@@ -209,17 +250,40 @@ sequence of steps.
 
 ### Checks
 
-The identifier is permanent and appears in every URL of the object; the
-specification limits it to 64 characters of a restricted form, and
-recommends at most 32 (section 6.3). All files are checked before anything is
-written, so that a mistyped name stops the deposit early.
+A deposit names the line by its label (section 3.1). A label the archive
+knows names an existing line, which gets a new document version. A label it
+does not know is a new work, which must be sealed: since sealing makes a
+permanent name, and section 10.2 asks tools to seal only at the owner's
+request, never as a side effect, an unknown label is refused unless
+`--new` says that a new work is meant; a mistyped label of an existing
+paper would otherwise seal a new work. A label has at most 64 characters of
+a restricted form; these tools recommend at most 32, since it appears in
+every URL of the website. The owner of a new line is the archive's owner,
+or another owner the archive hosts (`--owner`). All files are checked
+before anything is written, so that a mistyped name stops the deposit
+early.
 
     # in check the identifier and the files of a deposit:
-    obj_id = args.id
-    if not ID_RE.match(obj_id) or len(obj_id) > 64:
-        sys.exit("ID must match ^[a-z0-9]+(-[a-z0-9]+)*$ and have at most 64 characters")
-    if len(obj_id) > 32:
-        print(f"warning: {obj_id} is longer than 32 characters (section 6.3: SHOULD be short)")
+    label = args.id
+    new = getattr(args, "new", False)
+    if label in LABELS:
+        if new:
+            sys.exit(f"{label} is the label of a line already: deposit a new version without --new, "
+                     "or choose another label for a new work")
+        obj_id = LABELS[label]
+        genesis = None
+    elif not new:
+        sys.exit(f"no line labelled {label} in this archive: give --new to seal a new work "
+                 f"(section 10.2), or check the label (osheaf verify lists them)")
+    else:
+        if not LABEL_RE.match(label) or len(label) > 64:
+            sys.exit("a label must match ^[a-z0-9]+(-[a-z0-9]+)*$ and have at most 64 characters")
+        if len(label) > 32:
+            print(f"warning: {label} is longer than 32 characters (it appears in every URL of the website)")
+        owner = getattr(args, "owner", None) or ARCHIVE["owner"]
+        if owner not in archive_owners():
+            sys.exit(f"{owner} is not an owner this archive hosts")
+        obj_id = None
     init_storage_root()
     source = Path(args.source) if args.source else None
     for f in [source, args.pdf and Path(args.pdf)] + [Path(x.partition("=")[0]) for x in args.extra_source or []]:
@@ -229,31 +293,32 @@ written, so that a mistyped name stops the deposit early.
 ### The number of the new version
 
 A new document gets document version 1. An existing object must be a
-document, and not withdrawn (section 11.1: a withdrawal is final; a
+document, and not withdrawn (section 13.1: a withdrawal is final; a
 retracted paper is not corrected by a new version). The new number is one
 more than the highest so far, whatever the order of the history. A deposit
 always gets a new number: it is meant for files not deposited before, which
-is when section 7.3 assigns one; changing only the description of an
+is when section 4.2 assigns one; changing only the description of an
 existing version is the work of the
 [description-only versions](14-description.md).
 
     # in find the earlier versions of a deposited document and the new number:
-    obj_dir = OCFL / obj_id
-    inv = load_inventory(obj_dir)
+    d = obj_dir(obj_id) if obj_id else None
+    inv = load_inventory(d) if d else None
     prev_obj = prev_dc = None
     doc_version = 1
     if inv:
-        prev_obj, prev_dc = read_json(obj_dir, inv, OBJ), read_json(obj_dir, inv, "datacite.json")
+        prev_obj, prev_dc = read_json(d, inv, OBJ), read_json(d, inv, "datacite.json")
         if prev_obj["kind"] != "document":
-            sys.exit(f"{obj_id} is not a document")
+            sys.exit(f"{label} is not a document")
         if prev_obj.get("status") == "withdrawn":
-            sys.exit(f"{obj_id} is withdrawn (section 11.1): a withdrawn document gets no new versions")
-        doc_version = max(doc_version_of(obj_dir, inv, v) for v in inv["versions"]) + 1
+            sys.exit(f"{label} is withdrawn (section 13.1): a withdrawn document gets no new versions")
+        doc_version = max(doc_version_of(d, inv, v) for v in inv["versions"]) + 1
+        owner = prev_obj["owner"]
 
 ### Dates
 
 A version is either public (`Available`, by default the day of the
-deposit, which is what section 8 asks for a version first made public by
+deposit, which is what section 4.4 asks for a version first made public by
 the archive) or was not public at the time (`Created`: a manuscript
 deposited years later); never both. The `Issued` date, the first public
 appearance of the work, is the same in every version: given, or kept from
@@ -273,7 +338,7 @@ files on disk, as `add_version()` wants them. A TeXmacs source is stored as
 links have predictable names; other sources keep their names, since other
 files may refer to them. Further sources (images, a bibliography, a style
 file) are stored at the path the main source uses for them, which is
-checked against the rules of section 7.1 (no absolute paths, no `.` or `..`).
+checked against the rules of section 4.1 (no absolute paths, no `.` or `..`).
 The scratch folder made first will hold the generated files: the PDF of a
 TeXmacs source and the two descriptions.
 
@@ -283,10 +348,10 @@ TeXmacs source and the two descriptions.
     if not texmacs and not args.pdf:
         sys.exit("give the PDF of this version with --pdf (only TeXmacs sources are typeset by the archive)")
     if source is None and not args.no_source:
-        sys.exit("a deposit without sources needs --no-source REASON (section 9: sourcesMissing)")
+        sys.exit("a deposit without sources needs --no-source REASON (section 4.3: sourcesMissing)")
     files, formats = {}, []
     if texmacs:
-        main = f"{obj_id}.tm"
+        main = f"{label}.tm"
         fmt = "application/x-texmacs"
     elif source is not None:
         main = source.name
@@ -313,7 +378,7 @@ into `site/`. A PDF given by the depositor is checked to be one.
     # in typeset the TeXmacs source of a deposit, or check its PDF:
     if texmacs:
         pdf = tmp / "paper.pdf"
-        typeset(source, obj_id, pdf, SITE / obj_id if TEXMACS.get("htmlPackage") or not INDEX.get("html") else None)
+        typeset(source, label, pdf, SITE / label if TEXMACS.get("htmlPackage") or not INDEX.get("html") else None)
     else:
         pdf = Path(args.pdf)
         if pdf.read_bytes()[:4] != b"%PDF":
@@ -341,12 +406,12 @@ forgetting it would empty the description. Keywords are kept the same way.
         abstract_text = next((x["description"] for x in prev_dc.get("descriptions", [])
                               if x["descriptionType"] == "Abstract"), None)
 
-`datacite.json` holds the properties section 8 requires, and those it
+`datacite.json` holds the properties section 4.4 requires, and those it
 recommends that the tools know. The publisher is the archive (until a DOI
-service registers the version, [appendix A](50-zenodo.md)); the version is
+service registers the version, [appendix A.1](50-zenodo.md)); the version is
 the document version, as a string; the publication year is that of the
 `Issued` date. Keywords become `subjects`, without a `subjectScheme`
-(section 8 recommends one; the tools do not ask for it yet).
+(section 4.4 recommends one; the tools do not ask for it yet).
 
     # in the datacite.json of a deposited version:
     datacite = {
@@ -356,7 +421,7 @@ the document version, as a string; the publication year is that of the
         "publicationYear": int((issued or args.created)[:4]),
         "types": {"resourceTypeGeneral": args.type},
         "version": str(doc_version),
-        "url": landing_url(obj_id),
+        "url": landing_url(label),
         "dates": [],
         "language": args.language or "en",
         "formats": formats,
@@ -378,16 +443,18 @@ the document version, as a string; the publication year is that of the
     if related:
         datacite["relatedIdentifiers"] = related
 
-`object.json` (section 9) names the main source and its format, or says
+`object.json` (section 4.3) names the line, by its name and its owner
+(sections 5 and 6); it names no archive, and no label, which are the
+archive's and may change. It names the main source and its format, or says
 why there is none; lists the rendition; records the toolchain (for TeXmacs,
 the version that typesets it; for other sources, what the depositor
 declares); and the state, `active`. The optional parts follow the
 options: the change note, the stage of the version in the NISO scheme
 (an author's original, an accepted manuscript, ...), and the record of the
-authors' agreement, which a journal accepting a paper needs (section 9:
+authors' agreement, which a journal accepting a paper needs (section 4.3:
 names, a date and how, no personal data), and the licence note, which
 points to the file of the deposit that holds the full text or terms of the
-licence (section 9: `licence`); that file must be one of the files
+licence (section 4.3: `licence`); that file must be one of the files
 deposited, a source or an extra source, since the note refers to the
 package.
 
@@ -396,8 +463,8 @@ package.
         "format": OBJ_FORMAT,
         "specification": SPEC,
         "kind": "document",
-        "archiveId": ARCHIVE["archiveId"],
-        "objectId": obj_id,
+        "name": None,
+        "owner": owner,
         "documentVersion": doc_version,
     }
     if source is not None:
@@ -427,28 +494,38 @@ package.
 
 ### Recording the version
 
-Last, the notices and the history of the head are carried forward (placing
-the version `--after` another if asked), the notice files are added to the
-files, and the two descriptions are written to the scratch folder and added
-as files like the others. The object version is then added in one step:
-until that moment no object has changed, so an error
-anywhere above leaves the archive as it was (only `site/` may have a new
-HTML version).
+Last, a new work is sealed: its genesis record is written and its name
+computed, which `object.json` records; an existing line carries the
+genesis record of its head, byte for byte. The notices and the history of
+the head are carried forward (placing the version `--after` another if
+asked), the notice files are added to the files, and `datacite.json` is
+added like the others. The object version is then added and signed in one
+step ([the archive](10-archive.md)), which also stops if the line has
+versions that are not signed, unless `--i-know` (section 7.3): until that
+moment no object has changed, so an error anywhere above leaves the archive
+as it was (only `site/` may have a new HTML version).
 
     # in record the deposited version as a new object version:
+    if obj_id is None:
+        genesis, obj_id = seal("document", owner)
+        files[GENESIS] = genesis
+    else:
+        files[GENESIS] = read_logical(d, inv, GENESIS)
+    obj["name"] = obj_id.split(":")[1]
     carry_forward(prev_obj, obj, inv, next_object_version(inv), args.after)
     for lp, f in carried_files(obj_id, inv).items():
         files.setdefault(lp, f)
-    write_json(tmp / "datacite.json", datacite)
-    write_json(tmp / OBJ, obj)
-    files["datacite.json"] = tmp / "datacite.json"
-    files[OBJ] = tmp / OBJ
-    inv = add_version(obj_id, files, args.message or f"Deposit: document version {doc_version}")
+    files["datacite.json"] = json_bytes(datacite)
+    inv = add_version(obj_id, files, obj, args.message or f"Deposit: document version {doc_version}",
+                      acknowledged=getattr(args, "i_know", False))
     shutil.rmtree(tmp, ignore_errors=True)
-    print(f"{obj_id}: {inv['head']} (document version {doc_version})")
+    LABELS[label] = obj_id
+    write_discovery()
+    print(f"{label}: {inv['head']} (document version {doc_version}) {obj_id}")
 
-The new version is in the storage root, but readers do not see it yet: the
-[main collection](15-main-collection.md), the
-[discovery document and the index](16-index.md) are updated by their own
-commands, `osheaf collect` and `osheaf index`, so that several deposits can
-be made before the pages are written again.
+The new version is in the storage root, and the discovery document lists
+it at once, with its label, since it is "rewritten whenever an object is
+added or changed" (section 3.1) and keeps the labels. The
+[main catalogue](15-main-collection.md) and the readable index are updated
+by their own commands, `osheaf collect` and `osheaf index`, so that several
+deposits can be made before the catalogue gets a new version.

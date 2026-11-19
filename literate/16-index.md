@@ -5,7 +5,7 @@ After deposits and a new version of the [main collection](15-main-collection.md)
 `osheaf index` writes what the outside world reads: the *discovery
 document* `opensheaf.json`, the entry point of the archive for programs,
 and an index for people. The index is made in one of two ways. An archive
-with a website (the website profile, appendix C) has it written by the
+with a website (the website profile, appendix A.3) has it written by the
 [website](30-website.md) module, with a landing page per document. An
 archive kept inside a TeXmacs website (as the first OpenSheaf archive is)
 instead has an index written as a TeXmacs document, from a template, and
@@ -15,40 +15,82 @@ TeXmacs index.
 The discovery document
 ----------------------
 
-The discovery document (section 6.1) says what the archive is and where
-its objects are: its identifier, name and contact, the storage root and
-its layout, the main collection, the profiles, and a list of every object
-of the storage root with its kind, head version, the digest of its head
-inventory and its status. The list is a map, not a witness: a reader can
-check every entry against the storage root, and
-[verification](17-verify.md) does. The digest is read from the sidecar
-file, as the specification says ("as written in its checksum file").
+The discovery document (section 3.1) says what the archive is and where
+its objects are: its name and contact, the storage root and its layout,
+the main catalogue, the profiles, the owners it hosts, and a list of every
+object of the storage root but drafts, with its kind, its line (`name` and
+`owner`), its head version, the digest of its head inventory, its status
+and, if the archive gives it one, its label. The list is a map, not a
+witness: a reader can check every entry against the storage root, and
+[verification](17-verify.md) does. The digest is read from the checksum
+file, as the specification says ("as its checksum file states it").
+
+The status is the line's, read from its latest signed version, whatever
+document version that holds (section 13.1); a copy without a signed version
+gives that of its head. A key log is always `active`. Drafts, of which these
+tools make none yet, would be listed apart, in `drafts`, with their kind and
+head, as unfinished work on which nothing may rely (section 10.1).
 
 The discovery document is rewritten whole every time, from the storage
-root, so that it cannot drift. A [mirror](21-mirrors.md) of another
-archive's object is listed like the others, with `mirrorOf`, the
-identifier of the archive whose object it copies (sections 6.1 and 10.4),
-recognised as in the [main collection](15-main-collection.md) by the
-archive its head names. The optional parts (`mirrors`, `tombstones`,
-`keys`, `feed`) are not written: an archive that has them adds them by
-other means.
+root, so that it cannot drift, by every command that adds or changes an
+object (section 3.1: "rewritten whenever an object is added or changed").
+Two things in it are not in the storage root, and are carried from the
+document it replaces: the labels, which `LABELS` holds, and the tombstones
+of objects taken down (section 13.3), which are never removed but when the
+line returns, and which no command of these tools writes yet. Version 0.1
+had `archiveId`, `mirrorOf` and `mirrors`; version 0.2 names no archive, and
+a mirror is listed like any line (section 11). The other optional parts
+(`indexes`, `feed`) are not written yet.
+
+`extensions` lists the extensions the objects use (section 2): the names
+of the data of extensions in the key logs, as of their latest version (or
+their genesis record), and in the `object.json` of the heads.
 
     # in write the discovery document of the archive:
     def discovery():
-        objs = []
+        objs, drafts, used = [], [], set()
         for obj_id, d, inv in objects():
-            obj = read_json(d, inv, OBJ)
-            entry = {"id": obj_id, "kind": obj["kind"], "head": inv["head"],
-                     "inventorySha512": (d / "inventory.json.sha512").read_text().split()[0],
-                     "status": obj["status"]}
-            if mirror_of(d, inv):
-                entry["mirrorOf"] = mirror_of(d, inv)
+            if inv is None or obj_id is None:
+                continue
+            head = read_json(d, inv, OBJ) or {}
+            used.update(head.get("extensions") or {})
+            if obj_id.startswith("sheaf:draft:"):
+                drafts.append({"id": obj_id, "kind": head.get("kind"), "head": inv["head"]})
+                continue
+            status = "active"
+            if head.get("kind") == "owner":
+                try:
+                    used.update(owners.load_key_log(d).extensions() or {})
+                except owners.OwnerError:
+                    pass
+            else:
+                signed = latest_signed(d, inv)
+                status = (read_json(d, inv, OBJ, signed) if signed else head).get("status", "active")
+            entry = {"id": obj_id, "kind": head.get("kind"), "name": head.get("name"),
+                     "owner": head.get("owner"), "head": inv["head"],
+                     "inventorySha512": owners.sidecar_digest((d / "inventory.json.sha512").read_bytes()),
+                     "status": status}
+            if label_of(obj_id):
+                entry["label"] = label_of(obj_id)
             objs.append(entry)
-        return {"format": "opensheaf-archive/0.1", "specification": SPEC,
-                "archiveId": ARCHIVE["archiveId"], "name": ARCHIVE["name"],
-                "contact": ARCHIVE["contact"], "storageRoot": "ocfl/", "storageLayout": LAYOUT,
-                "mainCollection": ARCHIVE["mainCollection"], "profiles": ARCHIVE["profiles"],
-                "objects": objs}
+        old = ROOT / "opensheaf.json"
+        tombstones = json.loads(old.read_text(encoding="utf-8")).get("tombstones") if old.exists() else None
+        doc = {"format": "opensheaf-archive/0.2", "specification": SPEC, "name": ARCHIVE["name"],
+               "contact": ARCHIVE["contact"], "storageRoot": "ocfl/", "storageLayout": LAYOUT}
+        if ARCHIVE["mainCollection"] in LABELS:
+            doc["mainCollection"] = LABELS[ARCHIVE["mainCollection"]]
+        doc.update(profiles=ARCHIVE["profiles"], extensions=sorted(used), owners=archive_owners(), objects=objs)
+        if drafts:
+            doc["drafts"] = drafts
+        if tombstones:
+            doc["tombstones"] = tombstones
+        return doc
+
+
+    def write_discovery():
+        """Write the discovery document opensheaf.json from the storage root."""
+        write_json(ROOT / "opensheaf.json", discovery())
+
 
 The TeXmacs index
 -----------------
@@ -66,7 +108,7 @@ that a reader can check what the collection pins.
 The landing pages, with the tags read by search engines, and the sitemap
 are those of the [website](30-website.md), written by the same code: a
 TeXmacs index is a home page, nothing more, and the website profile
-(appendix C) asks for the rest whatever makes the home page.
+(appendix A.3) asks for the rest whatever makes the home page.
 
     # in write the TeXmacs index of the archive:
     <<TeX accents and special letters as Unicode>>
@@ -103,7 +145,7 @@ TeXmacs index is a home page, nothing more, and the website profile
 
 ### The command
 
-`osheaf index` always writes the discovery document. Then, with a website
+`readable_index` was `osheaf index` under specification 0.1. Then, with a website
 configured, it hands the members to the [website](30-website.md); with a
 TeXmacs template, it has the website write the landing pages and the
 sitemap without a home page (`home=False`), writes `index.tm` and, unless
@@ -112,7 +154,7 @@ needed to typeset it, goes to a scratch folder). The landing pages are at
 `paper/<id>/`, apart from the HTML versions of TeXmacs documents in
 `site/<id>/`, and the `index.html` of TeXmacs is never overwritten. The
 empty file `.texmacs-noconvert` tells TeXmacs' website converter not to
-touch the archive's files (appendix B).
+touch the archive's files (appendix A.2).
 
 With `index.html.featured` set to a collection of the archive, the home
 page lists that collection first (a reading list, a journal's issues),
@@ -123,9 +165,26 @@ Only members of the archive itself can be shown this way: the entries are
 read from the local storage root. A curated main collection with members
 of other archives needs the website.
 
+Version 0.2 of the specification changed what the pages must show (labels
+and `sheaf:` URIs instead of identifiers, the statuses of versions, the
+owners), and the [website](30-website.md) has not been ported yet. Until
+it is, `osheaf index` writes the discovery document only, and says so when
+a website or a TeXmacs index is configured; the code that writes them stays,
+as `readable_index`, for the port, with its entries read from the lines of
+the members (`index_entry`, below).
+
     # in write the discovery document and the index:
     def index(args):
-        write_json(ROOT / "opensheaf.json", discovery())
+        write_discovery()
+        if INDEX.get("html") or INDEX.get("template"):
+            print("opensheaf.json written; the website and the TeXmacs index are not yet available for "
+                  "specification 0.2")
+            return
+        print("opensheaf.json written (no index configured)")
+
+
+    def readable_index(args):
+        """The website or the TeXmacs index (specification 0.1; to be ported to 0.2)."""
         coll_dir = OCFL / ARCHIVE["mainCollection"]
         inv = load_inventory(coll_dir)
         members = json.loads(read_logical(coll_dir, inv, "members.json").read_text())["members"]
@@ -139,9 +198,6 @@ of other archives needs the website.
             html.render(members, featured=featured)
             local = sum(1 for m in members if m.get("archive") == ARCHIVE["archiveId"])
             print(f"opensheaf.json, index.html, {local} landing pages and sitemap.xml written")
-            return
-        if not INDEX.get("template"):
-            print("opensheaf.json written (no index configured)")
             return
         template = (ROOT / INDEX["template"]).read_text(encoding="latin-1")
         line = "  <paper-index>\n"
@@ -163,7 +219,7 @@ of other archives needs the website.
 
 ### Text in TeXmacs
 
-Titles and abstracts are plain text with LaTeX mathematics (section 8), and
+Titles and abstracts are plain text with LaTeX mathematics (section 4.4), and
 some, imported from arXiv, still have TeX accents (`It\^o`). The accents
 become Unicode letters: an accent command is a combining character, and
 normalising to NFC composes it with its letter. A few letters are commands
@@ -237,7 +293,7 @@ escaped with a backslash are not delimiters.
 
 ### Dates and versions
 
-Dates are shown as people write them, also when approximate (section 8
+Dates are shown as people write them, also when approximate (section 4.4
 allows `2019-03`, or a range, of which the start is shown).
 
     # in a date as readers write it:
@@ -253,7 +309,7 @@ allows `2019-03`, or a range, of which the start is shown).
 
 The version line tells the reader which version this is: the document
 version, its label on the service it was imported from (arXiv's `v4` is
-often our version 3, section 7.3), and when it became public, or when it
+often our version 3, section 4.2), and when it became public, or when it
 was written if it was not public at the time; without either date, when it
 was deposited, from the inventory.
 
@@ -281,7 +337,7 @@ by the version line (`version 1 (arXiv v1)`), so the identifier needs no
 version of its own; before, the index showed `arXiv:2607.08385v1` for an
 imported paper next to `arXiv:2611.17119` for a related one. The
 identifier is that of the record the version was imported from, or else
-of a relation to arXiv (section 8.1), as for a paper deposited here and
+of a relation to arXiv (section 4.4), as for a paper deposited here and
 also posted on arXiv.
 
     # in the arXiv identifier of a document version:
@@ -295,7 +351,7 @@ also posted on arXiv.
                 return re.sub(r"v\d+$", "", r["relatedIdentifier"].split(":", 1)[1])
         return None
 
-The change note of a version (section 9, `changes`) is what the authors
+The change note of a version (section 4.3, `changes`) is what the authors
 wrote about it. For a version imported from arXiv it is arXiv's comments
 on the version, which are often not about a change at all (`61 pages`):
 shown bare, they read as a change note. So the note is labelled by what it
@@ -327,7 +383,7 @@ element, since the HTML export does not render folds.
 ### An entry
 
 An entry is made from the version the collection presents
-(section 10.2): the current version as of the pinned head, for a member of
+(section 8.2): the current version as of the pinned head, for a member of
 a catalogue, or the last revision, for a member of a selection.
 The pin shown is that of the presented version for a selection, and the
 member's own pin (the head) for a catalogue. The title links
@@ -346,22 +402,22 @@ change note of the version, labelled, follows the dates.
 
     # in the TeXmacs index entry of a member:
     def index_entry(member):
-        obj_id = member["id"]
-        d = OCFL / obj_id
+        obj_id = names.object_id(member["name"], member["owner"])
+        d, at, label = obj_dir(obj_id), path_of(obj_id), label_of(obj_id) or member["name"]
         inv = load_inventory(d)
         ver = presented_version(member, d, inv)
         pin_ver, pin = member_pins(member)[-1][:2]
         obj = read_json(d, inv, OBJ, ver)
         dc = read_json(d, inv, "datacite.json", ver)
         pdf = content_path(inv, ver, pdf_of(obj)) if pdf_of(obj) else None
-        src = f"ocfl/{obj_id}/" + content_path(inv, ver, obj["mainSource"]) if obj.get("mainSource") else None
-        html = f"site/{obj_id}/{obj_id}.html"
+        src = f"ocfl/{at}/" + content_path(inv, ver, obj["mainSource"]) if obj.get("mainSource") else None
+        html = f"site/{label}/{label}.html"
         texmacs = obj.get("sourceFormat") == "application/x-texmacs"
         title = tm_with_math(dc["titles"][0]["title"])
         authors = tm_escape(authors_of(dc))
         if not authors.endswith("."):
             authors += "."
-        links = [f"<hlink|PDF|ocfl/{obj_id}/{pdf}>"] if pdf else []
+        links = [f"<hlink|PDF|ocfl/{at}/{pdf}>"] if pdf else []
         if texmacs:
             # links to .tm files become .html links in the HTML export; the source
             # is linked once for TeXmacs and once (.texmacs, exported as .tm) for HTML
@@ -383,7 +439,7 @@ change note of the version, labelled, follows the dates.
         if changes_note(obj):
             when += f"<next-line>{tm_escape(changes_note(obj))}"
         sep = " \\<cdot\\> "
-        head = f"<hlink|{title}|paper/{obj_id}/>"
+        head = f"<hlink|{title}|paper/{label}/>"
         return f"""  <\\notes-news-item>
         <with|font-series|bold|{head}>
 
@@ -392,5 +448,5 @@ change note of the version, labelled, follows the dates.
         {sep.join(links)}
 
     {abstract}    <with|font-size|0.84|par-mode|left|{when}<next-line>pin:
-        <hlink|<verbatim|{pin[:32]}...>|ocfl/{obj_id}/{pin_ver}/inventory.json>>
+        <hlink|<verbatim|{pin[:32]}...>|ocfl/{at}/{pin_ver}/inventory.json>>
       </notes-news-item>"""

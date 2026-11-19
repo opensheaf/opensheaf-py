@@ -1,33 +1,35 @@
 # Generated from literate/60-command-line.md by opensheaf-literate: edit the document, not this file.
-"""osheaf: keep an OpenSheaf archive (specification 0.1, https://opensheaf.org).
+"""osheaf: keep an OpenSheaf archive (specification 0.2, https://opensheaf.org).
 
 The archive is the folder given with --root, or else the nearest folder above
-the current one that has an osheaf.json (see `osheaf help-config`).
+the current one that has an osheaf.json (see `osheaf help-config`). Lines are
+named by their labels in the archive.
 
 Commands:
-  init                   create an archive (osheaf.json, storage root) in the folder
-  deposit ID [SOURCE]    deposit a document (TeXmacs, or any source with --pdf)
-  relicense ID           description-only version with a new licence
-  relate ID              description-only version linking the same work elsewhere
-  describe ID            description-only version correcting title, abstract, keywords, authors
-  notice ID              a notice about a document version
-  withdraw ID            withdraw a document (the content stays)
-  complete ID            add the sources of a version deposited without them
-  accept URL ID          copy one vetted version of another archive's object (a journal)
-  mirror URL ID          copy another archive's object (open licences only)
-  collection sync|update curated collections, with members from any archive
-  collect                new version of the main collection when needed
-  index                  write opensheaf.json and the readable index
+  init                   create an archive (osheaf.json, storage root, owner, main catalogue)
+  owner init|rotate|expose|end|show   make an owner, change its keys, end it, show it
+  key new                a new current key for this device
+  deposit LABEL [SOURCE] deposit a document (TeXmacs, or any source with --pdf);
+                         --new seals a new work under a new label
+  relicense LABEL        description-only version with a new licence
+  relate LABEL           description-only version linking the same work elsewhere
+  describe LABEL         description-only version correcting title, abstract, keywords, authors
+  notice LABEL           a notice about a document version
+  withdraw LABEL         withdraw a document (the content stays)
+  complete LABEL         add the sources of a version deposited without them
+  collect                new version of the main catalogue when needed
+  index                  write opensheaf.json (the readable index: not yet for 0.2)
   verify                 check the archive (section 14 of the specification)
-  zenodo ID              deposit the current document version on Zenodo
   arxiv fetch            download papers from arXiv (no archive needed)
-  arxiv import           import downloaded arXiv papers into the archive
   help-config            describe osheaf.json
+
+Not yet available for specification 0.2: accept, mirror, collection, zenodo,
+arxiv import, the website.
 
 deposit, relicense, relate, describe and init also take their options from a
 YAML or JSON file: --from FILE (a list of entries: several, in order).
 
-Warning: OpenSheaf 0.1 is a draft. Until version 1.0, a revision may change
+Warning: OpenSheaf 0.2 is a draft. Until version 1.0, a revision may change
 the format in incompatible ways, and archives may have to be rebuilt.
 """
 
@@ -46,7 +48,7 @@ def build_parser():
 
     d = sub.add_parser("deposit", help="deposit a document, or a new document version",
                        description=core.deposit.__doc__)
-    d.add_argument("id", nargs="?")
+    d.add_argument("id", nargs="?", metavar="LABEL", help="the label of the line in the archive")
     d.add_argument("source", nargs="?", help="the main source (.tm: typeset by the archive; "
                    "anything else: give the PDF with --pdf)")
     d.add_argument("--pdf", help="the PDF of this version (required unless the source is TeXmacs)")
@@ -86,6 +88,12 @@ def build_parser():
                    help="the file of the deposit that holds the full text or terms of the licence "
                         "(the main source or an --extra-source, by its path in the deposit, e.g. LICENSE): "
                         "object.json licence")
+    d.add_argument("--new", action="store_true",
+                   help="seal a new work under the new label LABEL (section 10.2)")
+    d.add_argument("--owner", help="--new: the owner of the new line, an owner the archive hosts "
+                   "(default: the archive's)")
+    d.add_argument("--i-know", dest="i_know", action="store_true",
+                   help="extend versions that are not signed, or are contested, having looked at them (section 7.3)")
     d.add_argument("--from", dest="from_file", metavar="FILE",
                     help="take the options from a YAML or JSON file (a list: several, in order)")
     d.set_defaults(func=core.deposit)
@@ -98,6 +106,8 @@ def build_parser():
     r.add_argument("--message")
     r.add_argument("--from", dest="from_file", metavar="FILE",
                     help="take the options from a YAML or JSON file (a list: several, in order)")
+    r.add_argument("--i-know", dest="i_know", action="store_true",
+                    help="extend versions that are not signed, or are contested (section 7.3)")
     r.set_defaults(func=core.relicense)
 
     rl = sub.add_parser("relate", help="description-only version linking the same work elsewhere")
@@ -109,6 +119,8 @@ def build_parser():
     rl.add_argument("--message")
     rl.add_argument("--from", dest="from_file", metavar="FILE",
                     help="take the options from a YAML or JSON file (a list: several, in order)")
+    rl.add_argument("--i-know", dest="i_know", action="store_true",
+                     help="extend versions that are not signed, or are contested (section 7.3)")
     rl.set_defaults(func=core.relate)
 
     ds = sub.add_parser("describe", help="description-only version correcting the title, abstract,"
@@ -124,6 +136,8 @@ def build_parser():
     ds.add_argument("--message")
     ds.add_argument("--from", dest="from_file", metavar="FILE",
                     help="take the options from a YAML or JSON file (a list: several, in order)")
+    ds.add_argument("--i-know", dest="i_know", action="store_true",
+                     help="extend versions that are not signed, or are contested (section 7.3)")
     ds.set_defaults(func=core.describe)
 
     nt = sub.add_parser("notice", help="a notice about a document version (description-only)")
@@ -133,6 +147,8 @@ def build_parser():
     nt.add_argument("--file", help="a file with the full statement (PDF, Markdown, ...)")
     nt.add_argument("--date", help="default: today")
     nt.add_argument("--message")
+    nt.add_argument("--i-know", dest="i_know", action="store_true",
+                     help="extend versions that are not signed, or are contested (section 7.3)")
     nt.set_defaults(func=core.notice)
     w = sub.add_parser("withdraw", help="withdraw a document (description-only; the content stays)")
     w.add_argument("id")
@@ -140,6 +156,8 @@ def build_parser():
     w.add_argument("--file", help="a file with the full statement")
     w.add_argument("--date", help="default: today")
     w.add_argument("--message")
+    w.add_argument("--i-know", dest="i_know", action="store_true",
+                    help="extend versions that are not signed, or are contested (section 7.3)")
     w.set_defaults(func=core.withdraw)
     c = sub.add_parser("complete", help="add the sources of a version deposited without them")
     c.add_argument("id")
@@ -148,6 +166,8 @@ def build_parser():
     c.add_argument("--extra-source", action="append", help="FILE[=LOGICAL/PATH]")
     c.add_argument("--source-format")
     c.add_argument("--message")
+    c.add_argument("--i-know", dest="i_know", action="store_true",
+                    help="extend versions that are not signed, or are contested (section 7.3)")
     c.set_defaults(func=core.complete)
     ac = sub.add_parser("accept", help="copy one vetted version of another archive's object into a "
                         "document of this archive (a journal)")
@@ -183,8 +203,9 @@ def build_parser():
     i.set_defaults(func=core.index)
     v = sub.add_parser("verify", help="check the archive")
     v.add_argument("--remote", action="store_true",
-                   help="also fetch the members of collections from their archives and check their pins, "
-                   "and compare accepted copies with their sources")
+                   help="also fetch the members of collections from their archives and check their pins "
+                   "(not yet available for specification 0.2)")
+    v.add_argument("--json", action="store_true", help="print the findings as JSON")
     v.set_defaults(func=core.verify)
 
     from . import zenodo
@@ -195,28 +216,89 @@ def build_parser():
     a.add_argument("rest", nargs=argparse.REMAINDER, help="see osheaf arxiv fetch|import --help")
     a.set_defaults(func=None)
 
-    n = sub.add_parser("init", help="create an archive (osheaf.json, storage root, website templates)")
+    n = sub.add_parser("init", help="create an archive (osheaf.json, storage root, owner, main catalogue)")
     n.add_argument("folder", nargs="?", help="where (default: the current folder)")
-    n.add_argument("--archive-id",
-                   help="a URI that does not change when the archive moves, e.g. tag:example.org,2026:name")
     n.add_argument("--name", help="the name of the archive, e.g. 'Papers of Jane Doe'")
     n.add_argument("--base-url", help="where the archive is served, e.g. https://example.org/papers/")
     n.add_argument("--curator", help='"Family, Given"')
     n.add_argument("--affiliation")
     n.add_argument("--contact", help="a URL or mailto: address")
+    n.add_argument("--layout", choices=["owner-name", "hashed"], help="the storage layout (default: owner-name)")
+    n.add_argument("--owner", help="the owner name of an existing owner, with --key-log")
+    n.add_argument("--key-log", help="the folder of the owner object of --owner, in another archive")
+    n.add_argument("--new-owner", action="store_true", help="make a new owner (see osheaf owner init)")
+    owner_init_options(n)
     n.add_argument("--curated", action="store_true",
-                   help="the main collection is curated (osheaf collection sync), e.g. for an archive of "
-                   "collections of other archives' documents")
+                   help="the main collection is curated (osheaf collection sync; not yet for 0.2)")
     n.add_argument("--from", dest="from_file", metavar="FILE",
                     help="take the options from a YAML or JSON file (a list: several, in order)")
     n.set_defaults(func=None)
+
+    ow = sub.add_parser("owner", help="make an owner, change its keys, end it, show its key log")
+    osub = ow.add_subparsers(dest="action", required=True)
+    oi = osub.add_parser("init", help="make an owner: current key, rotation keys exported, key log")
+    owner_init_options(oi)
+    for name, helptext in (("rotate", "a new version of the key log: add or retire current keys"),
+                           ("expose", "a new version of the key log exposing stolen or leaked keys")):
+        o = osub.add_parser(name, help=helptext)
+        if name == "expose":
+            o.add_argument("exposed", nargs="+", metavar="DID", help="the did:key URIs of the keys exposed")
+        o.add_argument("--add", action="append", metavar="DID", help="a current key to add (repeatable)")
+        if name == "rotate":
+            o.add_argument("--retire", action="append", metavar="DID", help="a current key to retire (repeatable)")
+        o.add_argument("--threshold", type=int, help="the number of current keys that sign (default: as before)")
+        o.add_argument("--rotation", type=int, help="the number of new rotation keys (default: as before)")
+        o.add_argument("--next-threshold", type=int, help="how many of them sign the next version (default: as before)")
+        rotation_options(o)
+    oe = osub.add_parser("end", help="the last version of the key log (section 6.3)")
+    oe.add_argument("--successor", help="the owner name of the owner that continues the work")
+    oe.add_argument("--expose", action="append", metavar="DID", help="also expose a key (repeatable)")
+    rotation_options(oe, export=False)
+    osh = osub.add_parser("show", help="the key log of the owner")
+    osh.add_argument("--owner", help="an owner the archive hosts (default: the archive's)")
+    ow.set_defaults(func=None)
+    k = sub.add_parser("key", help="current keys of this device")
+    ksub = k.add_subparsers(dest="action", required=True)
+    kn = ksub.add_parser("new", help="a new current key for this device; prints its did:key")
+    kn.add_argument("--owner", help="an owner the archive hosts (default: the archive's)")
+    k.set_defaults(func=None)
     sub.add_parser("help-config", help="describe osheaf.json").set_defaults(func=None)
     return p
 
 
+def owner_init_options(p):
+    p.add_argument("--threshold", type=int, help="how many current keys sign (default 1)")
+    p.add_argument("--key", action="append", metavar="DID",
+                   help="the current key of another device, made there with osheaf key new (repeatable)")
+    p.add_argument("--rotation", type=int, help="the number of rotation keys (default 3)")
+    p.add_argument("--next-threshold", type=int, help="how many rotation keys sign the next version "
+                   "of the key log (default 2 of 3)")
+    p.add_argument("--single-rotation-key", action="store_true",
+                   help="one rotation key, nextThreshold 1: the minimal setup, with its risk (section 6.2)")
+    p.add_argument("--keeper", help="who answers for the owner: an ORCID iD or https://<domain>/ (section 6.6)")
+    export_options(p)
+
+
+def export_options(p):
+    p.add_argument("--export", metavar="DIR", help="where to write the rotation keys, outside the archive")
+    p.add_argument("--no-passphrase", action="store_true", help="export the rotation keys unencrypted")
+    p.add_argument("--print", action="store_true", help="also print each rotation key as a sheet")
+    p.add_argument("--yes", action="store_true", help="do not ask to confirm the export (scripts)")
+
+
+def rotation_options(p, export=True):
+    p.add_argument("--rotation-key", action="append", metavar="FILE",
+                   help="a rotation key of the latest version of the key log, its file or typed sheet "
+                   "(repeatable: nextThreshold of them)")
+    p.add_argument("--owner", help="an owner the archive hosts (default: the archive's)")
+    p.add_argument("--message")
+    if export:
+        export_options(p)
+
+
 REQUIRED = {"deposit": ("id", "title", "author"), "relicense": ("id", "rights", "method"),
             "relate": ("id", "to"), "describe": ("id",),
-            "init": ("archive_id", "name", "base_url", "curator")}
+            "init": ("name", "base_url", "curator")}
 
 
 def runs(p, args):
@@ -235,6 +317,11 @@ def runs(p, args):
     return out
 
 
+NOT_YET = ("accept", "mirror", "collection", "zenodo")
+OWNER_ACTIONS = {"init": "owner_init_command", "rotate": "owner_rotate", "expose": "owner_expose",
+                 "end": "owner_end", "show": "owner_show"}
+
+
 def main(argv=None):
     argv = sys.argv[1:] if argv is None else argv
     p = build_parser()
@@ -242,18 +329,27 @@ def main(argv=None):
     if args.cmd == "help-config":
         print(core.__doc__)
         return
+    if args.cmd in NOT_YET or (args.cmd == "arxiv" and args.action == "import"):
+        name = args.cmd + (" import" if args.cmd == "arxiv" else "")
+        sys.exit(f"osheaf {name}: not yet available for specification 0.2")
     if args.cmd in REQUIRED:
         todo = runs(p, args)
         if args.cmd == "init":
             return core.init(todo[0])
-        core.configure(core.find_root(args.root))
+        configure(args)
         for ns in todo:
             ns.func(ns)
         return
     if args.cmd == "arxiv" and args.action == "fetch":
         from . import arxiv
         return arxiv.fetch_main(args.rest)
-    core.configure(core.find_root(args.root))
+    configure(args)
+    if args.cmd == "owner":
+        getattr(core, OWNER_ACTIONS[args.action])(args)
+        return
+    if args.cmd == "key":
+        core.key_new(args)
+        return
     if args.cmd == "arxiv":
         from . import arxiv
         return arxiv.main(args.rest)
@@ -273,6 +369,12 @@ def main(argv=None):
             return collections.sync(args)
         return collections.update(args)
     args.func(args)
+
+
+def configure(args):
+    core.configure(core.find_root(args.root))
+    if core.OLD and args.cmd != "verify":
+        sys.exit(core.REBUILD)
 
 
 if __name__ == "__main__":

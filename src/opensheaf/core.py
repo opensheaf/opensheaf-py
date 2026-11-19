@@ -1,14 +1,19 @@
 # Generated from literate/10-archive.md by opensheaf-literate: edit the document, not this file.
 """The OpenSheaf archive: objects, document versions, collections, the
-discovery document, the index and the checks (specification 0.1,
+discovery document, the index and the checks (specification 0.2,
 https://opensheaf.org).
 
 An archive is a folder with a configuration file `osheaf.json`:
 
     {
-      "archiveId": "tag:example.org,2026:name",   the archive identifier (a URI)
+      "owner": "<owner name>",           the owner of the archive (section 6), who signs
+                                         its documents and its main catalogue
+      "owners": ["<owner name>", ...],   optional: other owners it hosts
       "name": "...", "contact": "https://...", "baseUrl": "https://.../",
-      "profiles": ["texmacs"], "mainCollection": "collection-papers",
+      "profiles": ["texmacs"],
+      "storageLayout": "opensheaf-owner-name-storage-layout",   or
+                       "0003-hash-and-id-n-tuple-storage-layout" (section 3.2)
+      "mainCollection": "main",          the label of the main catalogue
       "curator": {"name": "Family, Given", "givenName": "...", "familyName": "...",
                   "affiliation": "..."},
       "depositor": {"name": "Given Family", "address": "https://..."},
@@ -22,17 +27,20 @@ An archive is a folder with a configuration file `osheaf.json`:
     }
 
 and, next to it, `ocfl/` (the OCFL 1.1 storage root), `opensheaf.json` (the
-discovery document, generated), `site/` (HTML versions) and `index.tm`,
-`index.html` (generated). TeXmacs runs headless with a private profile in
-`texmacs_home/` (not committed).
+discovery document, rewritten whenever an object changes, which also keeps
+the labels of the lines: `osheaf deposit LABEL`), `site/` (HTML versions)
+and `index.tm`, `index.html` (generated). TeXmacs runs headless with a
+private profile in `texmacs_home/` (not committed).
+
+The private keys of the owner are never in the archive (section 15.4): the
+current key of this device is kept in the system's credential store (or in
+~/.config/opensheaf/keys/), the rotation keys in files exported once to a
+folder outside the archive (`osheaf owner init --export DIR`).
 
 The index is either a TeXmacs document made from a template, as above, or
-the website: "index": {"html": {"templates": "templates"}}. Both get landing
-pages `paper/<id>/` and `sitemap.xml`, from the templates in the folder
-`index.html.templates`, or `index.templates`, or else `templates/` if it
-exists, or else the package's defaults. The website's home page may
-feature a collection of the archive, listed before the main collection:
-"index": {"html": {"templates": "templates", "featured": "reading-list"}}.
+the website: "index": {"html": {"templates": "templates"}}. Both are not
+yet available for specification 0.2: `osheaf index` writes the discovery
+document only.
 """
 
 import datetime
@@ -47,6 +55,8 @@ import tempfile
 import unicodedata
 from pathlib import Path
 
+from . import keys, names, owners, sign
+
 CONFIG_NAME = "osheaf.json"
 CONFIG_NAMES = ("osheaf.json", "osheaf.yaml", "osheaf.yml")
 SCHEMAS = Path(__file__).resolve().parent / "schemas"
@@ -57,12 +67,22 @@ ROOT = OCFL = SITE = TM_HOME = None
 ARCHIVE = {}
 TEXMACS = {}
 INDEX = {}
+LAYOUT = None
+LABELS = {}
+OLD = False
 
-SPEC = "0.1"
-LAYOUT = "0002-flat-direct-storage-layout"
-ID_RE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
+SPEC = "0.2"
+OWNER_NAME_LAYOUT = "opensheaf-owner-name-storage-layout"
+HASHED_LAYOUT = "0003-hash-and-id-n-tuple-storage-layout"
+LAYOUTS = {"owner-name": OWNER_NAME_LAYOUT, "hashed": HASHED_LAYOUT}
+LAYOUT_FILE = "opensheaf-owner-name-storage-layout.md"
+LAYOUT_TEXT = ("Lines at <owner>/<name>/, drafts at draft/<id>/: the owner-name layout of the "
+               "OpenSheaf specification 0.2, section 3.2\n")
+LABEL_RE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
 TEXMACS_VERSION = "2.1.5"
-REQUIRED = ("archiveId", "name", "baseUrl", "mainCollection", "curator", "depositor")
+REQUIRED = ("owner", "name", "baseUrl", "mainCollection", "curator", "depositor")
+REBUILD = ("this archive is of specification 0.1, which these tools no longer read: rebuild it under "
+           "specification 0.2 (section 16.1)")
 
 
 def find_root(start=None):
@@ -86,22 +106,57 @@ def read_config(root):
     sys.exit(f"no {CONFIG_NAME} or osheaf.yaml in {root}")
 
 
+def set_paths(root, layout=OWNER_NAME_LAYOUT):
+    """Set the folders of the archive in ROOT and its storage layout."""
+    global ROOT, OCFL, SITE, TM_HOME, LAYOUT
+    ROOT = Path(root).resolve()
+    OCFL, SITE, TM_HOME = ROOT / "ocfl", ROOT / "site", ROOT / "texmacs_home"
+    LAYOUT = layout
+
+
 def configure(root):
     """Load the archive configuration and set the paths."""
-    global ROOT, OCFL, SITE, TM_HOME, ARCHIVE, TEXMACS, INDEX, TEXMACS_VERSION
-    ROOT = Path(root).resolve()
-    cfg = read_config(ROOT)
+    global ARCHIVE, TEXMACS, INDEX, TEXMACS_VERSION, LABELS, OLD
+    cfg = read_config(root)
+    disc_path = Path(root) / "opensheaf.json"
+    disc = json.loads(disc_path.read_text(encoding="utf-8")) if disc_path.exists() else {}
+    OLD = "archiveId" in cfg or disc.get("specification") == "0.1"
+    set_paths(root, cfg.get("storageLayout", OWNER_NAME_LAYOUT))
+    ARCHIVE = {k: v for k, v in cfg.items() if k not in ("texmacs", "index")}
+    if OLD:
+        return ROOT
     missing = [k for k in REQUIRED if k not in cfg]
     if missing:
         sys.exit(f"{CONFIG_NAME} lacks {', '.join(missing)}")
-    ARCHIVE = {k: v for k, v in cfg.items() if k not in ("texmacs", "index")}
+    if LAYOUT not in LAYOUTS.values():
+        sys.exit(f"{CONFIG_NAME}: storageLayout is one of {', '.join(LAYOUTS.values())}")
     ARCHIVE.setdefault("profiles", [])
     ARCHIVE.setdefault("contact", ARCHIVE["baseUrl"])
     TEXMACS = cfg.get("texmacs", {})
     TEXMACS_VERSION = TEXMACS.get("version", TEXMACS_VERSION)
     INDEX = cfg.get("index", {})
-    OCFL, SITE, TM_HOME = ROOT / "ocfl", ROOT / "site", ROOT / "texmacs_home"
+    LABELS = {o["label"]: o["id"] for o in disc.get("objects", []) if o.get("label")}
     return ROOT
+
+
+def archive_owners():
+    """The owner names of the owners the archive hosts, its own first."""
+    out = [ARCHIVE["owner"]]
+    return out + [o for o in ARCHIVE.get("owners", []) if o not in out]
+
+
+def resolve(label):
+    """The identifier of the line labelled LABEL (or LABEL itself, an identifier held here)."""
+    if label in LABELS:
+        return LABELS[label]
+    if label.startswith("sheaf:") and (obj_dir(label) / "inventory.json").exists():
+        return label
+    sys.exit(f"no line labelled {label} in this archive (osheaf deposit --new {label} seals a new work)")
+
+
+def label_of(obj_id):
+    """The label of the line OBJ_ID, or None."""
+    return next((lb for lb, i in LABELS.items() if i == obj_id), None)
 
 
 def digest(path, algo="sha512"):
@@ -112,39 +167,68 @@ def digest(path, algo="sha512"):
     return h.hexdigest()
 
 
+def json_bytes(data):
+    return (json.dumps(data, indent=2, ensure_ascii=False) + "\n").encode("utf-8")
+
+
 def write_json(path, data):
     path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w", encoding="utf-8", newline="\n") as f:
-        f.write(json.dumps(data, indent=2, ensure_ascii=False) + "\n")
+    with open(path, "wb") as f:
+        f.write(json_bytes(data))
 
 
 def now():
-    return (datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0)
-            .isoformat().replace("+00:00", "Z"))
+    return names.utc_now()
+
+
+def path_of(obj_id, layout=None):
+    """The path, in the storage root, of the object OBJ_ID in LAYOUT (default: the archive's)."""
+    layout = layout or LAYOUT
+    if layout == HASHED_LAYOUT:
+        h = hashlib.sha256(obj_id.encode("utf-8")).hexdigest()
+        enc = "".join(c if re.match(r"[A-Za-z0-9_-]", c) else "".join(f"%{b:02x}" for b in c.encode("utf-8"))
+                      for c in obj_id)
+        if len(enc) > 100:
+            enc = enc[:100] + "-" + h
+        return f"{h[0:3]}/{h[3:6]}/{h[6:9]}/{enc}"
+    parts = obj_id.split(":")
+    if len(parts) == 3 and parts[0] == "sheaf":
+        if parts[1] == "draft" and LABEL_RE.match(parts[2]) and len(parts[2]) <= 64:
+            return f"draft/{parts[2]}"
+        if names.NAME.match(parts[1]) and names.OWNER_NAME.match(parts[2]):
+            return f"{parts[2]}/{parts[1]}"
+    raise ValueError(f"{obj_id}: not the identifier of a line or of a draft (sections 3.2 and 4)")
+
+
+def obj_dir(obj_id):
+    """The folder of the object OBJ_ID in the storage root."""
+    return OCFL / path_of(obj_id)
 
 
 def init_storage_root():
-    OCFL.mkdir(exist_ok=True)
+    OCFL.mkdir(parents=True, exist_ok=True)
     (OCFL / "0=ocfl_1.1").write_text("ocfl_1.1\n")
-    write_json(OCFL / "ocfl_layout.json", {
-        "extension": LAYOUT,
-        "description": "Flat direct storage layout: the object identifier is the object's folder name"})
-    # the flat-direct layout has no parameters: no extensions/ folder (OCFL
-    # forbids empty folders, and ocfl-py rejects a config.json for it)
+    if LAYOUT == HASHED_LAYOUT:
+        write_json(OCFL / "ocfl_layout.json", {
+            "extension": HASHED_LAYOUT,
+            "description": "Hashed n-tuple storage layout with its default parameters "
+                           "(OpenSheaf 0.2, section 3.2)"})
+    elif not (OCFL / LAYOUT_FILE).exists():
+        (OCFL / LAYOUT_FILE).write_text(LAYOUT_TEXT, encoding="utf-8")
 
 
 def load_inventory(obj_dir):
     p = obj_dir / "inventory.json"
-    return json.loads(p.read_text(encoding="utf-8")) if p.exists() else None
+    try:
+        return json.loads(p.read_text(encoding="utf-8")) if p.exists() else None
+    except (ValueError, UnicodeDecodeError):
+        return None
 
 
-def write_inventory(obj_dir, inv):
-    """Write the root inventory and its checksum file, and copies in the head
-    version directory (required by OpenSheaf)."""
-    for d in (obj_dir, obj_dir / inv["head"]):
-        p = d / "inventory.json"
-        write_json(p, inv)
-        (d / "inventory.json.sha512").write_text(f"{digest(p)} inventory.json\n")
+def inventory_bytes(inv):
+    """The bytes of the inventory file of INV and of its checksum file."""
+    data = owners.inventory_file(owners.ordered_inventory(inv))
+    return data, owners.sidecar(data)
 
 
 def content_path(inv, version, logical):
@@ -156,13 +240,15 @@ def content_path(inv, version, logical):
 
 
 OBJ = "object.json"
-OBJ_FORMAT = "opensheaf-object/0.1"
+OBJ_FORMAT = "opensheaf-object/0.2"
+GENESIS = names.GENESIS
+IDENTITY = ("datacite.json", OBJ, GENESIS)
 TODAY = datetime.date.today().isoformat()
 
 
 def read_json(obj_dir, inv, logical, version=None):
     p = read_logical(obj_dir, inv, logical, version)
-    return json.loads(p.read_text()) if p else None
+    return json.loads(p.read_text(encoding="utf-8")) if p else None
 
 
 def doc_version_of(obj_dir, inv, version):
@@ -180,7 +266,7 @@ def pdf_of(obj):
 def default_history(obj_dir, inv, at=None):
     """Without `history`: the last object version holding each document
     version, in the order of the numbers, among the object versions up to
-    AT (default: the head) (section 7.3)."""
+    AT (default: the head) (section 4.2)."""
     at = at or inv["head"]
     last = {}
     for ver in inv["versions"]:
@@ -199,7 +285,7 @@ def current_version(obj_dir, inv, at=None):
     """The object version holding the current document version as of object
     version AT (default: the head): the last entry of its history, or without
     one the last object version holding the highest document version
-    (section 7.3)."""
+    (section 4.2)."""
     return history_of(obj_dir, inv, at)[-1]
 
 
@@ -209,10 +295,10 @@ def next_object_version(inv):
 
 def carried_files(obj_id, inv):
     """{logical path: file} of the notice files of the head, which every later
-    object version keeps (section 7.3)."""
+    object version keeps (section 4.2)."""
     if not inv:
         return {}
-    d = OCFL / obj_id
+    d = obj_dir(obj_id)
     head = read_json(d, inv, OBJ)
     out = {}
     for n in head.get("notices", []):
@@ -235,9 +321,9 @@ def carry_forward(prev, new, inv, new_ver, after_doc=None):
         new["notices"] = list(prev["notices"])
     if prev.get("history") is None and after_doc is None:
         return
-    obj_dir = OCFL / new["objectId"]
-    hist = list(prev.get("history") or default_history(obj_dir, inv))
-    docs = {doc_version_of(obj_dir, inv, v): v for v in hist}
+    d = obj_dir(names.object_id(new["name"], new["owner"]))
+    hist = list(prev.get("history") or default_history(d, inv))
+    docs = {doc_version_of(d, inv, v): v for v in hist}
     n = new["documentVersion"]
     if n in docs:                      # description-only (or completion)
         hist[hist.index(docs[n])] = new_ver
@@ -269,11 +355,19 @@ def set_date(dc, date_type, date, info=None):
 def objects():
     """(id, object dir, inventory) of every object of the storage root."""
     out = []
-    if OCFL.exists():
-        for d in sorted(OCFL.iterdir()):
-            if d.is_dir() and (d / "0=ocfl_object_1.1").exists():
-                out.append((d.name, d, load_inventory(d)))
-    return out
+
+    def walk(d):
+        for c in sorted(d.iterdir()):
+            if not c.is_dir() or c.is_symlink():
+                continue
+            if (c / "0=ocfl_object_1.1").exists():
+                inv = load_inventory(c)
+                out.append(((inv or {}).get("id"), c, inv))
+            elif not (d == OCFL and c.name == "extensions"):
+                walk(c)
+    if OCFL is not None and OCFL.exists():
+        walk(OCFL)
+    return sorted(out, key=lambda o: (str(o[0]), str(o[1])))
 
 
 def read_logical(obj_dir, inv, logical, version=None):
@@ -281,39 +375,157 @@ def read_logical(obj_dir, inv, logical, version=None):
     return (obj_dir / cp) if cp else None
 
 
-def add_version(obj_id, files, message):
-    """Add an object version whose state is FILES ({logical path: source
-    file}); unchanged content is not stored again. Returns the inventory."""
-    obj_dir = OCFL / obj_id
-    inv = load_inventory(obj_dir)
+def add_version(obj_id, files, obj, message, *, acknowledged=False):
+    """Add an object version of the line OBJ_ID whose state is FILES ({logical path:
+    file or bytes}) and OBJ as object.json, signed by the owner of the line; unchanged
+    content is not stored again. Returns the inventory."""
+    d = obj_dir(obj_id)
+    inv = load_inventory(d)
+    log, latest, signers = signing_keys(obj["owner"])
+    obj = {k: v for k, v in obj.items() if k != "previous"}
     if inv is None:
-        obj_dir.mkdir(parents=True)
-        (obj_dir / "0=ocfl_object_1.1").write_text("ocfl_object_1.1\n")
-        inv = {"id": obj_id, "type": "https://ocfl.io/1.1/spec/#inventory",
-               "digestAlgorithm": "sha512", "head": "v0", "contentDirectory": "content",
-               "manifest": {}, "versions": {}, "fixity": {"md5": {}, "sha256": {}}}
+        if d.exists():
+            sys.exit(f"{d} exists, and is not an object")
+        inv = {"id": obj_id, "type": owners.INVENTORY_TYPE, "digestAlgorithm": "sha512",
+               "head": "v0", "manifest": {}, "versions": {}, "fixity": {"md5": {}, "sha256": {}}}
+    else:
+        check_before_extending(obj_id, d, inv, acknowledged)
+        obj["previous"] = owners.sidecar_digest((d / inv["head"] / "inventory.json.sha512").read_bytes())
     ver = f"v{int(inv['head'][1:]) + 1}"
-    state = {}
-    for logical, src in sorted(files.items()):
-        dig = digest(src)
-        state.setdefault(dig, []).append(logical)
-        if dig not in inv["manifest"]:
-            cp = f"{ver}/content/{logical}"
-            dest = obj_dir / cp
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(src, dest)
-            inv["manifest"][dig] = [cp]
-            inv["fixity"]["md5"].setdefault(digest(dest, "md5"), []).append(cp)
-            inv["fixity"]["sha256"].setdefault(digest(dest, "sha256"), []).append(cp)
-    inv["head"] = ver
-    inv["versions"][ver] = {
-        "created": now(),
-        "message": message,
-        "user": {"name": ARCHIVE["depositor"]["name"], "address": ARCHIVE["depositor"]["address"]},
-        "state": state,
-    }
-    write_inventory(obj_dir, inv)
+    stage = Path(tempfile.mkdtemp(dir=ROOT, prefix=".staging-"))
+    try:
+        content = dict(files, **{OBJ: json_bytes(obj)})
+        state = {}
+        for logical, src in sorted(content.items()):
+            data = src if isinstance(src, bytes) else Path(src).read_bytes()
+            dig = names.sha512_hex(data)
+            state.setdefault(dig, []).append(logical)
+            if dig not in inv["manifest"]:
+                cp = f"{ver}/content/{logical}"
+                (stage / cp).parent.mkdir(parents=True, exist_ok=True)
+                (stage / cp).write_bytes(data)
+                inv["manifest"][dig] = [cp]
+                inv.setdefault("fixity", {}).setdefault("md5", {}).setdefault(
+                    hashlib.md5(data).hexdigest(), []).append(cp)
+                inv["fixity"].setdefault("sha256", {}).setdefault(
+                    hashlib.sha256(data).hexdigest(), []).append(cp)
+        inv["head"] = ver
+        inv["versions"][ver] = {
+            "created": now(),
+            "message": message,
+            "user": {"name": ARCHIVE["depositor"]["name"], "address": ARCHIVE["depositor"]["address"]},
+            "state": state,
+        }
+        inv = owners.ordered_inventory(inv)
+        data, sidecar = inventory_bytes(inv)
+        (stage / ver).mkdir(exist_ok=True)
+        (stage / ver / "inventory.json").write_bytes(data)
+        (stage / ver / "inventory.json.sha512").write_bytes(sidecar)
+        wdir = stage / "witnesses"
+        wdir.mkdir()
+        pin, dig = log.pin(latest.number), names.sha512_hex(data)
+        for key in signers:
+            (wdir / sign.file_name(key.did)).write_bytes(
+                sign.signature_file(key, obj_id, ver, dig, obj["owner"], pin))
+        if ver == "v1":
+            new = stage / "object"
+            new.mkdir()
+            (new / "0=ocfl_object_1.1").write_text("ocfl_object_1.1\n")
+            os.rename(stage / ver, new / ver)
+            (new / sign.WITNESSES).parent.mkdir(parents=True)
+            (new / sign.WITNESSES).mkdir()
+            os.rename(wdir, new / sign.WITNESSES / ver)
+            (new / "inventory.json").write_bytes(data)
+            (new / "inventory.json.sha512").write_bytes(sidecar)
+            d.parent.mkdir(parents=True, exist_ok=True)
+            os.rename(new, d)
+        else:
+            os.rename(stage / ver, d / ver)
+            (d / sign.WITNESSES).mkdir(parents=True, exist_ok=True)
+            os.rename(wdir, d / sign.WITNESSES / ver)
+            for name, b in (("inventory.json", data), ("inventory.json.sha512", sidecar)):
+                (stage / name).write_bytes(b)
+                os.replace(stage / name, d / name)
+    finally:
+        shutil.rmtree(stage, ignore_errors=True)
     return inv
+
+
+def key_log(owner):
+    """The key log of OWNER kept in the storage root (section 6.5), or None."""
+    d = obj_dir(names.object_id(owner, owner))
+    if not (d / "inventory.json").exists():
+        return None
+    try:
+        return owners.load_key_log(d)
+    except owners.OwnerError as e:
+        sys.exit(str(e))
+
+
+def signing_keys(owner):
+    """(the key log of OWNER, its latest version, the current keys of this device that sign)."""
+    log = key_log(owner)
+    if log is None:
+        sys.exit(f"the key log of {owner} is not in the storage root (section 6.5)")
+    errors, _ = log.check()
+    if errors:
+        sys.exit(f"the key log of {owner} has errors: " + "; ".join(errors))
+    latest = log.latest()
+    if latest is None:
+        sys.exit(f"the owner {owner} has ended (section 6.3): nothing is signed for it")
+    try:
+        found = keys.current_keys(owner, latest.keys["keys"])
+    except keys.KeyStoreError as e:
+        sys.exit(str(e))
+    need = latest.keys["threshold"]
+    if len(found) < need:
+        sys.exit(f"this device holds {len(found)} of the current keys of {owner}, and v{latest.number} "
+                 f"of its key log needs {need} to sign (osheaf key new makes one for this device)")
+    return log, latest, found
+
+
+def witnesses_of(d, version):
+    """{file name: bytes} of the witness folder of VERSION of the object in D."""
+    w = d / sign.WITNESSES / version
+    return {f.name: f.read_bytes() for f in sorted(w.iterdir()) if f.is_file()} if w.is_dir() else {}
+
+
+def line_statuses(d, inv, log=False):
+    """(judgements, statuses) of the versions v1 to the head of the line held in D, against
+    LOG, the owner's key log (default: the one in the storage root)."""
+    owner = read_json(d, inv, OBJ, "v1").get("owner")
+    if log is False:
+        log = key_log(owner) if owner else None
+    versions = []
+    for n in range(1, int(inv["head"][1:]) + 1):
+        p = d / f"v{n}" / "inventory.json"
+        versions.append((f"v{n}", names.sha512_hex(p.read_bytes()) if p.exists() else "",
+                         witnesses_of(d, f"v{n}")))
+    if log is None:
+        judgements = [sign.judge_folder(w, object_id=inv["id"], version=v, inventory=dg, owner=owner,
+                                        lookup=lambda n, dg: None) for v, dg, w in versions]
+        return judgements, sign.line_statuses(judgements)
+    return sign.line_statuses_of(inv["id"], owner, versions, log)
+
+
+def latest_signed(d, inv, log=False):
+    """The latest signed version of the line held in D, not contested, as 'vN', or None."""
+    n = sign.latest_signed(line_statuses(d, inv, log)[1])
+    return f"v{n}" if n else None
+
+
+def check_before_extending(obj_id, d, inv, acknowledged=False):
+    """Show the versions of the line OBJ_ID that a new version would extend and that are
+    not signed or not contested (section 7.3); stop unless ACKNOWLEDGED."""
+    _, statuses = line_statuses(d, inv)
+    doubtful = [(f"v{i + 1}", s) for i, s in enumerate(statuses) if s not in (sign.SIGNED, sign.VOUCHED)]
+    if not doubtful:
+        return
+    lines = "\n".join(f"  {v}: {s}" for v, s in doubtful)
+    if not acknowledged:
+        sys.exit(f"{obj_id}: the new version would extend versions that are not signed, or are "
+                 f"contested (section 7.3):\n{lines}\nlook at them; give --i-know to extend them anyway")
+    print(f"warning: {obj_id}: extending versions that are not signed, or are contested:\n{lines}")
 
 
 def run_texmacs(calls):
@@ -581,39 +793,72 @@ def rights_list(rights, prev_dc=None):
     return [{"rights": "All rights reserved"}]
 
 
-def landing_url(obj_id):
+def landing_url(label):
     """The address readers are sent to: the landing page, written with either
     kind of index, or else the HTML version of a TeXmacs document."""
     if INDEX.get("html") or INDEX.get("template"):
-        return f"{ARCHIVE['baseUrl']}paper/{obj_id}/"
-    return f"{ARCHIVE['baseUrl']}site/{obj_id}/{obj_id}.html"
+        return f"{ARCHIVE['baseUrl']}paper/{label}/"
+    return f"{ARCHIVE['baseUrl']}site/{label}/{label}.html"
+
+
+def seal(kind, owner):
+    """A new genesis record of a work of OWNER, of KIND, and the identifier of its line,
+    free in this archive (sections 5.3, 5.4 and 10.2)."""
+    taken = set()
+    for obj_id, _, _ in objects():
+        taken.update((obj_id or "").split(":")[1:2])
+    disc = ROOT / "opensheaf.json"
+    tombs = json.loads(disc.read_text(encoding="utf-8")).get("tombstones", []) if disc.exists() else []
+    taken.update(t.get("genesisName") for t in tombs)
+    taken.update(t.get("name") for t in tombs)
+    while True:
+        genesis = names.genesis_record(kind, originator=owner)
+        nm = names.name(genesis)
+        if nm not in taken:
+            return genesis, names.object_id(nm, owner)
 
 
 def deposit(args):
     """Deposit a document, or a new document version of it: a TeXmacs source
     (typeset by the archive), or any source with its PDF (--pdf), or a PDF
     alone (--no-source REASON)."""
-    obj_id = args.id
-    if not ID_RE.match(obj_id) or len(obj_id) > 64:
-        sys.exit("ID must match ^[a-z0-9]+(-[a-z0-9]+)*$ and have at most 64 characters")
-    if len(obj_id) > 32:
-        print(f"warning: {obj_id} is longer than 32 characters (section 6.3: SHOULD be short)")
+    label = args.id
+    new = getattr(args, "new", False)
+    if label in LABELS:
+        if new:
+            sys.exit(f"{label} is the label of a line already: deposit a new version without --new, "
+                     "or choose another label for a new work")
+        obj_id = LABELS[label]
+        genesis = None
+    elif not new:
+        sys.exit(f"no line labelled {label} in this archive: give --new to seal a new work "
+                 f"(section 10.2), or check the label (osheaf verify lists them)")
+    else:
+        if not LABEL_RE.match(label) or len(label) > 64:
+            sys.exit("a label must match ^[a-z0-9]+(-[a-z0-9]+)*$ and have at most 64 characters")
+        if len(label) > 32:
+            print(f"warning: {label} is longer than 32 characters (it appears in every URL of the website)")
+        owner = getattr(args, "owner", None) or ARCHIVE["owner"]
+        if owner not in archive_owners():
+            sys.exit(f"{owner} is not an owner this archive hosts")
+        obj_id = None
     init_storage_root()
     source = Path(args.source) if args.source else None
     for f in [source, args.pdf and Path(args.pdf)] + [Path(x.partition("=")[0]) for x in args.extra_source or []]:
         if f and not f.is_file():
             sys.exit(f"no file {f}")
-    obj_dir = OCFL / obj_id
-    inv = load_inventory(obj_dir)
+    d = obj_dir(obj_id) if obj_id else None
+    inv = load_inventory(d) if d else None
     prev_obj = prev_dc = None
     doc_version = 1
     if inv:
-        prev_obj, prev_dc = read_json(obj_dir, inv, OBJ), read_json(obj_dir, inv, "datacite.json")
+        prev_obj, prev_dc = read_json(d, inv, OBJ), read_json(d, inv, "datacite.json")
         if prev_obj["kind"] != "document":
-            sys.exit(f"{obj_id} is not a document")
+            sys.exit(f"{label} is not a document")
         if prev_obj.get("status") == "withdrawn":
-            sys.exit(f"{obj_id} is withdrawn (section 11.1): a withdrawn document gets no new versions")
-        doc_version = max(doc_version_of(obj_dir, inv, v) for v in inv["versions"]) + 1
+            sys.exit(f"{label} is withdrawn (section 13.1): a withdrawn document gets no new versions")
+        doc_version = max(doc_version_of(d, inv, v) for v in inv["versions"]) + 1
+        owner = prev_obj["owner"]
     if args.created and args.available:
         sys.exit("give --created (a version not public at the time) or --available, not both")
     available = None if args.created else (args.available or TODAY)
@@ -624,10 +869,10 @@ def deposit(args):
     if not texmacs and not args.pdf:
         sys.exit("give the PDF of this version with --pdf (only TeXmacs sources are typeset by the archive)")
     if source is None and not args.no_source:
-        sys.exit("a deposit without sources needs --no-source REASON (section 9: sourcesMissing)")
+        sys.exit("a deposit without sources needs --no-source REASON (section 4.3: sourcesMissing)")
     files, formats = {}, []
     if texmacs:
-        main = f"{obj_id}.tm"
+        main = f"{label}.tm"
         fmt = "application/x-texmacs"
     elif source is not None:
         main = source.name
@@ -648,7 +893,7 @@ def deposit(args):
             formats.append("application/x-bibtex")
     if texmacs:
         pdf = tmp / "paper.pdf"
-        typeset(source, obj_id, pdf, SITE / obj_id if TEXMACS.get("htmlPackage") or not INDEX.get("html") else None)
+        typeset(source, label, pdf, SITE / label if TEXMACS.get("htmlPackage") or not INDEX.get("html") else None)
     else:
         pdf = Path(args.pdf)
         if pdf.read_bytes()[:4] != b"%PDF":
@@ -675,7 +920,7 @@ def deposit(args):
         "publicationYear": int((issued or args.created)[:4]),
         "types": {"resourceTypeGeneral": args.type},
         "version": str(doc_version),
-        "url": landing_url(obj_id),
+        "url": landing_url(label),
         "dates": [],
         "language": args.language or "en",
         "formats": formats,
@@ -700,8 +945,8 @@ def deposit(args):
         "format": OBJ_FORMAT,
         "specification": SPEC,
         "kind": "document",
-        "archiveId": ARCHIVE["archiveId"],
-        "objectId": obj_id,
+        "name": None,
+        "owner": owner,
         "documentVersion": doc_version,
     }
     if source is not None:
@@ -728,33 +973,41 @@ def deposit(args):
         obj["licence"] = {"path": args.licence_file, "mediaType": {
             ".pdf": "application/pdf", ".md": "text/markdown", ".txt": "text/plain", ".html": "text/html",
         }.get(Path(args.licence_file).suffix.lower(), "text/plain")}
+    if obj_id is None:
+        genesis, obj_id = seal("document", owner)
+        files[GENESIS] = genesis
+    else:
+        files[GENESIS] = read_logical(d, inv, GENESIS)
+    obj["name"] = obj_id.split(":")[1]
     carry_forward(prev_obj, obj, inv, next_object_version(inv), args.after)
     for lp, f in carried_files(obj_id, inv).items():
         files.setdefault(lp, f)
-    write_json(tmp / "datacite.json", datacite)
-    write_json(tmp / OBJ, obj)
-    files["datacite.json"] = tmp / "datacite.json"
-    files[OBJ] = tmp / OBJ
-    inv = add_version(obj_id, files, args.message or f"Deposit: document version {doc_version}")
+    files["datacite.json"] = json_bytes(datacite)
+    inv = add_version(obj_id, files, obj, args.message or f"Deposit: document version {doc_version}",
+                      acknowledged=getattr(args, "i_know", False))
     shutil.rmtree(tmp, ignore_errors=True)
-    print(f"{obj_id}: {inv['head']} (document version {doc_version})")
-
-
-def mirror_of(obj_dir, inv):
-    """The archive whose object this one mirrors (section 10.4), or None."""
-    aid = read_json(obj_dir, inv, OBJ).get("archiveId")
-    return aid if aid != ARCHIVE["archiveId"] else None
+    LABELS[label] = obj_id
+    write_discovery()
+    print(f"{label}: {inv['head']} (document version {doc_version}) {obj_id}")
 
 
 def documents():
-    """(obj_id, dir, inventory, current object version, its object.json and
-    datacite.json) of every document."""
-    out = []
+    """(obj_id, dir, inventory, latest signed version, current object version, its
+    object.json and datacite.json) of every document of the archive's owners."""
+    out, mine = [], set(archive_owners())
     for obj_id, d, inv in objects():
-        if read_json(d, inv, OBJ)["kind"] != "document" or mirror_of(d, inv):
-            continue  # collections, and mirrors of other archives' objects
-        cur = current_version(d, inv)
-        out.append((obj_id, d, inv, cur, read_json(d, inv, OBJ, cur), read_json(d, inv, "datacite.json", cur)))
+        if inv is None or obj_id is None or obj_id.startswith("sheaf:draft:"):
+            continue
+        head = read_json(d, inv, OBJ)
+        if head.get("kind") != "document" or head.get("owner") not in mine:
+            continue
+        signed = latest_signed(d, inv)
+        if signed is None:
+            print(f"warning: {label_of(obj_id) or obj_id} has no signed version (section 7.3): left out")
+            continue
+        cur = current_version(d, inv, signed)
+        out.append((obj_id, d, inv, signed, cur, read_json(d, inv, OBJ, cur),
+                    read_json(d, inv, "datacite.json", cur)))
     return out
 
 
@@ -777,40 +1030,43 @@ RIGHTS = {
 }
 
 
-def description_version(obj_id, change, message, add_files=None):
-    """Add a description-only version of document OBJ_ID: the files of the
+def description_version(label, change, message, add_files=None, acknowledged=False):
+    """Add a description-only version of the document LABEL: the files of the
     head (and ADD_FILES, {logical path: file}, such as the file of a notice),
     with datacite.json and object.json changed by CHANGE(dc, obj). The
     document version stays; datacite.json gets the Updated date."""
-    obj_dir = OCFL / obj_id
-    inv = load_inventory(obj_dir)
+    obj_id = resolve(label)
+    d = obj_dir(obj_id)
+    inv = load_inventory(d)
     if inv is None:
-        sys.exit(f"no object {obj_id}")
-    state = {p: d for d, ps in inv["versions"][inv["head"]]["state"].items() for p in ps}
-    dc = read_json(obj_dir, inv, "datacite.json")
-    prev = read_json(obj_dir, inv, OBJ)
+        sys.exit(f"no object {label}")
+    state = {p: dg for dg, ps in inv["versions"][inv["head"]]["state"].items() for p in ps}
+    dc = read_json(d, inv, "datacite.json")
+    prev = read_json(d, inv, OBJ)
     if prev["kind"] != "document":
-        sys.exit(f"{obj_id} is not a document")
+        sys.exit(f"{label} is not a document")
     obj = json.loads(json.dumps(prev))
     change(dc, obj)
     set_date(dc, "Updated", TODAY)
     carry_forward(prev, obj, inv, next_object_version(inv))
-    tmp = Path(tempfile.mkdtemp())
-    write_json(tmp / "datacite.json", dc)
-    write_json(tmp / OBJ, obj)
-    files = {p: obj_dir / inv["manifest"][d][0] for p, d in state.items()}
+    files = {p: d / inv["manifest"][dg][0] for p, dg in state.items() if p not in ("datacite.json", OBJ)}
     for lp, f in (add_files or {}).items():
         if lp in files:
-            sys.exit(f"{obj_id} has a file {lp} already")
+            sys.exit(f"{label} has a file {lp} already")
         files[lp] = Path(f)
-    files["datacite.json"], files[OBJ] = tmp / "datacite.json", tmp / OBJ
-    inv = add_version(obj_id, files, message() if callable(message) else message)
-    shutil.rmtree(tmp, ignore_errors=True)
+    files["datacite.json"] = json_bytes(dc)
+    inv = add_version(obj_id, files, obj, message() if callable(message) else message,
+                      acknowledged=acknowledged)
+    write_discovery()
     return inv
 
 
+def ack(args):
+    return bool(getattr(args, "i_know", False))
+
+
 def note_from(text, file, folder):
-    """A note (section 9): a text, a file of the content, or both."""
+    """A note (section 4.3): a text, a file of the content, or both."""
     note, add = {}, {}
     if text:
         note["text"] = text
@@ -827,9 +1083,9 @@ def note_from(text, file, folder):
 
 
 def notice(args):
-    """A notice about a document version (section 7.3), by a description-only
+    """A notice about a document version (section 4.2), by a description-only
     version: kept, unchanged, in every later object version."""
-    d = OCFL / args.id
+    d = obj_dir(resolve(args.id))
     inv = load_inventory(d)
     if inv is None:
         sys.exit(f"no object {args.id}")
@@ -842,12 +1098,12 @@ def notice(args):
     def change(dc, obj):
         obj["notices"] = obj.get("notices", []) + [note]
     inv = description_version(args.id, change, args.message or
-                              f"Notice about document version {args.about} (description-only version)", add)
+                              f"Notice about document version {args.about} (description-only version)", add, ack(args))
     print(f"{args.id}: {inv['head']} (notice about version {args.about})")
 
 
 def withdraw(args):
-    """Withdraw a document (section 11.1): a description-only version with the
+    """Withdraw a document (section 13.1): a description-only version with the
     status withdrawn, the reason, and the Withdrawn date in datacite.json. The
     content stays."""
     reason, add = note_from(args.reason, args.file, "withdrawal")
@@ -859,15 +1115,16 @@ def withdraw(args):
         obj["status"] = "withdrawn"
         obj["withdrawal"] = {"date": date, "reason": reason}
         set_date(dc, "Withdrawn", date)
-    inv = description_version(args.id, change, args.message or "Withdrawal (description-only version)", add)
+    inv = description_version(args.id, change, args.message or "Withdrawal (description-only version)", add, ack(args))
     print(f"{args.id}: {inv['head']} (withdrawn)")
 
 
 def complete(args):
     """Add the sources of a document version recorded without them
-    (sourcesMissing, section 7.3): a new object version holding the files of
+    (sourcesMissing, section 4.2): a new object version holding the files of
     that document version and the sources; its number stays."""
-    d = OCFL / args.id
+    obj_id = resolve(args.id)
+    d = obj_dir(obj_id)
     inv = load_inventory(d)
     if inv is None:
         sys.exit(f"no object {args.id}")
@@ -911,15 +1168,13 @@ def complete(args):
     fmt = obj["sourceFormat"]
     if fmt not in dc.get("formats", []):
         dc["formats"] = [fmt] + dc.get("formats", [])
-    tmp = Path(tempfile.mkdtemp())
-    write_json(tmp / "datacite.json", dc)
-    write_json(tmp / OBJ, obj)
-    files["datacite.json"], files[OBJ] = tmp / "datacite.json", tmp / OBJ
-    for lp, f in carried_files(args.id, inv).items():     # notice files are kept
+    files["datacite.json"] = json_bytes(dc)
+    for lp, f in carried_files(obj_id, inv).items():     # notice files are kept
         files.setdefault(lp, f)
-    inv = add_version(args.id, files, args.message or
-                      f"Sources of document version {args.version} added (sourcesMissing completed)")
-    shutil.rmtree(tmp, ignore_errors=True)
+    inv = add_version(obj_id, files, obj, args.message or
+                      f"Sources of document version {args.version} added (sourcesMissing completed)",
+                      acknowledged=getattr(args, "i_know", False))
+    write_discovery()
     print(f"{args.id}: {inv['head']} (sources of version {args.version})")
 
 
@@ -940,7 +1195,7 @@ def relate(args):
         if args.issued:
             set_date(dc, "Issued", args.issued)
     inv = description_version(args.id, change, args.message or
-                              f"Related: {args.relation} {rel['relatedIdentifier']} (description-only version)")
+                              f"Related: {args.relation} {rel['relatedIdentifier']} (description-only version)", None, ack(args))
     print(f"{args.id}: {inv['head']} ({args.relation} {rel['relatedIdentifier']})")
 
 
@@ -956,13 +1211,13 @@ def relicense(args):
         obj["agreement"] = {"by": [c["name"] for c in dc["creators"]],
                             "date": args.date or TODAY, "method": args.method}
     inv = description_version(args.id, change, args.message or
-                              f"Licence: {new['rights']} (description-only version; content unchanged)")
+                              f"Licence: {new['rights']} (description-only version; content unchanged)", None, ack(args))
     print(f"{args.id}: {inv['head']} ({new['rights']})")
 
 
 def describe(args):
     """Correct the description of a document (title, abstract, keywords,
-    authors) by a description-only version (section 7.3)."""
+    authors) by a description-only version (section 4.2)."""
     if args.abstract is not None and args.abstract_file:
         sys.exit("describe: give --abstract or --abstract-file, not both")
     abstract = (Path(args.abstract_file).read_text(encoding="utf-8") if args.abstract_file
@@ -999,7 +1254,7 @@ def describe(args):
         if not changed:
             sys.exit(f"{args.id}: nothing to change in the description")
     inv = description_version(args.id, change, args.message or (
-        lambda: f"Description corrected: {', '.join(changed)} (description-only version)"))
+        lambda: f"Description corrected: {', '.join(changed)} (description-only version)"), None, ack(args))
     print(f"{args.id}: {inv['head']} ({', '.join(changed)} corrected)")
 
 
@@ -1009,7 +1264,7 @@ ORDER = "issued-desc"
 def member_pins(m):
     """[(object version, inventory digest, document version or None)] of a
     member: its version in a catalogue, each revision in a
-    selection (section 10.2)."""
+    selection (section 8.4)."""
     if "revisions" in m:
         return [(r.get("version"), r.get("inventorySha512"), r.get("documentVersion"))
                 for r in m["revisions"]]
@@ -1018,41 +1273,44 @@ def member_pins(m):
 
 def presented_version(m, obj_dir, inv):
     """The object version presentations show for member M of an object held
-    in OBJ_DIR (section 10.2)."""
+    in OBJ_DIR (section 8.3)."""
     if m.get("revisions"):
         return m["revisions"][-1]["version"]
     return current_version(obj_dir, inv, m["version"])
 
 
 def member_order(members):
-    """Section 10.2: by Issued, then Available (newest first for issued-desc),
-    members with neither last, ties broken by object identifier."""
+    """Section 8.2: by Issued, then Available (newest first for issued-desc),
+    members with neither last, ties broken by name and then owner."""
     def key(m):
         c = m.get("cite", {})
         return (c.get("issued") or "", c.get("available") or "")
-    dated = sorted((m for m in members if any(key(m))), key=lambda m: m["id"])
+    line = lambda m: (m.get("name", ""), m.get("owner", ""))
+    dated = sorted((m for m in members if any(key(m))), key=line)
     dated.sort(key=key, reverse=(ORDER == "issued-desc"))
-    return dated + sorted((m for m in members if not any(key(m))), key=lambda m: m["id"])
+    return dated + sorted((m for m in members if not any(key(m))), key=line)
 
 
 def collect(args):
-    """A new version of the main collection when a document has a new object
-    version; members pin the head of their object and follow it (a catalogue, section 10.2)."""
+    """A new version of the main catalogue when a document has a new signed version;
+    members pin the latest signed version of their line and follow it (section 8.3)."""
     init_storage_root()
-    coll_id = ARCHIVE["mainCollection"]
-    cinv = load_inventory(OCFL / coll_id)
-    if cinv and read_json(OCFL / coll_id, cinv, "members.json").get("order") == "manual":
-        print(f"{coll_id} is curated (order manual): use osheaf collection sync|update")
+    label = ARCHIVE["mainCollection"]
+    coll_id = LABELS.get(label)
+    coll_dir = obj_dir(coll_id) if coll_id else None
+    cinv = load_inventory(coll_dir) if coll_dir else None
+    if cinv and read_json(coll_dir, cinv, "members.json").get("order") == "manual":
+        print(f"{label} is curated (order manual): use osheaf collection sync|update")
         return
     members = []
-    for obj_id, d, inv, cur, obj, dc in documents():
+    for obj_id, d, inv, signed, cur, obj, dc in documents():
         cite = {"title": dc["titles"][0]["title"],
                 "creators": [display_name(c) for c in dc["creators"]],
                 "year": dc["publicationYear"]}
         if date_of(dc, "Issued"):
             cite["issued"] = date_of(dc, "Issued")
-        m = {"kind": "document", "archive": ARCHIVE["archiveId"], "archiveUrl": ARCHIVE["baseUrl"],
-             "id": obj_id, "version": inv["head"], "inventorySha512": digest(d / inv["head"] / "inventory.json"),
+        m = {"kind": "document", "name": obj["name"], "owner": obj["owner"], "at": [ARCHIVE["baseUrl"]],
+             "version": signed, "inventorySha512": digest(d / signed / "inventory.json"),
              "follow": "latest", "cite": cite}
         # the Available date only orders, it is not part of the cached citation
         m["cite"]["available"] = date_of(dc, "Available", "Created")
@@ -1060,60 +1318,95 @@ def collect(args):
     members = member_order(members)
     for m in members:
         m["cite"].pop("available", None)
-    coll_dir = OCFL / coll_id
-    inv = load_inventory(coll_dir)
     version, issued = 1, TODAY
-    if inv:
-        old = read_json(coll_dir, inv, "members.json")
+    if cinv:
+        old = read_json(coll_dir, cinv, "members.json")
         if old["members"] == members and old.get("type") == "catalogue":
-            print(f"{coll_id}: unchanged ({inv['head']})")
+            print(f"{label}: unchanged ({cinv['head']})")
             return
-        version = read_json(coll_dir, inv, OBJ)["documentVersion"] + 1
-        issued = date_of(read_json(coll_dir, inv, "datacite.json"), "Issued") or TODAY
+        version = read_json(coll_dir, cinv, OBJ)["documentVersion"] + 1
+        issued = date_of(read_json(coll_dir, cinv, "datacite.json"), "Issued") or TODAY
+    owner = ARCHIVE["owner"]
+    if coll_id is None:
+        genesis, coll_id = seal("collection", owner)
+    else:
+        genesis = read_logical(coll_dir, cinv, GENESIS).read_bytes()
     cur = ARCHIVE["curator"]
-    tmp = Path(tempfile.mkdtemp())
-    write_json(tmp / "members.json", {"format": "opensheaf-collection/0.1", "type": "catalogue",
-                                      "order": ORDER, "members": members})
-    write_json(tmp / "datacite.json", {
-        "titles": [{"title": ARCHIVE["name"]}],
-        "creators": [{"name": cur["name"], "nameType": "Personal", "givenName": cur["givenName"],
-                      "familyName": cur["familyName"], "affiliation": [{"name": cur["affiliation"]}]}],
-        "publisher": {"name": ARCHIVE["name"]},
-        "publicationYear": int(issued[:4]),
-        "types": {"resourceTypeGeneral": "Collection"},
-        "version": str(version),
-        "url": ARCHIVE["baseUrl"],
-        "dates": [{"date": issued, "dateType": "Issued"}, {"date": TODAY, "dateType": "Available"}],
-        "descriptions": [{"description": "The documents deposited in this archive, newest first.",
-                          "descriptionType": "Abstract"}],
-        "rightsList": [dict(RIGHTS["cc0-1.0"])],
-    })
-    write_json(tmp / OBJ, {
-        "format": OBJ_FORMAT, "specification": SPEC, "kind": "collection",
-        "archiveId": ARCHIVE["archiveId"], "objectId": coll_id, "documentVersion": version,
-        "status": "active",
-    })
-    inv = add_version(coll_id, {n: tmp / n for n in ("members.json", "datacite.json", OBJ)},
-                      f"Collection version {version}: {len(members)} documents")
-    shutil.rmtree(tmp, ignore_errors=True)
-    print(f"{coll_id}: {inv['head']} ({len(members)} members)")
+    creator_ = {"name": cur["name"], "nameType": "Personal", "familyName": cur["familyName"]}
+    if cur.get("givenName"):
+        creator_["givenName"] = cur["givenName"]
+    if cur.get("affiliation"):
+        creator_["affiliation"] = [{"name": cur["affiliation"]}]
+    files = {
+        "members.json": json_bytes({"format": "opensheaf-collection/0.2", "type": "catalogue",
+                                    "order": ORDER, "members": members}),
+        "datacite.json": json_bytes({
+            "titles": [{"title": ARCHIVE["name"]}],
+            "creators": [creator_],
+            "publisher": {"name": ARCHIVE["name"]},
+            "publicationYear": int(issued[:4]),
+            "types": {"resourceTypeGeneral": "Collection"},
+            "version": str(version),
+            "url": ARCHIVE["baseUrl"],
+            "dates": [{"date": issued, "dateType": "Issued"}, {"date": TODAY, "dateType": "Available"}],
+            "descriptions": [{"description": "The documents deposited in this archive, newest first.",
+                              "descriptionType": "Abstract"}],
+            "rightsList": [dict(RIGHTS["cc0-1.0"])],
+        }),
+        GENESIS: genesis,
+    }
+    obj = {"format": OBJ_FORMAT, "specification": SPEC, "kind": "collection",
+           "name": coll_id.split(":")[1], "owner": owner, "documentVersion": version, "status": "active"}
+    LABELS[label] = coll_id
+    inv = add_version(coll_id, files, obj, f"Collection version {version}: {len(members)} documents",
+                      acknowledged=bool(getattr(args, "i_know", False)))
+    write_discovery()
+    print(f"{label}: {inv['head']} ({len(members)} members)")
 
 
 def discovery():
-    objs = []
+    objs, drafts, used = [], [], set()
     for obj_id, d, inv in objects():
-        obj = read_json(d, inv, OBJ)
-        entry = {"id": obj_id, "kind": obj["kind"], "head": inv["head"],
-                 "inventorySha512": (d / "inventory.json.sha512").read_text().split()[0],
-                 "status": obj["status"]}
-        if mirror_of(d, inv):
-            entry["mirrorOf"] = mirror_of(d, inv)
+        if inv is None or obj_id is None:
+            continue
+        head = read_json(d, inv, OBJ) or {}
+        used.update(head.get("extensions") or {})
+        if obj_id.startswith("sheaf:draft:"):
+            drafts.append({"id": obj_id, "kind": head.get("kind"), "head": inv["head"]})
+            continue
+        status = "active"
+        if head.get("kind") == "owner":
+            try:
+                used.update(owners.load_key_log(d).extensions() or {})
+            except owners.OwnerError:
+                pass
+        else:
+            signed = latest_signed(d, inv)
+            status = (read_json(d, inv, OBJ, signed) if signed else head).get("status", "active")
+        entry = {"id": obj_id, "kind": head.get("kind"), "name": head.get("name"),
+                 "owner": head.get("owner"), "head": inv["head"],
+                 "inventorySha512": owners.sidecar_digest((d / "inventory.json.sha512").read_bytes()),
+                 "status": status}
+        if label_of(obj_id):
+            entry["label"] = label_of(obj_id)
         objs.append(entry)
-    return {"format": "opensheaf-archive/0.1", "specification": SPEC,
-            "archiveId": ARCHIVE["archiveId"], "name": ARCHIVE["name"],
-            "contact": ARCHIVE["contact"], "storageRoot": "ocfl/", "storageLayout": LAYOUT,
-            "mainCollection": ARCHIVE["mainCollection"], "profiles": ARCHIVE["profiles"],
-            "objects": objs}
+    old = ROOT / "opensheaf.json"
+    tombstones = json.loads(old.read_text(encoding="utf-8")).get("tombstones") if old.exists() else None
+    doc = {"format": "opensheaf-archive/0.2", "specification": SPEC, "name": ARCHIVE["name"],
+           "contact": ARCHIVE["contact"], "storageRoot": "ocfl/", "storageLayout": LAYOUT}
+    if ARCHIVE["mainCollection"] in LABELS:
+        doc["mainCollection"] = LABELS[ARCHIVE["mainCollection"]]
+    doc.update(profiles=ARCHIVE["profiles"], extensions=sorted(used), owners=archive_owners(), objects=objs)
+    if drafts:
+        doc["drafts"] = drafts
+    if tombstones:
+        doc["tombstones"] = tombstones
+    return doc
+
+
+def write_discovery():
+    """Write the discovery document opensheaf.json from the storage root."""
+    write_json(ROOT / "opensheaf.json", discovery())
 
 
 TEX_ACCENTS = {"'": "\u0301", "`": "\u0300", '"': "\u0308", "^": "\u0302", "~": "\u0303",
@@ -1224,22 +1517,22 @@ def abstract_block(paras):
 
 
 def index_entry(member):
-    obj_id = member["id"]
-    d = OCFL / obj_id
+    obj_id = names.object_id(member["name"], member["owner"])
+    d, at, label = obj_dir(obj_id), path_of(obj_id), label_of(obj_id) or member["name"]
     inv = load_inventory(d)
     ver = presented_version(member, d, inv)
     pin_ver, pin = member_pins(member)[-1][:2]
     obj = read_json(d, inv, OBJ, ver)
     dc = read_json(d, inv, "datacite.json", ver)
     pdf = content_path(inv, ver, pdf_of(obj)) if pdf_of(obj) else None
-    src = f"ocfl/{obj_id}/" + content_path(inv, ver, obj["mainSource"]) if obj.get("mainSource") else None
-    html = f"site/{obj_id}/{obj_id}.html"
+    src = f"ocfl/{at}/" + content_path(inv, ver, obj["mainSource"]) if obj.get("mainSource") else None
+    html = f"site/{label}/{label}.html"
     texmacs = obj.get("sourceFormat") == "application/x-texmacs"
     title = tm_with_math(dc["titles"][0]["title"])
     authors = tm_escape(authors_of(dc))
     if not authors.endswith("."):
         authors += "."
-    links = [f"<hlink|PDF|ocfl/{obj_id}/{pdf}>"] if pdf else []
+    links = [f"<hlink|PDF|ocfl/{at}/{pdf}>"] if pdf else []
     if texmacs:
         # links to .tm files become .html links in the HTML export; the source
         # is linked once for TeXmacs and once (.texmacs, exported as .tm) for HTML
@@ -1261,7 +1554,7 @@ def index_entry(member):
     if changes_note(obj):
         when += f"<next-line>{tm_escape(changes_note(obj))}"
     sep = " \\<cdot\\> "
-    head = f"<hlink|{title}|paper/{obj_id}/>"
+    head = f"<hlink|{title}|paper/{label}/>"
     return f"""  <\\notes-news-item>
     <with|font-series|bold|{head}>
 
@@ -1270,12 +1563,21 @@ def index_entry(member):
     {sep.join(links)}
 
 {abstract}    <with|font-size|0.84|par-mode|left|{when}<next-line>pin:
-    <hlink|<verbatim|{pin[:32]}...>|ocfl/{obj_id}/{pin_ver}/inventory.json>>
+    <hlink|<verbatim|{pin[:32]}...>|ocfl/{at}/{pin_ver}/inventory.json>>
   </notes-news-item>"""
 
 
 def index(args):
-    write_json(ROOT / "opensheaf.json", discovery())
+    write_discovery()
+    if INDEX.get("html") or INDEX.get("template"):
+        print("opensheaf.json written; the website and the TeXmacs index are not yet available for "
+              "specification 0.2")
+        return
+    print("opensheaf.json written (no index configured)")
+
+
+def readable_index(args):
+    """The website or the TeXmacs index (specification 0.1; to be ported to 0.2)."""
     coll_dir = OCFL / ARCHIVE["mainCollection"]
     inv = load_inventory(coll_dir)
     members = json.loads(read_logical(coll_dir, inv, "members.json").read_text())["members"]
@@ -1289,9 +1591,6 @@ def index(args):
         html.render(members, featured=featured)
         local = sum(1 for m in members if m.get("archive") == ARCHIVE["archiveId"])
         print(f"opensheaf.json, index.html, {local} landing pages and sitemap.xml written")
-        return
-    if not INDEX.get("template"):
-        print("opensheaf.json written (no index configured)")
         return
     template = (ROOT / INDEX["template"]).read_text(encoding="latin-1")
     line = "  <paper-index>\n"
@@ -1312,11 +1611,61 @@ def index(args):
           + f", {pages} landing pages and sitemap.xml written")
 
 
+class Findings(list):
+    """The findings of a verifier (section 14.1), as dicts with severity, place and message."""
+
+    def add(self, severity, place, message):
+        self.append({"severity": severity, "place": place, "message": message})
+
+    def error(self, place, message):
+        self.add("error", place, message)
+
+    def warning(self, place, message):
+        self.add("warning", place, message)
+
+    def result(self, place, message):
+        self.add("result", place, message)
+
+    def count(self, severity):
+        return sum(1 for x in self if x["severity"] == severity)
+
+
+def where(obj_id):
+    """The place of an object in findings: its label, its owner for a key log, or its identifier."""
+    parts = (obj_id or "").split(":")
+    if len(parts) == 3 and parts[1] == parts[2]:
+        return f"owner {parts[1]}"
+    return label_of(obj_id) or obj_id or "?"
+
+
+def schema_checker(f):
+    """A function (place, data, schema name, severity) checking DATA against a schema of 0.2."""
+    try:
+        import jsonschema
+        formats = jsonschema.FormatChecker()
+    except ImportError:
+        f.warning("archive", "the JSON Schemas are not checked: jsonschema is not installed"
+                  " (pip install 'opensheaf[validate]')")
+        return lambda *a, **k: None
+    if "uri" not in formats.checkers:
+        f.warning("archive", "the formats uri and uri-reference are not checked: rfc3986-validator is not"
+                  " installed (pip install 'opensheaf[validate]')")
+    validators = {}
+
+    def check(place, data, name, severity="error"):
+        if name not in validators:
+            schema = json.loads((SCHEMAS / f"opensheaf-{name}-0.2.schema.json").read_text(encoding="utf-8"))
+            validators[name] = jsonschema.Draft202012Validator(schema, format_checker=formats)
+        for e in validators[name].iter_errors(data):
+            f.add(severity, place, e.message)
+    return check
+
+
 def document_version_errors(obj_id, d, inv):
-    """Section 7.3: numbering without gaps, the same files for the same
+    """Section 4.2: numbering without gaps, the same files for the same
     document version (a version with sourcesMissing may be completed by adding
     files), the history, and notices kept unchanged."""
-    errors, where = [], f"ocfl/{obj_id}"
+    errors = []
     seen, files_of, missing_of, highest = {}, {}, {}, 0
     had_history, notices = False, []
     for ver, vinfo in inv["versions"].items():
@@ -1330,295 +1679,833 @@ def document_version_errors(obj_id, d, inv):
         if (obj.get("licence") or {}).get("path"):
             notes.add(obj["licence"]["path"])
         own = {p: dig for dig, ps in vinfo["state"].items() for p in ps
-               if p not in ("datacite.json", OBJ) and p not in notes}
+               if p not in IDENTITY and p not in notes}
         change = (obj.get("changes") or {}).get("text")
         if n in seen:
             before, mis = files_of[n], missing_of[n]
             if mis:
                 if any(before.get(p) not in (None, dig) for p, dig in own.items()) or not set(before) <= set(own):
-                    errors.append(f"{where}: {ver} changes files of document version {n} (only additions allowed)")
+                    errors.append(f"{ver} changes files of document version {n} (only additions allowed)")
             elif own != before or change != seen[n]:
-                errors.append(f"{where}: {ver} has other files than document version {n}")
+                errors.append(f"{ver} has other files than document version {n}")
             missing_of[n] = bool(obj.get("sourcesMissing"))
             files_of[n] = own
         else:
             if n != highest + 1:
-                errors.append(f"{where}: {ver} document version {n} breaks the numbering (expected {highest + 1})")
+                errors.append(f"{ver} document version {n} breaks the numbering (expected {highest + 1})")
             m = next((k for k in seen if files_of[k] == own and seen[k] == change), None)
             if m is not None:
-                errors.append(f"{where}: {ver} document version {n} holds the same files and change note "
+                errors.append(f"{ver} document version {n} holds the same files and change note "
                               f"as document version {m}, whose number it keeps")
             highest = max(highest, n)
             seen[n], files_of[n], missing_of[n] = change, own, bool(obj.get("sourcesMissing"))
         hist = obj.get("history")
         if had_history and hist is None:
-            errors.append(f"{where}: {ver} lacks the history of earlier versions")
+            errors.append(f"{ver} lacks the history of earlier versions")
         if hist is not None:
             had_history = True
             known = [v for v in inv["versions"] if int(v[1:]) <= int(ver[1:])]
             if any(h not in known for h in hist):
-                errors.append(f"{where}: {ver} history names unknown object versions")
+                errors.append(f"{ver} history names unknown object versions")
             else:
                 docs = [read_json(d, inv, OBJ, h)["documentVersion"] for h in hist]
                 if len(set(docs)) != len(docs) or set(docs) != set(range(1, highest + 1)):
-                    errors.append(f"{where}: {ver} history does not list each document version once")
+                    errors.append(f"{ver} history does not list each document version once")
                 for h, k in zip(hist, docs):
                     later = [v for v in known if int(v[1:]) > int(h[1:])
                              and read_json(d, inv, OBJ, v)["documentVersion"] == k]
                     if later:
-                        errors.append(f"{where}: {ver} history entry {h} is not the last object version of {k}")
+                        errors.append(f"{ver} history entry {h} is not the last object version of {k}")
         cur = obj.get("notices", [])
         if any(x not in cur for x in notices):
-            errors.append(f"{where}: {ver} drops or changes an earlier notice")
+            errors.append(f"{ver} drops or changes an earlier notice")
         notices = cur
     return errors
 
 
-def verify_errors():
-    errors = []
-    try:
-        import jsonschema
-        formats = jsonschema.FormatChecker()
-    except ImportError:
-        jsonschema = None
-        print("  the JSON Schemas are not checked: jsonschema is not installed"
-              " (pip install 'opensheaf[validate]')")
+def description_errors(d, inv, ver):
+    """The breaches of sections 4.3 and 4.4 in the descriptions of VER of the object in D."""
+    out = []
+    logical = {p for ps in inv["versions"][ver]["state"].values() for p in ps}
+    obj = read_json(d, inv, OBJ, ver) if OBJ in logical else None
+    dc = read_json(d, inv, "datacite.json", ver) if "datacite.json" in logical else None
+    if obj is None or dc is None:
+        return out
+    if str(obj.get("documentVersion")) != dc.get("version"):
+        out.append("datacite.json and object.json disagree on the version")
+    if obj.get("status") == "withdrawn" and date_of(dc, "Withdrawn") != obj.get("withdrawal", {}).get("date"):
+        out.append("withdrawal dates disagree")
+    for k in ("titles", "creators", "publicationYear", "types", "version", "publisher"):
+        if k not in dc:
+            out.append(f"datacite.json lacks {k}")
+    for r in dc.get("rightsList", []):
+        if r.get("rightsIdentifier") is None and r.get("rights", "").lower().startswith(("creative", "arxiv")) \
+                and not r.get("rightsUri"):
+            out.append("licence without SPDX identifier and without rightsUri")
+    for note in [obj.get("changes"), obj.get("sourcesMissing"), obj.get("licence")] + \
+            obj.get("notices", []) + [obj.get("withdrawal", {}).get("reason")]:
+        if note and note.get("path") and note["path"] not in logical:
+            out.append(f"note file {note['path']} not in the version")
+    if obj.get("kind") == "document":
+        if obj.get("mainSource") and obj["mainSource"] not in logical:
+            out.append("main source not in the version")
+        if obj.get("sourcesMissing") and obj.get("mainSource"):
+            out.append("sourcesMissing together with a main source")
+        for r in obj.get("renditions", []):
+            if r["path"] not in logical:
+                out.append(f"rendition {r['path']} not in the version")
+    elif obj.get("kind") == "collection" and "members.json" not in logical:
+        out.append("collection without members.json")
+    return out
+
+
+def check_storage(f, schema, disc):
+    """The checks of section 14.2; returns {identifier: (folder, inventory)} of the objects."""
+    if not (OCFL / "0=ocfl_1.1").exists():
+        f.error("ocfl", "no OCFL 1.1 storage root (0=ocfl_1.1)")
+    if disc and disc.get("storageLayout") != LAYOUT:
+        f.error("opensheaf.json", f"storageLayout is {disc.get('storageLayout')}, the configuration says {LAYOUT}")
+    if LAYOUT == OWNER_NAME_LAYOUT:
+        if (OCFL / "ocfl_layout.json").exists():
+            f.error("ocfl", "ocfl_layout.json names only registered layouts: the owner-name layout has none "
+                    "(section 3.2)")
+        if not (OCFL / LAYOUT_FILE).exists():
+            f.warning("ocfl", f"{LAYOUT_FILE}, which describes the layout, is missing (section 3.2)")
     else:
-        if "uri" not in formats.checkers:
-            print("  the formats uri and uri-reference are not checked: rfc3986-validator is not installed"
-                  " (pip install 'opensheaf[validate]')")
-
-    def check_schema(where, data, name):
-        if jsonschema is None:
-            return
-        schema = json.loads((SCHEMAS / name).read_text())
-        v = jsonschema.Draft202012Validator(schema, format_checker=formats)
-        for e in v.iter_errors(data):
-            errors.append(f"{where}: {e.message}")
-
-    disc_path = ROOT / "opensheaf.json"
-    if not disc_path.exists():
-        return ["opensheaf.json is missing"]
-    disc = json.loads(disc_path.read_text())
-    check_schema("opensheaf.json", disc, "opensheaf-archive-0.1.schema.json")
-    if disc.get("storageLayout") != LAYOUT or not (OCFL / "0=ocfl_1.1").exists():
-        errors.append("storage root missing or with another layout")
-    listed = {o["id"]: o for o in disc.get("objects", [])}
-    found = {obj_id: (d, inv) for obj_id, d, inv in objects()}
-    for obj_id in set(listed) ^ set(found):
-        errors.append(f"opensheaf.json and the storage root disagree about {obj_id}")
-    for obj_id, (d, inv) in found.items():
-        if obj_id in listed and listed[obj_id].get("mirrorOf") != mirror_of(d, inv):
-            errors.append(f"opensheaf.json: {obj_id} " + (f"is a mirror of {mirror_of(d, inv)}, without mirrorOf"
-                          if mirror_of(d, inv) else "is listed as a mirror, and is not one"))
-
-    for obj_id, (d, inv) in found.items():
-        where = f"ocfl/{obj_id}"
-        if inv.get("id") != obj_id or not ID_RE.match(obj_id) or len(obj_id) > 64:
-            errors.append(f"{where}: bad identifier")
-        if inv.get("digestAlgorithm") != "sha512":
-            errors.append(f"{where}: digest algorithm is not sha512")
-        side = (d / "inventory.json.sha512").read_text().split()[0]
-        if side != digest(d / "inventory.json"):
-            errors.append(f"{where}: inventory checksum file does not match")
-        lst = listed.get(obj_id)
-        if lst and (lst["head"] != inv["head"] or lst["inventorySha512"] != side):
-            errors.append(f"opensheaf.json: stale entry for {obj_id}")
-        for dig, paths in inv["manifest"].items():
-            for cp in paths:
-                if not (d / cp).exists():
-                    errors.append(f"{where}: missing {cp}")
-                elif digest(d / cp) != dig:
-                    errors.append(f"{where}: digest mismatch for {cp}")
-        for ver, vinfo in inv["versions"].items():
-            if not (d / ver / "inventory.json").exists() or not (d / ver / "inventory.json.sha512").exists():
-                errors.append(f"{where}: {ver} has no inventory copy")
-            else:
-                copy = json.loads((d / ver / "inventory.json").read_text())
-                upto = [v for v in inv["versions"] if int(v[1:]) <= int(ver[1:])]
-                if copy.get("head") != ver:
-                    errors.append(f"{where}: {ver} the inventory copy has the head {copy.get('head')}")
-                if sorted(copy.get("versions") or {}) != sorted(upto):
-                    errors.append(f"{where}: {ver} the inventory copy does not record exactly the versions v1 to {ver}")
-                elif any(copy["versions"][v] != inv["versions"][v] for v in upto):
-                    errors.append(f"{where}: {ver} the inventory copy disagrees with the inventory"
-                                  " about the versions it records")
-            if not vinfo.get("user", {}).get("name") or not vinfo.get("message"):
-                errors.append(f"{where}: {ver} lacks a user name or a message")
-            logical = {p for ps in vinfo["state"].values() for p in ps}
-            for p in logical:
-                parts = p.split("/")
-                if p.startswith("/") or ".." in parts or "." in parts:
-                    errors.append(f"{where}: bad logical path {p}")
-            missing = [n for n in ("datacite.json", OBJ) if n not in logical]
-            for n in missing:
-                errors.append(f"{where}: {ver} has no {n}")
-            if missing:
-                continue
-            obj = read_json(d, inv, OBJ, ver)
-            dc = read_json(d, inv, "datacite.json", ver)
-            check_schema(f"{where}/{ver}/{OBJ}", obj, "opensheaf-object-0.1.schema.json")
-            if obj.get("objectId") != obj_id:
-                errors.append(f"{where}: {ver} object.json names another object")
-            elif obj.get("archiveId") != (mirror_of(d, inv) or disc.get("archiveId")):
-                errors.append(f"{where}: {ver} object.json names another archive")
-            if str(obj.get("documentVersion")) != dc.get("version"):
-                errors.append(f"{where}: {ver} datacite.json and object.json disagree on the version")
-            if obj.get("status") == "withdrawn" and date_of(dc, "Withdrawn") != obj.get("withdrawal", {}).get("date"):
-                errors.append(f"{where}: {ver} withdrawal dates disagree")
-            for k in ("titles", "creators", "publicationYear", "types", "version", "publisher"):
-                if k not in dc:
-                    errors.append(f"{where}: {ver} datacite.json lacks {k}")
-            for r in dc.get("rightsList", []):
-                if r.get("rightsIdentifier") is None and r.get("rights", "").lower().startswith(("creative", "arxiv")) \
-                        and not r.get("rightsUri"):
-                    errors.append(f"{where}: {ver} licence without SPDX identifier and without rightsUri")
-            for note in [obj.get("changes"), obj.get("sourcesMissing"), obj.get("licence")] + \
-                    obj.get("notices", []) + [obj.get("withdrawal", {}).get("reason")]:
-                if note and note.get("path") and note["path"] not in logical:
-                    errors.append(f"{where}: {ver} note file {note['path']} not in the version")
-            if obj.get("kind") == "document":
-                if obj.get("mainSource") and obj["mainSource"] not in logical:
-                    errors.append(f"{where}: {ver} main source not in the version")
-                if obj.get("sourcesMissing") and obj.get("mainSource"):
-                    errors.append(f"{where}: {ver} sourcesMissing together with a main source")
-                for r in obj.get("renditions", []):
-                    if r["path"] not in logical:
-                        errors.append(f"{where}: {ver} rendition {r['path']} not in the version")
-            elif "members.json" not in logical:
-                errors.append(f"{where}: {ver} collection without members.json")
-            else:
-                mem = read_json(d, inv, "members.json", ver)
-                check_schema(f"{where}/{ver}/members.json", mem, "opensheaf-collection-0.1.schema.json")
-                kind = mem.get("type")
-                if kind not in ("catalogue", "selection"):
-                    errors.append(f"{where}: {ver} members.json has no valid type (catalogue or selection)")
-                for m in mem.get("members", []):
-                    who = f"{where}: {ver} member {m.get('id')}"
-                    if kind == "catalogue" and (not m.get("version") or not m.get("inventorySha512") or "revisions" in m):
-                        errors.append(f"{who}: a member of a catalogue needs version and inventorySha512, "
-                                      "and no revisions")
-                    if kind == "selection":
-                        revs = m.get("revisions")
-                        if any(k in m for k in ("version", "inventorySha512", "follow")):
-                            errors.append(f"{who}: a member of a selection has no version, inventorySha512 or follow")
-                        if not isinstance(revs, list) or not revs or any(
-                                not all(r.get(k) for k in ("documentVersion", "version", "inventorySha512")) for r in revs):
-                            errors.append(f"{who}: a member of a selection needs revisions, each with documentVersion, "
-                                          "version and inventorySha512")
-                        elif len({r["documentVersion"] for r in revs}) != len(revs):
-                            errors.append(f"{who}: a document version is vetted twice")
-                tombstoned = {t.get("id") for t in disc.get("tombstones", [])}
-                for m in mem.get("members", []):
-                    if m.get("archive") != disc.get("archiveId") or mirror_of(d, inv):
-                        continue  # members of other archives: resolved as in section 6.4
-                    for pv, pin, n in member_pins(m):
-                        md = OCFL / str(m.get("id")) / str(pv) / "inventory.json"
-                        if m.get("id") in tombstoned:
-                            print(f"  {where}: {ver} member {m['id']} {pv}: removed (a tombstone in this archive)")
-                        elif not md.exists():
-                            errors.append(f"{where}: {ver} member {m['id']} {pv}: unavailable")
-                        elif digest(md) != pin:
-                            errors.append(f"{where}: {ver} member {m['id']} {pv}: mismatch")
-                        elif n is not None and doc_version_of(OCFL / m["id"], load_inventory(OCFL / m["id"]), pv) != n:
-                            errors.append(f"{where}: {ver} member {m['id']} {pv} does not hold document version {n}")
-                    if kind == "selection" and (OCFL / str(m.get("id"))).exists():
-                        md = OCFL / m["id"]
-                        order = [doc_version_of(md, load_inventory(md), h) for h in history_of(md, load_inventory(md))]
-                        vetted = [r.get("documentVersion") for r in m.get("revisions") or []]
-                        pos = [order.index(x) for x in vetted if x in order]
-                        if pos != sorted(pos):
-                            errors.append(f"{where}: {ver} member {m['id']}: revisions not in the order of the history")
-        errors += document_version_errors(obj_id, d, inv)
-
-    # an independent OCFL validator, when installed
+        try:
+            ext = json.loads((OCFL / "ocfl_layout.json").read_text(encoding="utf-8")).get("extension")
+        except (OSError, ValueError):
+            ext = None
+        if ext != HASHED_LAYOUT:
+            f.error("ocfl", f"ocfl_layout.json must name the extension {HASHED_LAYOUT} (section 3.2)")
+        cfg = OCFL / "extensions" / HASHED_LAYOUT / "config.json"
+        if cfg.exists():
+            c = json.loads(cfg.read_text(encoding="utf-8"))
+            if (c.get("digestAlgorithm", "sha256"), c.get("tupleSize", 3), c.get("numberOfTuples", 3)) != \
+                    ("sha256", 3, 3):
+                f.error("ocfl", "the hashed layout keeps its default parameters (section 3.2)")
+    found = {}
+    for obj_id, d, inv in objects():
+        rel = d.relative_to(OCFL).as_posix()
+        if inv is None or obj_id is None:
+            f.error(f"ocfl/{rel}", "an object without a readable inventory")
+            continue
+        try:
+            expected = path_of(obj_id)
+        except ValueError as e:
+            f.error(f"ocfl/{rel}", str(e))
+            continue
+        if rel != expected:
+            f.error(where(obj_id), f"is at ocfl/{rel}, and its identifier puts it at ocfl/{expected} (section 3.2)")
+        if obj_id in found:
+            f.error(where(obj_id), "two objects of the storage root have this identifier (section 4)")
+        found[obj_id] = (d, inv)
+        check_object_storage(f, schema, obj_id, d, inv)
     try:
         import ocfl
         from ocfl.validator import Validator
     except ImportError:
-        ocfl = None
-    if ocfl is not None:
+        f.warning("ocfl", "the storage root is not checked by an OCFL validator: ocfl-py is not installed"
+                  " (pip install 'opensheaf[validate]')")
+    else:
         for obj_id, (d, inv) in found.items():
             v = Validator(log_warnings=False, log_errors=True)
             if not v.validate_object(str(d)):
-                errors.append(f"ocfl/{obj_id}: OCFL validator: {v.status_str()}")
+                f.error(where(obj_id), f"OCFL validator: {v.status_str()}")
         if not ocfl.StorageRoot(root=str(OCFL)).validate(log_warnings=False):
-            errors.append("ocfl: the OCFL validator rejects the storage root")
+            f.error("ocfl", "the OCFL validator rejects the storage root")
+    return found
 
-    # the presentation shows the current pins (appendix C, for the profile website)
-    coll = found.get(disc.get("mainCollection"))
-    if coll and (ROOT / "index.html").exists():
-        website = "website" in (disc.get("profiles") or [])
-        html = (ROOT / "index.html").read_text(encoding="utf-8", errors="replace")
-        mem = json.loads(read_logical(coll[0], coll[1], "members.json").read_text())
-        for m in mem["members"]:
-            if (member_pins(m)[-1][1] or "")[:32] not in html:
-                if website:
-                    errors.append(f"index.html does not show the pin of {m['id']}")
+
+def check_logical_path(p):
+    """Whether the logical path P follows the rules of section 4.1."""
+    parts = p.split("/")
+    return (unicodedata.normalize("NFC", p) == p and "\\" not in p
+            and all(x not in ("", ".", "..") for x in parts))
+
+
+def check_object_storage(f, schema, obj_id, d, inv):
+    place = where(obj_id)
+    if inv.get("digestAlgorithm") != "sha512":
+        f.error(place, "the digest algorithm is not sha512 (section 4.1)")
+    root = (d / "inventory.json").read_bytes()
+    sc = d / "inventory.json.sha512"
+    if not sc.exists() or owners.sidecar_digest(sc.read_bytes()) != names.sha512_hex(root):
+        f.error(place, "the checksum file of the inventory does not state its digest")
+    head = inv.get("head", "")
+    if not (d / head / "inventory.json").exists() or (d / head / "inventory.json").read_bytes() != root:
+        f.error(place, f"the inventory of {head} is not the root inventory")
+    for dig, paths in inv.get("manifest", {}).items():
+        for cp in paths:
+            if not (d / cp).exists():
+                f.error(place, f"missing {cp}")
+            elif digest(d / cp) != dig:
+                f.error(place, f"{cp} does not have the digest of the manifest")
+    versions = sorted(inv.get("versions", {}), key=lambda v: int(v[1:]) if v[1:].isdigit() else 0)
+    kind = (read_json(d, inv, OBJ) or {}).get("kind")
+    draft = obj_id.startswith("sheaf:draft:")
+    for n, ver in enumerate(versions, 1):
+        at = f"{place} {ver}"
+        if ver != f"v{n}":
+            f.error(at, "versions are numbered v1, v2, ... without zero padding (section 4.1)")
+            continue
+        copy_path = d / ver / "inventory.json"
+        if not copy_path.exists() or not (d / ver / "inventory.json.sha512").exists():
+            f.error(at, "no copy of the inventory with its checksum file in the version folder (section 4.1)")
+        else:
+            if owners.sidecar_digest((d / ver / "inventory.json.sha512").read_bytes()) != digest(copy_path):
+                f.error(at, "the checksum file of the inventory copy does not state its digest")
+            try:
+                copy = json.loads(copy_path.read_text(encoding="utf-8"))
+            except ValueError:
+                copy = {}
+            upto = versions[:n]
+            if copy.get("head") != ver:
+                f.error(at, f"the inventory copy has the head {copy.get('head')}")
+            if sorted(copy.get("versions") or {}) != sorted(upto):
+                f.error(at, f"the inventory copy does not record exactly the versions v1 to {ver}")
+            elif any(copy["versions"][v] != inv["versions"][v] for v in upto):
+                f.error(at, "the inventory copy disagrees with the inventory about the versions it records")
+        vinfo = inv["versions"][ver]
+        if not (kind == "owner" and n == 1) and (not vinfo.get("user", {}).get("name") or not vinfo.get("message")):
+            f.error(at, "a version has a user with a name, and a message (section 4.1)")
+        logical = {p for ps in vinfo.get("state", {}).values() for p in ps}
+        for p in sorted(logical):
+            if not check_logical_path(p):
+                f.error(at, f"the logical path {p!r} breaks the rules of section 4.1")
+        needed = [OBJ] + (["datacite.json"] if kind != "owner" else []) + ([] if draft else [GENESIS])
+        for name in needed:
+            if name not in logical:
+                f.error(at, f"has no {name} (section 4.1)")
+        obj = read_json(d, inv, OBJ, ver) if OBJ in logical else None
+        if obj is None:
+            continue
+        if kind != "owner":
+            schema(f"{at}/{OBJ}", obj, "object")
+            if n == 1 or draft:
+                if "previous" in obj:
+                    f.error(at, "a first version, or a draft, has no previous (section 4.3)")
+            else:
+                sc = d / f"v{n - 1}" / "inventory.json.sha512"
+                expected = owners.sidecar_digest(sc.read_bytes()) if sc.exists() else None
+                if "previous" not in obj:
+                    f.error(at, "object.json has no previous (section 4.3)")
+                elif obj["previous"] != expected:
+                    f.error(at, f"previous is not the digest of the inventory of v{n - 1} (section 4.3)")
+
+
+def check_key_logs(f, found, schema):
+    """The checks of section 14.3; returns {owner name: KeyLog} of the key logs held."""
+    logs = {}
+    for obj_id, (d, inv) in found.items():
+        if (read_json(d, inv, OBJ) or {}).get("kind") != "owner":
+            continue
+        place = where(obj_id)
+        try:
+            log = owners.load_key_log(d)
+        except owners.OwnerError as e:
+            f.error(place, str(e))
+            continue
+        errors, warnings = log.check()
+        for e in errors:
+            f.error(place, e)
+        for w in warnings:
+            f.warning(place, w)
+        try:
+            schema(f"{place} v1/{GENESIS}", json.loads(log.genesis), "genesis")
+        except ValueError:
+            pass
+        for v in log.versions:
+            if v.keys is not None:
+                schema(f"{place} v{v.number}/keys.json", v.keys, "keys")
+        logs[log.owner] = log
+        latest = [v for v in log.versions if v.is_version]
+        if latest:
+            f.result(place, f"key log of {log.owner}: latest version v{latest[-1].number}")
+        for did in sorted(log.exposed_keys()):
+            f.result(place, f"exposed key {did}")
+        if log.fork_point:
+            f.result(place, f"ended by a fork of its key log at v{log.fork_point} (section 6.3)")
+        elif log.ended:
+            f.result(place, "ended (section 6.3)" + (f", successor {log.successor} (named by the ending "
+                                                      "version)" if log.successor else ""))
+    return logs
+
+
+def check_lines(f, found, logs, schema, disc):
+    """The checks of sections 14.4 and 14.5; returns {identifier: statuses} of the lines."""
+    statuses, genesis_names = {}, {}
+    tombstoned = {t.get("id") for t in disc.get("tombstones", []) if isinstance(t, dict)}
+    for obj_id, (d, inv) in found.items():
+        head = read_json(d, inv, OBJ) or {}
+        if head.get("kind") == "owner":
+            continue
+        place = where(obj_id)
+        if obj_id.startswith("sheaf:draft:"):
+            if any(k in head for k in ("name", "owner", "parent")) or read_logical(d, inv, GENESIS):
+                f.error(place, "a draft has no genesis record, and no name, owner or parent (section 10.1)")
+            continue
+        _, nm, owner = obj_id.split(":")
+        genesis = None
+        for ver in inv["versions"]:
+            p = read_logical(d, inv, GENESIS, ver)
+            g = p.read_bytes() if p else None
+            obj = read_json(d, inv, OBJ, ver) or {}
+            if (obj.get("name"), obj.get("owner")) != (nm, owner):
+                f.error(f"{place} {ver}", "object.json does not record the line of the identifier (section 4.3)")
+            if g is None:
+                continue
+            if genesis is None:
+                genesis = g
+            elif g != genesis:
+                f.error(f"{place} {ver}", "genesis.json differs from that of v1 (section 5.1)")
+        rec = None
+        if genesis is not None:
+            try:
+                rec = names.read_genesis(genesis)
+                schema(f"{place} {GENESIS}", json.loads(genesis), "genesis")
+            except ValueError as e:
+                f.error(place, f"{GENESIS}: {e}")
+        if rec is not None:
+            genesis_names.setdefault(names.name(genesis), []).append(obj_id)
+            if rec["kind"] != head.get("kind"):
+                f.error(place, f"its genesis record is of kind {rec['kind']}, its object.json of kind {head.get('kind')}")
+            if not names.is_name_of(nm, genesis):
+                f.error(place, "its name is not a name of its genesis record (section 5.2)")
+            elif rec.get("originator") != owner:
+                if "parent" in head:
+                    f.warning(place, "a branch: its branch points are not checked by this version of the tools")
                 else:
-                    print(f"  index.html does not show the pin of {m['id']}"
-                          " (the archive does not declare the profile website)")
-    return errors
+                    f.error(place, "a line of another owner than the originator is a branch, and declares its "
+                            "parent (section 5.3)")
+            elif names.algorithm(nm) != 0:
+                f.error(place, "the originator's line is named by algorithm 0 (section 5.3)")
+        for ver in inv["versions"]:
+            for message in description_errors(d, inv, ver):
+                f.error(f"{place} {ver}", message)
+        if head.get("kind") == "document":
+            for message in document_version_errors(obj_id, d, inv):
+                f.error(place, message)
+        log = logs.get(owner)
+        if log is None:
+            owner_id = names.object_id(owner, owner)
+            (f.warning if owner_id in tombstoned else f.error)(
+                place, f"the key log of its owner {owner} is not in the storage root (section 6.5)")
+        judgements, sts = line_statuses(d, inv, log)
+        statuses[obj_id] = sts
+        for i, (js, s) in enumerate(zip(judgements, sts), 1):
+            at = f"{place} v{i}"
+            for j in js:
+                if j.status != sign.GOOD:
+                    f.warning(at, f"{j.file}: {j.status}: {j.reason}")
+            others = [n for n in witnesses_of(d, f"v{i}") if not (n.startswith("signature-") and n.endswith(".json"))]
+            for n in others:
+                f.warning(at, f"{n}: not a witness these tools know (section 7.2)")
+            if s in (sign.UNSIGNED, sign.INVALID):
+                f.warning(at, f"not a version of the line: {s} (sections 7.3 and 7.5)")
+            elif s == sign.UNCHECKED:
+                f.warning(at, "unchecked: the version of the key log its signatures name is not reached (section 7.3)")
+            elif s == sign.CONTESTED:
+                f.result(at, "contested (section 7.3)")
+        wdir = d / sign.WITNESSES
+        for x in (sorted(wdir.iterdir()) if wdir.is_dir() else []):
+            if not (x.is_dir() and x.name in inv["versions"]):
+                f.warning(place, f"{sign.WITNESSES}/{x.name}: not the folder of a version (section 7.2)")
+        signed = sign.latest_signed(sts)
+        if signed is None:
+            f.warning(place, "the line has no signed version (section 7.3)")
+        else:
+            f.result(place, f"latest signed version v{signed}")
+            if (read_json(d, inv, OBJ, f"v{signed}") or {}).get("status") == "withdrawn":
+                f.result(place, "withdrawn (section 13.1)")
+    for gname, ids in genesis_names.items():
+        if len(ids) > 1:
+            f.error(", ".join(where(i) for i in ids), "objects with the same genesis record: only the "
+                    "originator's line and its branches may share one (section 5.4)")
+    for obj_id, (d, inv) in found.items():
+        if (read_json(d, inv, OBJ) or {}).get("kind") == "collection" and obj_id in statuses:
+            check_members(f, found, logs, statuses, tombstoned, schema, obj_id, d, inv)
+    return statuses
+
+
+def check_members(f, found, logs, statuses, tombstoned, schema, obj_id, d, inv):
+    for ver in inv["versions"]:
+        at = f"{where(obj_id)} {ver}"
+        mem = read_json(d, inv, "members.json", ver)
+        if mem is None:
+            continue
+        schema(f"{at}/members.json", mem, "collection")
+        kind = mem.get("type")
+        if kind not in ("catalogue", "selection"):
+            f.error(at, "members.json has no valid type (catalogue or selection)")
+        for m in mem.get("members", []):
+            mid = names.object_id(m.get("name"), m.get("owner"))
+            who = f"{at} member {where(mid)}"
+            if kind == "catalogue" and (not m.get("version") or not m.get("inventorySha512") or "revisions" in m):
+                f.error(who, "a member of a catalogue needs version and inventorySha512, and no revisions")
+            if kind == "selection":
+                revs = m.get("revisions")
+                if any(k in m for k in ("version", "inventorySha512", "follow")):
+                    f.error(who, "a member of a selection has no version, inventorySha512 or follow")
+                if not isinstance(revs, list) or not revs or any(
+                        not all(r.get(k) for k in ("documentVersion", "version", "inventorySha512")) for r in revs):
+                    f.error(who, "a member of a selection needs revisions, each with documentVersion, "
+                            "version and inventorySha512")
+                elif len({r["documentVersion"] for r in revs}) != len(revs):
+                    f.error(who, "a document version is vetted twice")
+            if mid in found:
+                md, minv = found[mid]
+                sts = statuses.get(mid, [])
+                for pv, pin, n in member_pins(m):
+                    p = md / str(pv) / "inventory.json"
+                    if not p.exists():
+                        f.warning(f"{who} {pv}", "unavailable: the copy held here lacks this version")
+                        continue
+                    if digest(p) != pin:
+                        f.error(f"{who} {pv}", "mismatch: the inventory held here has another digest (section 8.5)")
+                        continue
+                    pobj = read_json(md, minv, OBJ, pv) or {}
+                    if (pobj.get("kind"), pobj.get("name"), pobj.get("owner")) != (m.get("kind"), m.get("name"), m.get("owner")):
+                        f.error(f"{who} {pv}", "kind, name and owner are not those of the version pinned (section 8.5)")
+                    if n is not None and pobj.get("documentVersion") != n:
+                        f.error(f"{who} {pv}", f"does not hold document version {n}")
+                    s = sts[int(pv[1:]) - 1] if 0 < int(pv[1:]) <= len(sts) else None
+                    if s in (sign.UNSIGNED, sign.INVALID):
+                        f.error(f"{who} {pv}", "not a version: a collection pins only signed versions (section 8.5)")
+                    elif s in (sign.UNCHECKED, sign.CONTESTED):
+                        f.warning(f"{who} {pv}", f"{s} (section 8.5)")
+                if kind == "selection" and sts:
+                    signed = sign.latest_signed(sts)
+                    hist = history_of(md, minv, f"v{signed}" if signed else None)
+                    order = [doc_version_of(md, minv, h) for h in hist]
+                    vetted = [r.get("documentVersion") for r in m.get("revisions") or []]
+                    pos = [order.index(x) for x in vetted if x in order]
+                    if pos != sorted(pos):
+                        f.error(who, "revisions not in the order of the history (section 8.4)")
+            elif ver == inv["head"]:
+                if mid in tombstoned:
+                    f.result(who, "removed: a tombstone in this archive (section 13.3)")
+                else:
+                    f.warning(who, "not held in this archive: not resolved (members of other archives are "
+                              "resolved by a later version of these tools)")
+
+
+def check_archive(f, found, statuses, disc):
+    """The checks of section 14.6 on the discovery document and its tombstones."""
+    if not disc:
+        return
+    listed = {}
+    for o in disc.get("objects", []):
+        if not isinstance(o, dict):
+            continue
+        if o.get("id") in listed:
+            f.error("opensheaf.json", f"lists {where(o.get('id'))} twice")
+        listed[o.get("id")] = o
+    now_disc = discovery()
+    expected = {o["id"]: o for o in now_disc["objects"]}
+    fields = ("kind", "name", "owner", "head", "inventorySha512", "status")
+    for obj_id, e in expected.items():
+        o = listed.get(obj_id)
+        if o is None:
+            f.error("opensheaf.json", f"does not list {where(obj_id)}, an object of the storage root (section 3.1)")
+            continue
+        stale = [k for k in fields if o.get(k) != e.get(k)]
+        if stale:
+            f.error("opensheaf.json", f"the entry of {where(obj_id)} is stale: " +
+                    ", ".join(f"{k} {o.get(k)} instead of {e.get(k)}" for k in stale))
+    for obj_id in listed:
+        if obj_id not in expected:
+            f.error("opensheaf.json", f"lists {obj_id}, which is not an object of the storage root (section 3.1)")
+    labels = [o["label"] for o in listed.values() if o.get("label")]
+    for lb in sorted({x for x in labels if labels.count(x) > 1}):
+        f.error("opensheaf.json", f"the label {lb} is given twice (section 3.1)")
+    main = disc.get("mainCollection")
+    if main is None:
+        f.warning("opensheaf.json", "no mainCollection (section 3.1)")
+    elif main not in listed or listed[main].get("kind") != "collection":
+        f.error("opensheaf.json", f"mainCollection {main} is not a collection it lists")
+    elif main in found:
+        md, minv = found[main]
+        mem = read_json(md, minv, "members.json") or {}
+        if mem.get("type") != "catalogue":
+            f.error("opensheaf.json", "mainCollection is not a catalogue (section 8.1)")
+        if "owners" in disc:
+            for m in mem.get("members", []):
+                if m.get("owner") not in disc["owners"]:
+                    f.warning("opensheaf.json", f"the main catalogue lists {m.get('name')}, a line of an owner "
+                              "that owners does not list (section 8.1)")
+    for o in disc.get("owners", []):
+        if names.object_id(o, o) not in found:
+            f.warning("opensheaf.json", f"owners lists {o}, whose key log is not held here (section 3.1)")
+    drafts = {o["id"]: o for o in now_disc.get("drafts", [])}
+    for dr in disc.get("drafts", []):
+        if dr.get("id") not in drafts or drafts[dr["id"]]["head"] != dr.get("head"):
+            f.error("opensheaf.json", f"drafts lists {dr.get('id')}, which is not a draft held with that head")
+    missing = set(now_disc.get("extensions", [])) - set(disc.get("extensions", []))
+    for e in sorted(missing):
+        f.warning("opensheaf.json", f"extensions does not list {e}, which objects use (section 3.1)")
+    seen = set()
+    needed = {names.object_id(i.split(":")[2], i.split(":")[2]) for i in found if not i.startswith("sheaf:draft:")}
+    for t in disc.get("tombstones", []):
+        tid = t.get("id")
+        if tid != names.object_id(t.get("name"), t.get("owner")):
+            f.error("opensheaf.json", f"the tombstone {tid} is not the line of its name and owner (section 13.3)")
+        if tid in seen:
+            f.error("opensheaf.json", f"two tombstones of {tid}")
+        seen.add(tid)
+        if tid in found or tid in listed:
+            f.error("opensheaf.json", f"{tid} has a tombstone, and is an object of the archive (section 13.3)")
+        elif t.get("kind") == "owner" and tid in needed:
+            f.warning("opensheaf.json", f"a tombstone stands for the key log {tid}, which lines of the archive "
+                      "need: only the law or its keeper justifies it (section 13.2)")
+        else:
+            f.result("opensheaf.json", f"removed: {tid} ({t.get('date')}: {t.get('reason')})")
+
+
+def look_for_keys(f):
+    """Warn of the files of the archive that look like private keys (section 15.4)."""
+    rotation_name = re.compile(r"^rotation-[a-z2-7]{16}-[a-z2-7]{16}\.txt$")
+    for p in sorted(ROOT.rglob("*")):
+        rel = p.relative_to(ROOT)
+        if rel.parts[0] == ".git" or rel.parts[0].startswith(".staging-") or p.is_symlink() or not p.is_file():
+            continue
+        looks = rotation_name.match(p.name) or p.suffix == ".key"
+        if not looks and p.stat().st_size < 4096:
+            text = p.read_bytes().decode("ascii", "replace")
+            if text.startswith((keys.ROTATION_FORMAT, keys.SHEET_TITLE)):
+                looks = True
+            else:
+                try:
+                    import base64
+                    looks = len(base64.b64decode(text.strip(), validate=True)) == 32
+                except ValueError:
+                    looks = False
+        if looks:
+            f.warning(rel.as_posix(), "looks like a private key: keys are never kept in an archive "
+                      "(section 15.4)")
+
+
+def verify_findings():
+    """The findings of the checks of section 14 on the archive, in the order of 14.2 to 14.6."""
+    f = Findings()
+    if OLD:
+        f.error("archive", "specification 0.1: rebuild (section 16.1)")
+        return f
+    schema = schema_checker(f)
+    disc_path, disc = ROOT / "opensheaf.json", {}
+    if not disc_path.exists():
+        f.error("opensheaf.json", "the discovery document is missing (section 3.1)")
+    else:
+        try:
+            disc = json.loads(disc_path.read_text(encoding="utf-8"))
+        except ValueError as e:
+            f.error("opensheaf.json", f"not JSON: {e}")
+        if disc.get("specification") == "0.1":
+            f.error("archive", "specification 0.1: rebuild (section 16.1)")
+            return f
+        schema("opensheaf.json", disc, "archive")
+    found = check_storage(f, schema, disc)
+    logs = check_key_logs(f, found, schema)
+    statuses = check_lines(f, found, logs, schema, disc)
+    check_archive(f, found, statuses, disc)
+    look_for_keys(f)
+    return f
+
+
+def verify_errors():
+    """The errors of verify_findings(), as 'place: message'."""
+    return [f"{x['place']}: {x['message']}" for x in verify_findings() if x["severity"] == "error"]
 
 
 def verify(args):
-    errors = verify_errors()
     if getattr(args, "remote", False):
-        from . import collections
-        for obj_id, d, inv in objects():
-            if read_json(d, inv, OBJ)["kind"] == "collection" and not mirror_of(d, inv):
-                errors += [f"{obj_id}: {e}" for e in
-                           collections.check_remote(read_json(d, inv, "members.json")["members"])]
-        errors += collections.check_accepted_copies()
-    for e in errors:
-        print(e)
-    print("OK" if not errors else f"{len(errors)} problem(s)")
-    sys.exit(1 if errors else 0)
+        sys.exit("verify --remote: not yet available for specification 0.2")
+    found = verify_findings()
+    if getattr(args, "json", False):
+        print(json.dumps(found, indent=2, ensure_ascii=False))
+    else:
+        for x in found:
+            print(f"{x['severity']}: {x['place']}: {x['message']}")
+        e, w, r = (found.count(s) for s in ("error", "warning", "result"))
+        print(("OK" if not e else f"{e} error(s)") + f", {w} warning(s), {r} result(s)")
+    sys.exit(1 if found.count("error") else 0)
 
 
 def init(args):
-    """Create an archive in the folder: osheaf.json, the storage root, the
-    templates of the website (to edit), the empty main collection, the
-    discovery document and the pages."""
+    """Create an archive in the folder: osheaf.json, the storage root, the owner and its
+    key log (made, or copied), the empty main catalogue and the discovery document."""
     root = Path(args.folder or ".").resolve()
     root.mkdir(parents=True, exist_ok=True)
     if any((root / n).exists() for n in CONFIG_NAMES):
         sys.exit(f"{root} has a configuration already")
+    if getattr(args, "curated", False):
+        sys.exit("init --curated: curated collections are not yet available for specification 0.2")
+    layout = LAYOUTS.get(getattr(args, "layout", None) or "owner-name")
+    if layout is None:
+        sys.exit(f"--layout is one of {', '.join(LAYOUTS)}")
+    if bool(getattr(args, "new_owner", False)) == bool(getattr(args, "owner", None)):
+        sys.exit("init: give --new-owner, or --owner NAME --key-log DIR")
     family, _, given = args.curator.partition(",")
     family, given = family.strip(), given.strip()
     cfg = {
-        "archiveId": args.archive_id,
+        "owner": None,
         "name": args.name,
         "contact": args.contact or args.base_url,
         "baseUrl": args.base_url if args.base_url.endswith("/") else args.base_url + "/",
-        "profiles": ["website"],
-        "mainCollection": "collection-main",
+        "profiles": [],
+        "storageLayout": layout,
+        "mainCollection": "main",
         "curator": {"name": f"{family}, {given}" if given else family, "givenName": given,
                     "familyName": family, "affiliation": args.affiliation or ""},
         "depositor": {"name": f"{given} {family}".strip(), "address": args.contact or args.base_url},
-        "index": {"html": {"templates": "templates"}},
     }
-    (root / CONFIG_NAME).write_text(json.dumps(cfg, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-    from . import html
-    (root / "templates").mkdir(exist_ok=True)
-    for f in html.DEFAULTS.iterdir():
-        if not (root / "templates" / f.name).exists():
-            shutil.copyfile(f, root / "templates" / f.name)
-    configure(root)
+    global ARCHIVE
+    set_paths(root, layout)
+    ARCHIVE = dict(cfg)
     init_storage_root()
-    if str(getattr(args, "curated", "")).lower() in ("1", "true", "yes"):
-        # a curated collection: members from any archive, in the curator's order
-        from . import collections
-        collections.write(cfg["mainCollection"], [], args.name, "A collection of documents.", "manual",
-                          "Collection created (curated)")
+    if getattr(args, "new_owner", False):
+        log = owner_init(args)
     else:
-        collect(None)
-    index(argparse_namespace(no_html=False))
-    print(f"archive created in {root}: edit {CONFIG_NAME} and templates/, then deposit")
-    print("note: OpenSheaf 0.1 is a draft; until version 1.0 a revision may change the format in"
-          " incompatible ways, and archives may have to be rebuilt or migrated")
+        if not getattr(args, "key_log", None):
+            sys.exit("init --owner NAME needs --key-log DIR, the folder of its owner object")
+        try:
+            log = owners.load_key_log(Path(args.key_log))
+        except owners.OwnerError as e:
+            sys.exit(str(e))
+        errors, _ = log.check()
+        if log.owner != args.owner or errors:
+            sys.exit(f"{args.key_log} is not a valid key log of {args.owner}: " + "; ".join(errors))
+        if log.ended:
+            sys.exit(f"the owner {log.owner} has ended (section 6.3)")
+        owners.write_key_log(obj_dir(log.id), log)
+    cfg["owner"] = log.owner
+    (root / CONFIG_NAME).write_text(json.dumps(cfg, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    configure(root)
+    collect(None)
+    write_discovery()
+    print(f"archive created in {root}, owned by {log.owner}: edit {CONFIG_NAME}, then deposit "
+          f"(osheaf deposit --new LABEL ...)")
+    print("note: OpenSheaf 0.2 is a draft; until version 1.0 a revision may change the format in"
+          " incompatible ways, and archives may have to be rebuilt")
 
 
 def argparse_namespace(**kw):
     import argparse
     return argparse.Namespace(**kw)
+
+
+def owner_of(args):
+    """The owner name a command is about, and its key log in the storage root."""
+    owner = getattr(args, "owner", None) or ARCHIVE["owner"]
+    log = key_log(owner)
+    if log is None:
+        sys.exit(f"the key log of {owner} is not in the storage root")
+    return owner, log
+
+
+def depositor():
+    return {"name": ARCHIVE["depositor"]["name"], "address": ARCHIVE["depositor"]["address"]}
+
+
+PASSPHRASE = "OPENSHEAF_PASSPHRASE"
+
+
+def passphrase(confirm=True):
+    """The passphrase of exported rotation keys."""
+    if os.environ.get(PASSPHRASE):
+        return os.environ[PASSPHRASE]
+    import getpass
+    first = getpass.getpass("passphrase of the rotation keys: ")
+    if not first:
+        sys.exit("an empty passphrase: give --no-passphrase to export the keys unencrypted")
+    if confirm and getpass.getpass("the passphrase again: ") != first:
+        sys.exit("the two passphrases differ")
+    return first
+
+
+def export_and_confirm(rotation, owner, version, args):
+    """Export the rotation keys ROTATION of OWNER, committed in VERSION, and have the
+    owner confirm that they are kept; stops if not."""
+    secret = None if getattr(args, "no_passphrase", False) else passphrase()
+    try:
+        paths = keys.export_rotation_keys(rotation, owner, version, args.export, passphrase=secret,
+                                          archive_root=ROOT)
+        for key, path in zip(rotation, paths):
+            if keys.read_rotation_key(path, secret).key.did != key.did:
+                raise keys.KeyStoreError(f"{path} does not read back")
+    except keys.KeyStoreError as e:
+        sys.exit(str(e))
+    for key, path in zip(rotation, paths):
+        print(f"rotation key {key.did}\n  file  {path}\n  check {keys.sheet_check(key.seed)}")
+        if getattr(args, "print", False):
+            print(keys.rotation_key_sheet(key, owner, version))
+    if getattr(args, "yes", False):
+        return
+    print("Put the files (or the printed sheets) away, apart from this device and from each other.")
+    for key, path in zip(rotation, paths):
+        typed = input(f"type the check of {path.name} to confirm it is kept: ").strip().upper()
+        if typed != keys.sheet_check(key.seed):
+            sys.exit("not confirmed: nothing was written to the key log (the files exported may be deleted)")
+
+
+def rotation_keys(files, owner):
+    """The rotation keys of OWNER read from FILES."""
+    if not files:
+        sys.exit("give the rotation keys that sign the new version of the key log (--rotation-key FILE)")
+    out, secret = [], None
+    for f in files:
+        try:
+            try:
+                rk = keys.read_rotation_key(Path(f), secret)
+            except keys.KeyStoreError as e:
+                if secret is not None or "passphrase is needed" not in str(e):
+                    raise
+                secret = passphrase(confirm=False)
+                rk = keys.read_rotation_key(Path(f), secret)
+        except (keys.KeyStoreError, OSError) as e:
+            sys.exit(f"{f}: {e}")
+        if rk.owner not in (None, owner):
+            sys.exit(f"{f} is a rotation key of {rk.owner}, not of {owner}")
+        out.append(rk.key)
+    return out
+
+
+def owner_init(args):
+    """Make an owner (section 6.2): its current key on this device, its rotation keys,
+    exported outside the archive, and the first version of its key log, in the storage root."""
+    single = bool(getattr(args, "single_rotation_key", False))
+    n_rot = 1 if single else int(getattr(args, "rotation", None) or 3)
+    next_threshold = 1 if single else int(getattr(args, "next_threshold", None) or n_rot // 2 + 1)
+    others = list(getattr(args, "key", None) or [])
+    threshold = int(getattr(args, "threshold", None) or 1)
+    if not 1 <= next_threshold <= n_rot or not 1 <= threshold <= 1 + len(others):
+        sys.exit("a threshold is at least 1, and at most the number of keys (section 6.1, rule 1)")
+    keeper = getattr(args, "keeper", None)
+    if keeper and not names.keeper_valid(keeper):
+        sys.exit(f"a keeper is an ORCID iD (with its check digit) or https://<domain>/: {keeper}")
+    if not getattr(args, "export", None):
+        sys.exit("give --export DIR, a folder outside the archive where the rotation keys are written")
+    for did in others:
+        try:
+            names.did_key_public(did)
+        except ValueError:
+            sys.exit(f"not a did:key URI of an Ed25519 key: {did}")
+    current = keys.new_key()
+    rotation = [keys.new_key() for _ in range(n_rot)]
+    while True:
+        try:
+            log = owners.new_owner([current] + others, rotation, threshold=threshold,
+                                   next_threshold=next_threshold, keeper=keeper)
+        except (ValueError, owners.OwnerError) as e:
+            sys.exit(str(e))
+        if not obj_dir(log.id).exists():
+            break
+    if next_threshold == 1:
+        print("warning: " + owners.SINGLE_ROTATION_RISK)
+    export_and_confirm(rotation, log.owner, 1, args)
+    try:
+        store = keys.store_current_key(log.owner, current)
+    except (keys.KeyStoreError, OSError) as e:
+        sys.exit(str(e))
+    owners.write_key_log(obj_dir(log.id), log)
+    print(f"owner {log.owner}")
+    print(f"current key of this device {current.did} (kept in {store})")
+    print("warning: " + owners.ROTATION_KEYS_WARNING)
+    return log
+
+
+def owner_init_command(args):
+    log = owner_init(args)
+    cfg_path = ROOT / CONFIG_NAME
+    if cfg_path.exists():
+        cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+        if log.owner not in [cfg.get("owner")] + cfg.get("owners", []):
+            cfg["owners"] = cfg.get("owners", []) + [log.owner]
+            cfg_path.write_text(json.dumps(cfg, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+            ARCHIVE.setdefault("owners", []).append(log.owner)
+    write_discovery()
+
+
+def owner_rotate(args, exposed=()):
+    """A new version of the key log changing the current keys (section 6.2) or exposing
+    some (section 6.3), signed by rotation keys, committing new rotation keys."""
+    owner, log = owner_of(args)
+    prev = log.latest()
+    if prev is None:
+        sys.exit(f"the owner {owner} has ended (section 6.3): its key log takes no new version")
+    signers = rotation_keys(getattr(args, "rotation_key", None), owner)
+    if not getattr(args, "export", None):
+        sys.exit("give --export DIR, a folder outside the archive where the new rotation keys are written")
+    n_rot = int(getattr(args, "rotation", None) or len(prev.keys["next"]))
+    next_threshold = int(getattr(args, "next_threshold", None) or min(prev.keys["nextThreshold"], n_rot))
+    for did in list(getattr(args, "add", None) or []) + list(getattr(args, "retire", None) or []) + list(exposed):
+        try:
+            names.did_key_public(did)
+        except ValueError:
+            sys.exit(f"not a did:key URI of an Ed25519 key: {did}")
+    new = [keys.new_key() for _ in range(n_rot)]
+    try:
+        v = log.rotate(signers, next_keys=new, next_threshold=next_threshold,
+                       add=getattr(args, "add", None) or (), retire=getattr(args, "retire", None) or (),
+                       exposed=exposed, threshold=getattr(args, "threshold", None),
+                       message=getattr(args, "message", None) or ("Keys exposed" if exposed else "Keys changed"),
+                       user=depositor())
+    except owners.OwnerError as e:
+        sys.exit(str(e))
+    if next_threshold == 1:
+        print("warning: " + owners.SINGLE_ROTATION_RISK)
+    export_and_confirm(new, owner, v.number, args)
+    owners.write_key_log(obj_dir(log.id), log)
+    write_discovery()
+    print(f"{owner}: v{v.number} of the key log, current keys: {', '.join(v.keys['keys'])}")
+    for did in exposed:
+        print(f"exposed {did}: what it alone signed is contested (section 7.3)")
+
+
+def owner_expose(args):
+    owner_rotate(args, exposed=list(args.exposed))
+
+
+def owner_end(args):
+    """The ending version of the key log (section 6.3)."""
+    owner, log = owner_of(args)
+    successor = getattr(args, "successor", None)
+    if successor is not None and not names.OWNER_NAME.match(successor):
+        sys.exit(f"the successor is an owner name: {successor}")
+    signers = rotation_keys(getattr(args, "rotation_key", None), owner)
+    try:
+        v = log.end(signers, successor=successor, exposed=getattr(args, "expose", None) or (),
+                    message=getattr(args, "message", None) or "Owner ended", user=depositor())
+    except owners.OwnerError as e:
+        sys.exit(str(e))
+    owners.write_key_log(obj_dir(log.id), log)
+    write_discovery()
+    print(f"{owner}: ended at v{v.number} of its key log" + (f", successor {successor}" if successor else ""))
+
+
+def owner_show(args):
+    owner, log = owner_of(args)
+    for line in owners.describe(log):
+        print(line)
+    latest = log.latest()
+    if latest is not None:
+        try:
+            here = keys.current_keys(owner, latest.keys["keys"])
+        except keys.KeyStoreError as e:
+            print(f"warning: {e}")
+            here = []
+        for k in here:
+            print(f"on this device {k.did}")
+
+
+def key_new(args):
+    owner = getattr(args, "owner", None) or ARCHIVE["owner"]
+    key = keys.new_key()
+    try:
+        store = keys.store_current_key(owner, key)
+    except (keys.KeyStoreError, OSError) as e:
+        sys.exit(str(e))
+    print(key.did)
+    print(f"kept in {store}; it signs once a version of the key log adds it: "
+          f"osheaf owner rotate --add {key.did} --rotation-key FILE ... --export DIR")
+    return key

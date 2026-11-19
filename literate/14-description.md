@@ -6,7 +6,7 @@ their digests, and anyone who pinned it can check that. Yet much of what
 one wants to say about a version comes later: that it was published in a
 journal (a DOI), that its licence was opened, that a theorem in it is
 wrong, that the whole paper is retracted. OpenSheaf says these things with
-*description-only versions* (section 7.3): new object versions that hold
+*description-only versions* (section 4.2): new object versions that hold
 the same document version, with the same files, and change only
 `datacite.json`, the state of the object, or its notices.
 
@@ -49,7 +49,7 @@ unchanged, as they are stored (no copy is made, since `add_version()` finds
 their digests in the manifest). The command changes the two descriptions
 through a function `change(dc, obj)` it passes in, which may also stop with
 a message (a document withdrawn twice). The document version stays, and
-the `Updated` date says when its description last changed (section 8).
+the `Updated` date says when its description last changed (section 4.4).
 Files may be added, but only new ones: the file of a notice, the statement
 of a withdrawal. The message of the inventory may be a function, called
 after the change, for a command whose message depends on what changed.
@@ -57,41 +57,51 @@ after the change, for a command whose message depends on what changed.
 The head holds the current version except after an earlier version was
 deposited later, or completed; the specification allows a description-only
 version of any document version, and tools otherwise hold the current one
-(section 7.3). These tools always describe the version of the head.
+(section 4.2). These tools always describe the version of the head. The
+document is named by its label; the genesis record goes over with the other
+files of the head, byte for byte, and `previous` is set when the version is
+added. Like every new version, it is signed, and stops before extending
+versions that are not signed unless `acknowledged` (`--i-know`,
+section 7.3); the discovery document is then rewritten (section 3.1).
 
     # in add a description-only version of a document:
-    def description_version(obj_id, change, message, add_files=None):
-        """Add a description-only version of document OBJ_ID: the files of the
+    def description_version(label, change, message, add_files=None, acknowledged=False):
+        """Add a description-only version of the document LABEL: the files of the
         head (and ADD_FILES, {logical path: file}, such as the file of a notice),
         with datacite.json and object.json changed by CHANGE(dc, obj). The
         document version stays; datacite.json gets the Updated date."""
-        obj_dir = OCFL / obj_id
-        inv = load_inventory(obj_dir)
+        obj_id = resolve(label)
+        d = obj_dir(obj_id)
+        inv = load_inventory(d)
         if inv is None:
-            sys.exit(f"no object {obj_id}")
-        state = {p: d for d, ps in inv["versions"][inv["head"]]["state"].items() for p in ps}
-        dc = read_json(obj_dir, inv, "datacite.json")
-        prev = read_json(obj_dir, inv, OBJ)
+            sys.exit(f"no object {label}")
+        state = {p: dg for dg, ps in inv["versions"][inv["head"]]["state"].items() for p in ps}
+        dc = read_json(d, inv, "datacite.json")
+        prev = read_json(d, inv, OBJ)
         if prev["kind"] != "document":
-            sys.exit(f"{obj_id} is not a document")
+            sys.exit(f"{label} is not a document")
         obj = json.loads(json.dumps(prev))
         change(dc, obj)
         set_date(dc, "Updated", TODAY)
         carry_forward(prev, obj, inv, next_object_version(inv))
-        tmp = Path(tempfile.mkdtemp())
-        write_json(tmp / "datacite.json", dc)
-        write_json(tmp / OBJ, obj)
-        files = {p: obj_dir / inv["manifest"][d][0] for p, d in state.items()}
+        files = {p: d / inv["manifest"][dg][0] for p, dg in state.items() if p not in ("datacite.json", OBJ)}
         for lp, f in (add_files or {}).items():
             if lp in files:
-                sys.exit(f"{obj_id} has a file {lp} already")
+                sys.exit(f"{label} has a file {lp} already")
             files[lp] = Path(f)
-        files["datacite.json"], files[OBJ] = tmp / "datacite.json", tmp / OBJ
-        inv = add_version(obj_id, files, message() if callable(message) else message)
-        shutil.rmtree(tmp, ignore_errors=True)
+        files["datacite.json"] = json_bytes(dc)
+        inv = add_version(obj_id, files, obj, message() if callable(message) else message,
+                          acknowledged=acknowledged)
+        write_discovery()
         return inv
 
-Notices, withdrawals and change notes are *notes* (section 9): a short text,
+The commands pass on whether the depositor gave `--i-know`.
+
+    # in add a description-only version of a document:
+    def ack(args):
+        return bool(getattr(args, "i_know", False))
+
+Notices, withdrawals and change notes are *notes* (section 4.3): a short text,
 for feeds, indexes and services, or a file of the content with the full
 statement (with mathematics, or a PDF), or both. The file is stored under a
 folder named after its use (`notices/`, `withdrawal/`) to keep it apart
@@ -99,7 +109,7 @@ from the sources.
 
     # in a note from a text and a file:
     def note_from(text, file, folder):
-        """A note (section 9): a text, a file of the content, or both."""
+        """A note (section 4.3): a text, a file of the content, or both."""
         note, add = {}, {}
         if text:
             note["text"] = text
@@ -122,14 +132,14 @@ The commands
 A notice is about one document version, possibly not the current one ("the
 proof of Lemma 3 in version 2 is incomplete; see version 3"). It is
 appended to the notices of the head, which every later object version
-keeps unchanged (section 7.3): a notice is never edited, only followed by
+keeps unchanged (section 4.2): a notice is never edited, only followed by
 another that corrects it.
 
     # in add a notice about a document version:
     def notice(args):
-        """A notice about a document version (section 7.3), by a description-only
+        """A notice about a document version (section 4.2), by a description-only
         version: kept, unchanged, in every later object version."""
-        d = OCFL / args.id
+        d = obj_dir(resolve(args.id))
         inv = load_inventory(d)
         if inv is None:
             sys.exit(f"no object {args.id}")
@@ -142,12 +152,12 @@ another that corrects it.
         def change(dc, obj):
             obj["notices"] = obj.get("notices", []) + [note]
         inv = description_version(args.id, change, args.message or
-                                  f"Notice about document version {args.about} (description-only version)", add)
+                                  f"Notice about document version {args.about} (description-only version)", add, ack(args))
         print(f"{args.id}: {inv['head']} (notice about version {args.about})")
 
 ### Withdrawal
 
-Withdrawal (section 11.1) retracts a document: it is not a deletion. The
+Withdrawal (section 13.1) retracts a document: it is not a deletion. The
 content stays, the history remains verifiable, and readers see the
 withdrawal with the document. The status belongs to the object, whatever
 version its head holds; the date is written twice, in `object.json` and as
@@ -157,7 +167,7 @@ withdrawn document gets no new document versions (see the
 
     # in withdraw a document:
     def withdraw(args):
-        """Withdraw a document (section 11.1): a description-only version with the
+        """Withdraw a document (section 13.1): a description-only version with the
         status withdrawn, the reason, and the Withdrawn date in datacite.json. The
         content stays."""
         reason, add = note_from(args.reason, args.file, "withdrawal")
@@ -169,13 +179,13 @@ withdrawn document gets no new document versions (see the
             obj["status"] = "withdrawn"
             obj["withdrawal"] = {"date": date, "reason": reason}
             set_date(dc, "Withdrawn", date)
-        inv = description_version(args.id, change, args.message or "Withdrawal (description-only version)", add)
+        inv = description_version(args.id, change, args.message or "Withdrawal (description-only version)", add, ack(args))
         print(f"{args.id}: {inv['head']} (withdrawn)")
 
 ### Relations
 
 A link to the same work elsewhere, added after the deposit: most often the
-published article (`IsVersionOf` its DOI, as section 8.1 recommends for a
+published article (`IsVersionOf` its DOI, as section 4.4 recommends for a
 preprint), or an arXiv version found later. Since the first public
 appearance of the work may then turn out to be earlier than recorded, the
 same version may correct the `Issued` date.
@@ -198,7 +208,7 @@ same version may correct the `Issued` date.
             if args.issued:
                 set_date(dc, "Issued", args.issued)
         inv = description_version(args.id, change, args.message or
-                                  f"Related: {args.relation} {rel['relatedIdentifier']} (description-only version)")
+                                  f"Related: {args.relation} {rel['relatedIdentifier']} (description-only version)", None, ack(args))
         print(f"{args.id}: {inv['head']} ({args.relation} {rel['relatedIdentifier']})")
 
 ### Licences
@@ -206,7 +216,7 @@ same version may correct the `Issued` date.
 Changing the licence of a document (typically from "All rights reserved"
 to a Creative Commons licence) changes no file: the content is the same,
 and only its terms change. The authors' agreement is recorded with it, in
-`object.json` (section 9), with the names of the creators. Only the
+`object.json` (section 4.3), with the names of the creators. Only the
 licences known by name may be chosen here.
 
     # in change the licence of a document:
@@ -222,7 +232,7 @@ licences known by name may be chosen here.
             obj["agreement"] = {"by": [c["name"] for c in dc["creators"]],
                                 "date": args.date or TODAY, "method": args.method}
         inv = description_version(args.id, change, args.message or
-                                  f"Licence: {new['rights']} (description-only version; content unchanged)")
+                                  f"Licence: {new['rights']} (description-only version; content unchanged)", None, ack(args))
         print(f"{args.id}: {inv['head']} ({new['rights']})")
 
 ### Corrections of the description
@@ -237,7 +247,7 @@ every other field kept:
 - `--title`: the main title (the first of `titles`; other titles, such
   as a subtitle, stay);
 - `--abstract` or `--abstract-file`: the description of type `Abstract`,
-  plain text with mathematics between dollars (section 8), paragraphs
+  plain text with mathematics between dollars (section 4.4), paragraphs
   separated by blank lines; the other descriptions, such as the journal
   reference of an arXiv import (`SeriesInformation`), stay;
 - `--keyword`, repeated: the keywords, which replace the subjects without
@@ -258,7 +268,7 @@ no conversion from TeX: what the depositor writes is what readers see.
     # in correct the title, abstract, keywords or authors of a document:
     def describe(args):
         """Correct the description of a document (title, abstract, keywords,
-        authors) by a description-only version (section 7.3)."""
+        authors) by a description-only version (section 4.2)."""
         if args.abstract is not None and args.abstract_file:
             sys.exit("describe: give --abstract or --abstract-file, not both")
         abstract = (Path(args.abstract_file).read_text(encoding="utf-8") if args.abstract_file
@@ -295,7 +305,7 @@ no conversion from TeX: what the depositor writes is what readers see.
             if not changed:
                 sys.exit(f"{args.id}: nothing to change in the description")
         inv = description_version(args.id, change, args.message or (
-            lambda: f"Description corrected: {', '.join(changed)} (description-only version)"))
+            lambda: f"Description corrected: {', '.join(changed)} (description-only version)"), None, ack(args))
         print(f"{args.id}: {inv['head']} ({', '.join(changed)} corrected)")
 
 Completing a version without sources
@@ -303,7 +313,7 @@ Completing a version without sources
 
 A version deposited without its sources (from arXiv, which keeps only the
 PDF of some versions, say) may get them later, keeping its number
-(section 7.3, "Completion"). The completing object version starts from the
+(section 4.2, "Completion"). The completing object version starts from the
 *last object version holding that document version*, not from the head,
 since the head may hold another document version; it adds the sources and
 changes nothing else, so that [verification](17-verify.md) can check that
@@ -314,7 +324,7 @@ The notices and the history are those of the head: the old `object.json`
 loses its own, and `carry_forward` puts back the current ones, replacing
 the history's entry for the completed version. The state of the object is
 also the head's, since it belongs to the object whatever version is held
-(section 11.1): completing an earlier version of a withdrawn document keeps
+(section 13.1): completing an earlier version of a withdrawn document keeps
 the withdrawal, with its `Withdrawn` date in `datacite.json` and the file
 of its reason, if any. Everything else comes from the completed version.
 The new object version becomes the head without a history if the document
@@ -327,9 +337,10 @@ not typeset the added sources.
     # in complete a document version deposited without sources:
     def complete(args):
         """Add the sources of a document version recorded without them
-        (sourcesMissing, section 7.3): a new object version holding the files of
+        (sourcesMissing, section 4.2): a new object version holding the files of
         that document version and the sources; its number stays."""
-        d = OCFL / args.id
+        obj_id = resolve(args.id)
+        d = obj_dir(obj_id)
         inv = load_inventory(d)
         if inv is None:
             sys.exit(f"no object {args.id}")
@@ -373,13 +384,11 @@ not typeset the added sources.
         fmt = obj["sourceFormat"]
         if fmt not in dc.get("formats", []):
             dc["formats"] = [fmt] + dc.get("formats", [])
-        tmp = Path(tempfile.mkdtemp())
-        write_json(tmp / "datacite.json", dc)
-        write_json(tmp / OBJ, obj)
-        files["datacite.json"], files[OBJ] = tmp / "datacite.json", tmp / OBJ
-        for lp, f in carried_files(args.id, inv).items():     # notice files are kept
+        files["datacite.json"] = json_bytes(dc)
+        for lp, f in carried_files(obj_id, inv).items():     # notice files are kept
             files.setdefault(lp, f)
-        inv = add_version(args.id, files, args.message or
-                          f"Sources of document version {args.version} added (sourcesMissing completed)")
-        shutil.rmtree(tmp, ignore_errors=True)
+        inv = add_version(obj_id, files, obj, args.message or
+                          f"Sources of document version {args.version} added (sourcesMissing completed)",
+                          acknowledged=getattr(args, "i_know", False))
+        write_discovery()
         print(f"{args.id}: {inv['head']} (sources of version {args.version})")

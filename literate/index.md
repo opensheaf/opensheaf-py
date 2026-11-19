@@ -2,7 +2,7 @@ opensheaf-py, a literate program
 ================================
 
 > [!WARNING]
-> **Draft.** OpenSheaf 0.1 is a draft specification: until version 1.0, a
+> **Draft.** OpenSheaf 0.2 is a draft specification: until version 1.0, a
 > revision may change the format in incompatible ways, and these tools follow
 > the latest draft.
 
@@ -79,36 +79,37 @@ The archive
 11. [The discovery document and the index](16-index.md).
 12. [Verifying an archive](17-verify.md).
 13. [Creating an archive](18-init.md).
+14. [The commands of owners and their keys](19-owner-commands.md).
 
 Across archives
 ---------------
 
-14. [Collections across archives](20-collections.md).
-15. [Mirrors](21-mirrors.md).
-16. [Accepted copies](22-accepted-copies.md).
+15. [Collections across archives](20-collections.md).
+16. [Mirrors](21-mirrors.md).
+17. [Accepted copies](22-accepted-copies.md).
 
 The website
 -----------
 
-17. [The website](30-website.md): the home page, and the landing pages
+18. [The website](30-website.md): the home page, and the landing pages
     and sitemap, also written beside a TeXmacs index.
-18. [The templates of the website](31-templates.md).
+19. [The templates of the website](31-templates.md).
 
 Services
 --------
 
-19. [Importing from arXiv: fetching](40-arxiv.md).
-20. [Importing from arXiv: the metadata](41-arxiv-metadata.md).
-21. [Importing from arXiv: the object versions](42-arxiv-import.md).
-22. [Zenodo: DOIs for document versions](50-zenodo.md).
+20. [Importing from arXiv: fetching](40-arxiv.md).
+21. [Importing from arXiv: the metadata](41-arxiv-metadata.md).
+22. [Importing from arXiv: the object versions](42-arxiv-import.md).
+23. [Zenodo: DOIs for document versions](50-zenodo.md).
 
 The command line and the tests
 ------------------------------
 
-23. [The command line](60-command-line.md), with options read from YAML
+24. [The command line](60-command-line.md), with options read from YAML
     files.
-24. [The tests](70-tests.md), and
-25. [the tests of names, owners, keys and signatures](71-tests-identity.md).
+25. [The tests](70-tests.md), and
+26. [the tests of names, owners, keys and signatures](71-tests-identity.md).
 
 The literate tools, tangling and weaving, are described in their own
 literate program, [opensheaf-literate](https://opensheaf.org/literate/).

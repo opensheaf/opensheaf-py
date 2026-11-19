@@ -1,7 +1,7 @@
 TeXmacs: typesetting and reading markup
 =======================================
 
-An archive following the TeXmacs profile (appendix B of the specification)
+An archive following the TeXmacs profile (appendix A.2 of the specification)
 deposits TeXmacs documents, and typesets them itself: the PDF and the HTML
 version of a document are made by the archive's tools from the deposited
 source, so that the source reproduces them. This chapter is the part of
@@ -138,7 +138,7 @@ that the source reproduces. The HTML version is presentation (section
 7.2): it is not deposited, and the archive is free to improve it. An
 archive may give a style package for its HTML versions
 (`texmacs.htmlPackage`), which TeXmacs applies to the export. The source
-is never modified (appendix B): the package is added to a *copy*, in
+is never modified (appendix A.2): the package is added to a *copy*, in
 another folder with the package next to it.
 
 Adding a package means extending the style line of the document, which is
@@ -204,7 +204,7 @@ Reading TeXmacs markup
 ----------------------
 
 The abstract in `datacite.json` is plain text, with mathematics in LaTeX
-between dollars (section 8, appendix B), converted from the TeXmacs
+between dollars (section 4.4, appendix A.2), converted from the TeXmacs
 document; the title is given by the depositor, who may want it different
 from the one in the document. TeXmacs files are a markup of their own:
 `<tag|arg1|arg2>` for inline tags, `<\tag>...</tag>` for tags whose last
