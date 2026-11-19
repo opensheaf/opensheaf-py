@@ -88,8 +88,8 @@ def main(args):
     label = P.label_of(obj_id)
     if label:
         del P.LABELS[label]
-        for folder in (P.ROOT / "paper" / label, P.SITE / label):
-            shutil.rmtree(folder, ignore_errors=True)
+    for folder in (P.ROOT / "paper" / (label or nm), P.SITE / (label or nm)):
+        shutil.rmtree(folder, ignore_errors=True)
     shutil.rmtree(d)
     parent = d.parent
     while parent != P.OCFL and not any(parent.iterdir()):

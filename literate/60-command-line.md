@@ -85,12 +85,15 @@ core.
       draft new|deposit|delete ID   unsigned work in progress, at draft/<id>/
       seal ID --label L      seal the work of a draft as a new line
       takedown LABEL --reason TEXT   delete an object, leaving a tombstone
-      index                  write opensheaf.json and the indexes (the readable index: not yet for 0.2)
+      index                  write opensheaf.json, the indexes and the website (or the TeXmacs index)
       verify                 check the archive (section 14 of the specification)
+      zenodo LABEL           a DOI for the current version (sandbox, or --production)
       arxiv fetch            download papers from arXiv (no archive needed)
+      arxiv import DOWNLOADS import the downloads, one signed line per paper
       help-config            describe osheaf.json
 
-    Not yet available for specification 0.2: zenodo, arxiv import, the website.
+    The website (osheaf.json "index": {"html": ...}) is written again after every
+    command that changes the archive.
 
     deposit, relicense, relate, describe and init also take their options from a
     YAML or JSON file: --from FILE (a list of entries: several, in order).
@@ -227,7 +230,7 @@ tell it.
     d.add_argument("--source-format", help="media type of the main source (default: from its extension)")
 
 The description of the version: abstract, keywords, language, the tools
-that produced the PDF (section 9: `toolchain`), title and authors. An
+that produced the PDF (section 4.3: `toolchain`), title and authors. An
 author is written as `Family, Given|Affiliation`, as printed in the
 document; the options that may be repeated (`action="append"`) give
 lists.
@@ -243,12 +246,12 @@ lists.
     d.add_argument("--author", action="append",
                    help='"Family, Given|Affiliation", as printed in the document')
 
-The dates follow section 8 of the specification. `--available` (also
+The dates follow section 4.4 of the specification. `--available` (also
 spelt `--date`) is when this version first became public, by default the
 day of the deposit; `--created` is for a version that was not public at the
 time; `--issued` is the first public appearance of the work. The stage is
-one of the NISO Journal Article Versions (section 9). `--after N` places a
-version found later after document version N in the history (section 7.3)
+one of the NISO Journal Article Versions (section 4.3). `--after N` places a
+version found later after document version N in the history (section 4.2)
 instead of making it the current version.
 
     # in the dates and the place of a deposited version:
@@ -267,9 +270,9 @@ The rest: the DataCite resource type, the licence (an identifier of the
 core's table `RIGHTS`, or free text), relations to the same work
 elsewhere, further sources at the logical path the main source refers to,
 the message of the inventory, and the record of the authors' agreement
-(section 9: `agreement`), which a journal depositing its version of record
+(section 4.3: `agreement`), which a journal depositing its version of record
 needs. `--licence-file` names the file of the deposit, among its sources,
-that holds the full text or terms of the licence (section 9: `licence`), for
+that holds the full text or terms of the licence (section 4.3: `licence`), for
 instance the `LICENSE` of a package of sources, or a licence without an SPDX
 identifier. `--i-know` lets a deposit extend versions that are not signed,
 or are contested, once the depositor has looked at them (section 7.3).
@@ -294,7 +297,7 @@ or are contested, once the depositor has looked at them (section 7.3).
 
 ### Changing the description: `relicense`, `relate` and `describe`
 
-Three commands write description-only versions (section 7.3): versions that
+Three commands write description-only versions (section 4.2): versions that
 hold the same files and change only the description. `relicense` gives the
 document a new licence, which needs the authors' agreement: `--method`
 records how they agreed, and `--date` when.
@@ -321,7 +324,7 @@ a file is checked again after the file is read (below).
     r.set_defaults(func=core.relicense)
 
 `relate` links the document to the same work elsewhere, on arXiv or by a
-DOI (section 8.1), by default as `IsIdenticalTo`. It can also correct the
+DOI (section 4.4), by default as `IsIdenticalTo`. It can also correct the
 `Issued` date, which is how one records that the work first appeared
 elsewhere, before its deposit here.
 
@@ -382,9 +385,9 @@ command line and the core again after a file is merged.
 ### Later statements: `notice`, `withdraw` and `complete`
 
 A document version cannot change once deposited, but things can be said
-about it later. A notice (section 7.3), such as an erratum, is about one
+about it later. A notice (section 4.2), such as an erratum, is about one
 document version, given with `--about`; it has a short text, a file with
-the full statement, or both, as every note of section 9.
+the full statement, or both, as every note of section 4.3.
 
 ```
 osheaf notice kpz-uniqueness --about 2 --text "Theorem 2 is wrong as stated." --file erratum.pdf
@@ -402,7 +405,7 @@ osheaf notice kpz-uniqueness --about 2 --text "Theorem 2 is wrong as stated." --
                      help="extend versions that are not signed, or are contested (section 7.3)")
     nt.set_defaults(func=core.notice)
 
-A withdrawal (section 11.1) is about the whole document. Its reason is
+A withdrawal (section 13.1) is about the whole line. Its reason is
 again a note, a text or a file; the content stays, and the document gets
 no new versions.
 
@@ -422,7 +425,7 @@ osheaf withdraw kpz-uniqueness --reason "The main result is wrong."
     w.set_defaults(func=core.withdraw)
 
 `complete` adds the sources of a version deposited without them (section
-7.3, completion), for instance when the sources of an old paper are found
+4.2, completion), for instance when the sources of an old paper are found
 again. The version keeps its number, which is why it is given with
 `--version`.
 
@@ -621,9 +624,11 @@ osheaf takedown old-notes --reason "Taken down at the request of the holder of t
 
 Three commands maintain the archive as a whole, and are usually run in
 this order after deposits: `collect` writes a new version of the main
-collection when a document has a new object version; `index` writes the
+catalogue when a document has a new signed version; `index` writes the
 discovery document `opensheaf.json`, the indexes `names/`, `owners/` and
-`sha512/` (section 12.5) and the readable index (not yet for 0.2);
+`sha512/` (section 12.5) and the readable index, the website or a TeXmacs
+index ([chapter 16](16-index.md)), which other commands also keep up to
+date (below);
 `verify` makes the checks of section 14 of the specification, and with
 `--remote` also resolves the members of collections held in other
 archives, and gives their statuses (section 14.5).
@@ -645,10 +650,10 @@ osheaf collect && osheaf index && osheaf verify
 
 ### Services: `zenodo` and `arxiv`
 
-The Zenodo binding (appendix A of the specification) adds its own
+The Zenodo binding (appendix A.1 of the specification) adds its own
 sub-parser, so that its options stay beside the code that uses them, in the
-chapter on Zenodo. It deposits the current document version of a
-document, on the sandbox unless `--production`.
+[chapter on Zenodo](50-zenodo.md). It deposits the current document version
+of a line, signed, on the sandbox unless `--production`.
 
 ```
 osheaf zenodo kpz-uniqueness --production
@@ -658,14 +663,15 @@ osheaf zenodo kpz-uniqueness --production
     from . import zenodo
     zenodo.add_parser(sub, core)
 
-`arxiv` has two actions, each with options of its own, parsed by the arXiv
-module. The parser here only takes the action and passes everything after
+`arxiv` has two actions, each with options of its own, parsed by the
+[arXiv module](40-arxiv.md): `fetch` downloads, `import` seals one line per
+paper and signs each version. The parser here only takes the action and passes everything after
 it (`argparse.REMAINDER`) unparsed; `osheaf arxiv fetch --help` is then
 answered by the parser of the arXiv module.
 
 ```
 osheaf arxiv fetch downloads --author doe_j_1
-osheaf arxiv import downloads
+osheaf arxiv import downloads --agreement "deposited by an author"
 ```
 
     # in the options of osheaf arxiv:
@@ -678,7 +684,8 @@ osheaf arxiv import downloads
 
 `init` makes an archive in a folder (by default the current one): the
 configuration `osheaf.json`, the storage root, the owner of the archive
-with its key log, the main catalogue and the discovery document. Three
+with its key log, the main catalogue, the discovery document and the
+website, with its templates copied into `templates/`. Three
 facts are needed: its name, its address and its curator, which may come
 from a file, and so are not marked required here. The owner is made at
 once with `--new-owner`, which takes the options of `osheaf owner init`
@@ -691,8 +698,9 @@ osheaf init my-papers --name "Papers of Jane Doe" --base-url https://example.org
     --curator "Doe, Jane" --new-owner --export /Volumes/USB/opensheaf-keys --print
 ```
 
-With `--curated` the main collection is a curated one, kept with
-`osheaf collection sync`, which is not yet available for specification 0.2.
+With `--curated` the main catalogue is a curated one, whose members, from
+any archive, and order are the curator's, kept with `osheaf collection`
+([collections](21-collections.md)).
 
     # in the options of osheaf init:
     n = sub.add_parser("init", help="create an archive (osheaf.json, storage root, owner, main catalogue)")
@@ -708,7 +716,7 @@ With `--curated` the main collection is a curated one, kept with
     n.add_argument("--new-owner", action="store_true", help="make a new owner (see osheaf owner init)")
     owner_init_options(n)
     n.add_argument("--curated", action="store_true",
-                   help="the main collection is curated (osheaf collection sync; not yet for 0.2)")
+                   help="the main catalogue is curated (osheaf collection add|sync)")
     n.add_argument("--from", dest="from_file", metavar="FILE",
                     help="take the options from a YAML or JSON file (a list: several, in order)")
     n.set_defaults(func=None)
@@ -874,9 +882,6 @@ paths of the core), and a few must not:
   the first entry: one archive per command. The others configure the
   archive once and run every entry;
 - `arxiv fetch` only downloads into a folder, and needs no archive;
-- the commands not yet ported to specification 0.2 (`zenodo` and
-  `arxiv import`) stop with a message saying so, before anything is read;
-  their code stays, for the port;
 - `resolve` works in an archive, whose storage root and locations it then
   uses, or anywhere else;
 - every other command configures the archive. An archive of specification
@@ -886,8 +891,37 @@ paths of the core), and a few must not:
   the modules imported lazily, and the function recorded by the
   sub-parser of the others.
 
+After a command that may have changed the archive, the presentation files
+are written again (`core.present`, in [chapter 16](16-index.md)), as the
+website profile asks after every change (appendix A.3): a deposit appears
+on the website at once, a takedown leaves it at once. Commands that only
+read (`verify`, `resolve`, `owner show`, `collection status`, `key new`,
+`arxiv fetch`, a trial of `zenodo` on the sandbox, which works on a copy)
+and those that write the pages themselves (`index`, `init`) are left out. A
+command that fails stops before, and changes nothing that the pages show.
+
     # in the main function of osheaf:
-    NOT_YET = ("zenodo",)
+    READ_ONLY = {"help-config", "verify", "resolve", "index", "init", "key"}
+    READ_ONLY_ACTIONS = {("owner", "show"), ("collection", "status"), ("arxiv", "fetch")}
+
+
+    def changes_archive(args):
+        """Whether the command ARGS may have changed the archive."""
+        if args.cmd in READ_ONLY or (args.cmd, getattr(args, "action", None)) in READ_ONLY_ACTIONS:
+            return False
+        return not (args.cmd == "zenodo" and not getattr(args, "production", False))
+
+
+    def main(argv=None):
+        argv = sys.argv[1:] if argv is None else argv
+        p = build_parser()
+        args = p.parse_args(argv)
+        result = dispatch(p, args)
+        if changes_archive(args) and core.ROOT is not None:
+            core.present()
+        return result
+
+
     OWNER_ACTIONS = {"init": "owner_init_command", "rotate": "owner_rotate", "expose": "owner_expose",
                      "end": "owner_end", "show": "owner_show"}
     LAZY = {"collection": ("collections", None), "mirror": ("mirror", "main"), "branch": ("branch", "main"),
@@ -895,16 +929,11 @@ paths of the core), and a few must not:
             "takedown": ("takedown", "main")}
 
 
-    def main(argv=None):
-        argv = sys.argv[1:] if argv is None else argv
-        p = build_parser()
-        args = p.parse_args(argv)
+    def dispatch(p, args):
+        """Run the command ARGS."""
         if args.cmd == "help-config":
             print(core.__doc__)
             return
-        if args.cmd in NOT_YET or (args.cmd == "arxiv" and args.action == "import"):
-            name = args.cmd + (" import" if args.cmd == "arxiv" else "")
-            sys.exit(f"osheaf {name}: not yet available for specification 0.2")
         if args.cmd in REQUIRED:
             todo = runs(p, args)
             if args.cmd == "init":

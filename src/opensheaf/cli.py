@@ -29,12 +29,15 @@ Commands:
   draft new|deposit|delete ID   unsigned work in progress, at draft/<id>/
   seal ID --label L      seal the work of a draft as a new line
   takedown LABEL --reason TEXT   delete an object, leaving a tombstone
-  index                  write opensheaf.json and the indexes (the readable index: not yet for 0.2)
+  index                  write opensheaf.json, the indexes and the website (or the TeXmacs index)
   verify                 check the archive (section 14 of the specification)
+  zenodo LABEL           a DOI for the current version (sandbox, or --production)
   arxiv fetch            download papers from arXiv (no archive needed)
+  arxiv import DOWNLOADS import the downloads, one signed line per paper
   help-config            describe osheaf.json
 
-Not yet available for specification 0.2: zenodo, arxiv import, the website.
+The website (osheaf.json "index": {"html": ...}) is written again after every
+command that changes the archive.
 
 deposit, relicense, relate, describe and init also take their options from a
 YAML or JSON file: --from FILE (a list of entries: several, in order).
@@ -255,7 +258,7 @@ def build_parser():
     n.add_argument("--new-owner", action="store_true", help="make a new owner (see osheaf owner init)")
     owner_init_options(n)
     n.add_argument("--curated", action="store_true",
-                   help="the main collection is curated (osheaf collection sync; not yet for 0.2)")
+                   help="the main catalogue is curated (osheaf collection add|sync)")
     n.add_argument("--from", dest="from_file", metavar="FILE",
                     help="take the options from a YAML or JSON file (a list: several, in order)")
     n.set_defaults(func=None)
@@ -397,7 +400,27 @@ def runs(p, args):
     return out
 
 
-NOT_YET = ("zenodo",)
+READ_ONLY = {"help-config", "verify", "resolve", "index", "init", "key"}
+READ_ONLY_ACTIONS = {("owner", "show"), ("collection", "status"), ("arxiv", "fetch")}
+
+
+def changes_archive(args):
+    """Whether the command ARGS may have changed the archive."""
+    if args.cmd in READ_ONLY or (args.cmd, getattr(args, "action", None)) in READ_ONLY_ACTIONS:
+        return False
+    return not (args.cmd == "zenodo" and not getattr(args, "production", False))
+
+
+def main(argv=None):
+    argv = sys.argv[1:] if argv is None else argv
+    p = build_parser()
+    args = p.parse_args(argv)
+    result = dispatch(p, args)
+    if changes_archive(args) and core.ROOT is not None:
+        core.present()
+    return result
+
+
 OWNER_ACTIONS = {"init": "owner_init_command", "rotate": "owner_rotate", "expose": "owner_expose",
                  "end": "owner_end", "show": "owner_show"}
 LAZY = {"collection": ("collections", None), "mirror": ("mirror", "main"), "branch": ("branch", "main"),
@@ -405,16 +428,11 @@ LAZY = {"collection": ("collections", None), "mirror": ("mirror", "main"), "bran
         "takedown": ("takedown", "main")}
 
 
-def main(argv=None):
-    argv = sys.argv[1:] if argv is None else argv
-    p = build_parser()
-    args = p.parse_args(argv)
+def dispatch(p, args):
+    """Run the command ARGS."""
     if args.cmd == "help-config":
         print(core.__doc__)
         return
-    if args.cmd in NOT_YET or (args.cmd == "arxiv" and args.action == "import"):
-        name = args.cmd + (" import" if args.cmd == "arxiv" else "")
-        sys.exit(f"osheaf {name}: not yet available for specification 0.2")
     if args.cmd in REQUIRED:
         todo = runs(p, args)
         if args.cmd == "init":

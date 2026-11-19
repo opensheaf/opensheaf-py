@@ -1766,45 +1766,82 @@ def index_entry(member):
 def index(args):
     write_discovery()
     if INDEX.get("html") or INDEX.get("template"):
-        print("opensheaf.json and the indexes written; the website and the TeXmacs index are not yet "
-              "available for specification 0.2")
+        readable_index(args)
         return
     print("opensheaf.json and the indexes written (no readable index configured)")
 
 
+def main_members():
+    """The members of the latest signed version of the main catalogue, or None."""
+    main_id = LABELS.get(ARCHIVE["mainCollection"])
+    d = obj_dir(main_id) if main_id else None
+    inv = load_inventory(d) if d else None
+    if inv is None:
+        return None
+    ver = latest_signed(d, inv)
+    if ver is None:
+        print(f"warning: the main catalogue has no signed version (section 7.3): nothing is presented")
+        return None
+    return read_json(d, inv, "members.json", ver)["members"]
+
+
 def readable_index(args):
-    """The website or the TeXmacs index (specification 0.1; to be ported to 0.2)."""
-    coll_dir = OCFL / ARCHIVE["mainCollection"]
-    inv = load_inventory(coll_dir)
-    members = json.loads(read_logical(coll_dir, inv, "members.json").read_text())["members"]
+    """The website, or the TeXmacs index with the landing pages of the website."""
+    from . import html
+    members = main_members()
+    if members is None:
+        return
     if INDEX.get("html"):
-        from . import html
         featured = INDEX["html"].get("featured") if isinstance(INDEX["html"], dict) else None
-        if featured and not (OCFL / featured / "inventory.json").exists():
-            sys.exit(f"osheaf.json: index.html.featured names {featured}, which is not an object of this archive")
-        if featured and read_json(OCFL / featured, load_inventory(OCFL / featured), OBJ).get("kind") != "collection":
-            sys.exit(f"osheaf.json: index.html.featured names {featured}, which is not a collection")
-        html.render(members, featured=featured)
-        local = sum(1 for m in members if m.get("archive") == ARCHIVE["archiveId"])
-        print(f"opensheaf.json, index.html, {local} landing pages and sitemap.xml written")
+        fid = None
+        if featured:
+            fid = LABELS.get(featured)
+            if fid is None:
+                sys.exit(f"osheaf.json: index.html.featured names {featured}, which is not a label of this "
+                         "archive")
+            fd = obj_dir(fid)
+            if (read_json(fd, load_inventory(fd), OBJ) or {}).get("kind") != "collection":
+                sys.exit(f"osheaf.json: index.html.featured names {featured}, which is not a collection")
+        pages = html.render(members, featured=fid)
+        print(f"opensheaf.json, index.html, {pages} landing pages and sitemap.xml written")
         return
     template = (ROOT / INDEX["template"]).read_text(encoding="latin-1")
     line = "  <paper-index>\n"
     if template.count(line) != 1:
         sys.exit(f"{INDEX['template']} must contain one paragraph <paper-index>")
-    from . import html
     pages = html.render(members, home=False)
-    entries = "\n\n".join(index_entry(m) for m in members)
+    here = [m for m in members if html.held(m)]
+    if len(here) < len(members):
+        print(f"warning: {len(members) - len(here)} member(s) held in other archives are left out of index.tm "
+              "(the website shows them)")
+    entries = "\n\n".join(index_entry(m) for m in here)
     with open(ROOT / "index.tm", "w", encoding="latin-1", newline="") as f:
         f.write(template.replace(line, entries + "\n"))
     (ROOT / ".texmacs-noconvert").touch()
-    if not args.no_html:
+    if not getattr(args, "no_html", False):
         scratch = Path(tempfile.mkdtemp())
         run_texmacs(export_calls(ROOT / "index.tm", pdf=scratch / "index.pdf",
                                  html=ROOT / "index.html"))
         shutil.rmtree(scratch, ignore_errors=True)
-    print("opensheaf.json, index.tm" + ("" if args.no_html else ", index.html")
+    print("opensheaf.json, index.tm" + ("" if getattr(args, "no_html", False) else ", index.html")
           + f", {pages} landing pages and sitemap.xml written")
+
+
+def present():
+    """Regenerate the presentation files after a change (appendix A.3), if any are configured."""
+    if not (INDEX.get("html") or INDEX.get("template")) or OLD:
+        return
+    from . import html
+    try:
+        members = main_members()
+        if members is None:
+            return
+        if INDEX.get("html"):
+            readable_index(argparse_namespace(no_html=True))
+        else:
+            html.render(members, home=False)
+    except (Exception, SystemExit) as e:  # noqa: BLE001 - the change is made; index writes the pages again
+        print(f"warning: the website was not regenerated ({e}); run osheaf index")
 
 
 class Findings(list):
@@ -2519,6 +2556,41 @@ def check_archive(f, found, statuses, disc):
             f.result("opensheaf.json", f"removed: {tid} ({t.get('date')}: {t.get('reason')})")
 
 
+def check_presentation(f, disc):
+    """Appendix A.3: the home page shows the pin of every member of the latest signed
+    version of the main catalogue, and each member held here has a landing page giving the
+    full sheaf: URI of its line."""
+    website = "website" in (disc.get("profiles") or [])
+    home = ROOT / "index.html"
+    if not website and not home.exists():
+        return
+    report = f.error if website else f.warning
+    note = "" if website else " (the archive does not declare the profile website)"
+    members = main_members() or []
+    if not home.exists():
+        report("index.html", "the home page is missing (appendix A.3)" + note)
+        return
+    page = home.read_text(encoding="utf-8", errors="replace")
+    gone = {t.get("id") for t in TOMBSTONES}
+    for m in members:
+        if f"sheaf:{m.get('name')}:{m.get('owner')}" in gone:
+            continue
+        pin = (member_pins(m)[-1][1] or "")
+        if pin[:32] not in page:
+            report("index.html", f"does not show the pin of {m.get('name')}" + note)
+        try:
+            obj_id = names.object_id(m.get("name"), m.get("owner"))
+            held_here = (obj_dir(obj_id) / "inventory.json").is_file()
+        except (ValueError, TypeError):
+            continue
+        if held_here:
+            landing = ROOT / "paper" / (label_of(obj_id) or m["name"]) / "index.html"
+            text = landing.read_text(encoding="utf-8", errors="replace") if landing.is_file() else ""
+            if f"sheaf:{m['name']}:{m['owner']}" not in text:
+                report(landing.relative_to(ROOT).as_posix(), f"no landing page giving the sheaf: URI of "
+                       f"{where(obj_id)} (appendix A.3)" + note)
+
+
 def look_for_keys(f):
     """Warn of the files of the archive that look like private keys (section 15.4)."""
     rotation_name = re.compile(r"^rotation-[a-z2-7]{16}-[a-z2-7]{16}\.txt$")
@@ -2578,6 +2650,7 @@ def verify_findings(remote=False):
             resolver.__exit__(None, None, None)
     check_archive(f, found, statuses, disc)
     check_indexes(f, schema, disc)
+    check_presentation(f, disc)
     look_for_keys(f)
     return f
 
@@ -2601,7 +2674,8 @@ def verify(args):
 
 def init(args):
     """Create an archive in the folder: osheaf.json, the storage root, the owner and its
-    key log (made, or copied), the empty main catalogue and the discovery document."""
+    key log (made, or copied), the empty main catalogue, the discovery document, and the
+    website with its templates (to edit)."""
     root = Path(args.folder or ".").resolve()
     root.mkdir(parents=True, exist_ok=True)
     if any((root / n).exists() for n in CONFIG_NAMES):
@@ -2618,12 +2692,13 @@ def init(args):
         "name": args.name,
         "contact": args.contact or args.base_url,
         "baseUrl": args.base_url if args.base_url.endswith("/") else args.base_url + "/",
-        "profiles": [],
+        "profiles": ["website"],
         "storageLayout": layout,
         "mainCollection": "main",
         "curator": {"name": f"{family}, {given}" if given else family, "givenName": given,
                     "familyName": family, "affiliation": args.affiliation or ""},
         "depositor": {"name": f"{given} {family}".strip(), "address": args.contact or args.base_url},
+        "index": {"html": {"templates": "templates"}},
     }
     global ARCHIVE
     set_paths(root, layout)
@@ -2646,11 +2721,16 @@ def init(args):
         owners.write_key_log(obj_dir(log.id), log)
     cfg["owner"] = log.owner
     (root / CONFIG_NAME).write_text(json.dumps(cfg, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    from . import html
+    (root / "templates").mkdir(exist_ok=True)
+    for f in sorted(html.DEFAULTS.iterdir()):
+        if f.is_file() and not (root / "templates" / f.name).exists():
+            shutil.copyfile(f, root / "templates" / f.name)
     configure(root)
     collect(args)
-    write_discovery()
-    print(f"archive created in {root}, owned by {log.owner}: edit {CONFIG_NAME}, then deposit "
-          f"(osheaf deposit --new LABEL ...)")
+    index(argparse_namespace(no_html=True))
+    print(f"archive created in {root}, owned by {log.owner}: edit {CONFIG_NAME} and templates/, then "
+          f"deposit (osheaf deposit --new LABEL ...)")
     print("note: OpenSheaf 0.2 is a draft; until version 1.0 a revision may change the format in"
           " incompatible ways, and archives may have to be rebuilt")
 

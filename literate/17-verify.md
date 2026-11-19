@@ -54,6 +54,9 @@ in the archive.
     <<check the archive as a whole>>
 
 
+    <<check the presentation files of the profile website>>
+
+
     <<look for keys left in the archive>>
 
 
@@ -181,6 +184,7 @@ steps of section 14, in order.
                 resolver.__exit__(None, None, None)
         check_archive(f, found, statuses, disc)
         check_indexes(f, schema, disc)
+        check_presentation(f, disc)
         look_for_keys(f)
         return f
 
@@ -1158,6 +1162,58 @@ write now are the measure (`index_entries`, [chapter 16](16-index.md)).
                 if index == "owners" and any(e.get("owner") == t.get("owner") and t.get("name") in e.get("names", [])
                                              for e in held):
                     f.error(f"{index}/", f"owners/ lists {tid}, which is taken down (section 12.5)")
+
+The presentation files
+----------------------
+
+Presentation files are never authoritative (section 3), and a verifier
+does not trust them; but an archive that declares the profile `website`
+(appendix A.3) promises what they show, and some of it can be checked from
+the files alone. The home page presents the latest signed version of the
+main catalogue: it shows the pin of every member, the beginning of its
+digest, as the [website](30-website.md) and the [TeXmacs index](16-index.md)
+write it, which tells a stale home page from a current one. Each member
+whose line is held here has a landing page at `paper/<label>/` (or
+`paper/<name>/` without a label), which gives the full `sheaf:` URI of its
+line (appendix A.3, section 12.2). Under the profile, what is missing is an
+error; an archive that has an `index.html` without declaring the profile is
+told the same as warnings. A member whose line was taken down here is not
+looked for: the takedown removed it from the pages (section 13.2).
+
+    # in check the presentation files of the profile website:
+    def check_presentation(f, disc):
+        """Appendix A.3: the home page shows the pin of every member of the latest signed
+        version of the main catalogue, and each member held here has a landing page giving the
+        full sheaf: URI of its line."""
+        website = "website" in (disc.get("profiles") or [])
+        home = ROOT / "index.html"
+        if not website and not home.exists():
+            return
+        report = f.error if website else f.warning
+        note = "" if website else " (the archive does not declare the profile website)"
+        members = main_members() or []
+        if not home.exists():
+            report("index.html", "the home page is missing (appendix A.3)" + note)
+            return
+        page = home.read_text(encoding="utf-8", errors="replace")
+        gone = {t.get("id") for t in TOMBSTONES}
+        for m in members:
+            if f"sheaf:{m.get('name')}:{m.get('owner')}" in gone:
+                continue
+            pin = (member_pins(m)[-1][1] or "")
+            if pin[:32] not in page:
+                report("index.html", f"does not show the pin of {m.get('name')}" + note)
+            try:
+                obj_id = names.object_id(m.get("name"), m.get("owner"))
+                held_here = (obj_dir(obj_id) / "inventory.json").is_file()
+            except (ValueError, TypeError):
+                continue
+            if held_here:
+                landing = ROOT / "paper" / (label_of(obj_id) or m["name"]) / "index.html"
+                text = landing.read_text(encoding="utf-8", errors="replace") if landing.is_file() else ""
+                if f"sheaf:{m['name']}:{m['owner']}" not in text:
+                    report(landing.relative_to(ROOT).as_posix(), f"no landing page giving the sheaf: URI of "
+                           f"{where(obj_id)} (appendix A.3)" + note)
 
 Keys left in the archive
 ------------------------

@@ -130,7 +130,14 @@ of `parent.chain/` (section 6.5), in any version.
 
 The command. The object is named by its label or identifier (a key log by
 `sheaf:<owner>:<owner>`); a confirmation is asked, the first eight
-characters of the line's name typed back, unless `--yes`.
+characters of the line's name typed back, unless `--yes`. The landing page
+of the line and its HTML version go with it, at once; the rest of the
+presentation files (the home page, the pages of the collections that list
+it, the sitemap) are written again by the [command line](60-command-line.md)
+after the command, as after every change (appendix A.3), and the
+[website](30-website.md) leaves out every member whose line has a tombstone
+here. The main catalogue keeps its member, a pin of a version now removed
+(section 8.5), until `osheaf collect` writes its next version.
 
     # in takedown: the command:
     def main(args):
@@ -165,8 +172,8 @@ characters of the line's name typed back, unless `--yes`.
         label = P.label_of(obj_id)
         if label:
             del P.LABELS[label]
-            for folder in (P.ROOT / "paper" / label, P.SITE / label):
-                shutil.rmtree(folder, ignore_errors=True)
+        for folder in (P.ROOT / "paper" / (label or nm), P.SITE / (label or nm)):
+            shutil.rmtree(folder, ignore_errors=True)
         shutil.rmtree(d)
         parent = d.parent
         while parent != P.OCFL and not any(parent.iterdir()):

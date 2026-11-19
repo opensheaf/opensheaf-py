@@ -289,77 +289,122 @@ TeXmacs index is a home page, nothing more, and the website profile
 
 ### The command
 
-`readable_index` was `osheaf index` under specification 0.1. Then, with a website
-configured, it hands the members to the [website](30-website.md); with a
-TeXmacs template, it has the website write the landing pages and the
-sitemap without a home page (`home=False`), writes `index.tm` and, unless
-`--no-html`, exports it to `index.html` with TeXmacs (the PDF export,
+`osheaf index` writes the discovery document and the indexes, and then the
+readable index, if one is configured. With a website, it hands the members
+of the main catalogue to the [website](30-website.md); with a TeXmacs
+template, it has the website write the landing pages, the owner pages and
+the sitemap without a home page (`home=False`), writes `index.tm` and,
+unless `--no-html`, exports it to `index.html` with TeXmacs (the PDF export,
 needed to typeset it, goes to a scratch folder). The landing pages are at
-`paper/<id>/`, apart from the HTML versions of TeXmacs documents in
-`site/<id>/`, and the `index.html` of TeXmacs is never overwritten. The
-empty file `.texmacs-noconvert` tells TeXmacs' website converter not to
-touch the archive's files (appendix A.2).
-
-With `index.html.featured` set to a collection of the archive, the home
-page lists that collection first (a reading list, a journal's issues),
-then the main collection; a setting that names something else stops the
-command.
-
-Only members of the archive itself can be shown this way: the entries are
-read from the local storage root. A curated main collection with members
-of other archives needs the website.
-
-Version 0.2 of the specification changed what the pages must show (labels
-and `sheaf:` URIs instead of identifiers, the statuses of versions, the
-owners), and the [website](30-website.md) has not been ported yet. Until
-it is, `osheaf index` writes the discovery document and the indexes only,
-and says so when a website or a TeXmacs index is configured; the code that writes them stays,
-as `readable_index`, for the port, with its entries read from the lines of
-the members (`index_entry`, below).
+`paper/<label>/`, apart from the HTML versions of TeXmacs documents in
+`site/<label>/`, and the `index.html` of TeXmacs is never overwritten by
+the website. The empty file `.texmacs-noconvert` tells TeXmacs' website
+converter not to touch the archive's files (appendix A.2).
 
     # in write the discovery document and the index:
     def index(args):
         write_discovery()
         if INDEX.get("html") or INDEX.get("template"):
-            print("opensheaf.json and the indexes written; the website and the TeXmacs index are not yet "
-                  "available for specification 0.2")
+            readable_index(args)
             return
         print("opensheaf.json and the indexes written (no readable index configured)")
 
+The members presented are those of the latest signed version of the main
+catalogue (appendix A.3), not of its head: nothing relies on a version that
+is not signed (section 7.3). An archive whose main catalogue has no signed
+version (its owner's keys all exposed since) presents nothing, and says so.
 
+    # in write the discovery document and the index:
+    def main_members():
+        """The members of the latest signed version of the main catalogue, or None."""
+        main_id = LABELS.get(ARCHIVE["mainCollection"])
+        d = obj_dir(main_id) if main_id else None
+        inv = load_inventory(d) if d else None
+        if inv is None:
+            return None
+        ver = latest_signed(d, inv)
+        if ver is None:
+            print(f"warning: the main catalogue has no signed version (section 7.3): nothing is presented")
+            return None
+        return read_json(d, inv, "members.json", ver)["members"]
+
+With `index.html.featured` set to the label of a collection of the
+archive, the home page lists that collection first (a reading list, a
+journal's issues), then the main catalogue; a setting that names something
+else stops the command.
+
+Only members held here can be shown in a TeXmacs index: its entries are
+read from the local storage root. A curated main catalogue with members of
+other archives needs the website, and the members held elsewhere are left
+out of `index.tm`, with a warning.
+
+    # in write the discovery document and the index:
     def readable_index(args):
-        """The website or the TeXmacs index (specification 0.1; to be ported to 0.2)."""
-        coll_dir = OCFL / ARCHIVE["mainCollection"]
-        inv = load_inventory(coll_dir)
-        members = json.loads(read_logical(coll_dir, inv, "members.json").read_text())["members"]
+        """The website, or the TeXmacs index with the landing pages of the website."""
+        from . import html
+        members = main_members()
+        if members is None:
+            return
         if INDEX.get("html"):
-            from . import html
             featured = INDEX["html"].get("featured") if isinstance(INDEX["html"], dict) else None
-            if featured and not (OCFL / featured / "inventory.json").exists():
-                sys.exit(f"osheaf.json: index.html.featured names {featured}, which is not an object of this archive")
-            if featured and read_json(OCFL / featured, load_inventory(OCFL / featured), OBJ).get("kind") != "collection":
-                sys.exit(f"osheaf.json: index.html.featured names {featured}, which is not a collection")
-            html.render(members, featured=featured)
-            local = sum(1 for m in members if m.get("archive") == ARCHIVE["archiveId"])
-            print(f"opensheaf.json, index.html, {local} landing pages and sitemap.xml written")
+            fid = None
+            if featured:
+                fid = LABELS.get(featured)
+                if fid is None:
+                    sys.exit(f"osheaf.json: index.html.featured names {featured}, which is not a label of this "
+                             "archive")
+                fd = obj_dir(fid)
+                if (read_json(fd, load_inventory(fd), OBJ) or {}).get("kind") != "collection":
+                    sys.exit(f"osheaf.json: index.html.featured names {featured}, which is not a collection")
+            pages = html.render(members, featured=fid)
+            print(f"opensheaf.json, index.html, {pages} landing pages and sitemap.xml written")
             return
         template = (ROOT / INDEX["template"]).read_text(encoding="latin-1")
         line = "  <paper-index>\n"
         if template.count(line) != 1:
             sys.exit(f"{INDEX['template']} must contain one paragraph <paper-index>")
-        from . import html
         pages = html.render(members, home=False)
-        entries = "\n\n".join(index_entry(m) for m in members)
+        here = [m for m in members if html.held(m)]
+        if len(here) < len(members):
+            print(f"warning: {len(members) - len(here)} member(s) held in other archives are left out of index.tm "
+                  "(the website shows them)")
+        entries = "\n\n".join(index_entry(m) for m in here)
         with open(ROOT / "index.tm", "w", encoding="latin-1", newline="") as f:
             f.write(template.replace(line, entries + "\n"))
         (ROOT / ".texmacs-noconvert").touch()
-        if not args.no_html:
+        if not getattr(args, "no_html", False):
             scratch = Path(tempfile.mkdtemp())
             run_texmacs(export_calls(ROOT / "index.tm", pdf=scratch / "index.pdf",
                                      html=ROOT / "index.html"))
             shutil.rmtree(scratch, ignore_errors=True)
-        print("opensheaf.json, index.tm" + ("" if args.no_html else ", index.html")
+        print("opensheaf.json, index.tm" + ("" if getattr(args, "no_html", False) else ", index.html")
               + f", {pages} landing pages and sitemap.xml written")
+
+The presentation files are regenerated after every change (appendix A.3),
+not only by `osheaf index`: the [command line](60-command-line.md) calls
+`present` after each command that changes the archive. It writes what is
+quick to write: the whole website, or, for a TeXmacs index, the landing
+pages, the owner pages and the sitemap, leaving `index.tm` and its export,
+which need TeXmacs, to `osheaf index`. A failure there does not undo the
+change, which is already made, and does not make the command fail: it is
+reported, and `osheaf index` writes the pages again.
+
+    # in write the discovery document and the index:
+    def present():
+        """Regenerate the presentation files after a change (appendix A.3), if any are configured."""
+        if not (INDEX.get("html") or INDEX.get("template")) or OLD:
+            return
+        from . import html
+        try:
+            members = main_members()
+            if members is None:
+                return
+            if INDEX.get("html"):
+                readable_index(argparse_namespace(no_html=True))
+            else:
+                html.render(members, home=False)
+        except (Exception, SystemExit) as e:  # noqa: BLE001 - the change is made; index writes the pages again
+            print(f"warning: the website was not regenerated ({e}); run osheaf index")
 
 ### Text in TeXmacs
 

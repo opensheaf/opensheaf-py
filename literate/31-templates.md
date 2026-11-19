@@ -1,16 +1,19 @@
 The templates of the website
 ============================
 
-The pages of the [website](30-website.md) are filled into four default
+The pages of the [website](30-website.md) are filled into five default
 templates, kept in the package under `src/opensheaf/templates/`: the
 home page, the landing page of a document, the landing page of a
-collection, and the style sheet. `osheaf
-init` copies them into the new archive's `templates` folder, where the
-curator may change them freely; the copies, not these files, are then
-used. An archive whose home page is a [TeXmacs index](16-index.md) uses
-only the last two, and may put its own `paper.html` in its `templates`
-folder to give the landing pages the look of its other pages. This chapter shows the defaults, and the placeholders each
-template receives.
+collection, the page of an owner, and the style sheet. `osheaf init`
+copies them into the new archive's `templates` folder, where the curator
+may change them freely; the copies, not these files, are then used, and a
+template missing there (one added to the package after the archive was
+made, as the owner page was) is taken from the package. An archive whose
+home page is a [TeXmacs index](16-index.md) uses all but the first, and
+may put its own `paper.html` in its `templates` folder to give the landing
+pages the look of its other pages. This chapter shows the defaults, and
+the placeholders each template receives. The archive-template repository
+keeps copies of these files, which follow them.
 
 The templates are plain HTML and CSS, with placeholders `{{name}}` that
 the website fills by string substitution. They are copied into archives
@@ -21,7 +24,7 @@ abstracts is typeset in the browser by MathJax, which both pages load.
 What the pages share
 --------------------
 
-Both pages declare their character set and let a phone show them at its
+Every page declares its character set and lets a phone show it at its
 own width.
 
     <!-- in the character set and viewport of a page: -->
@@ -29,8 +32,9 @@ own width.
     <meta name="viewport" content="width=device-width, initial-scale=1">
 
 MathJax is configured, before it loads, to read mathematics between
-single dollar signs, as section 8 of the specification writes it in
-titles and abstracts, and to read `\$` as a literal dollar sign. Its
+single dollar signs, as the specification writes it in
+titles and abstracts (section 4.4), and to read
+`\$` as a literal dollar sign. Its
 version is fixed, so that a new release cannot change the pages
 unannounced; `defer` lets the page appear before the mathematics is
 typeset.
@@ -47,11 +51,11 @@ The home page receives:
 - `{{archive_name}}`, the name of the archive, and `{{root}}`, the way
   back to the root of the archive (empty here);
 - `{{lead}}`, the lead paragraph, in HTML;
-- `{{papers}}`, the entries of the members of the main collection, as
-  items of a list;
+- `{{papers}}`, the entries of the members of the latest signed version
+  of the main catalogue, as items of a list;
 - `{{featured}}`, the featured collection (`index.html.featured`), a
   section with its title and the entries of its members, and
-  `{{papers_heading}}`, a heading for the main collection's list when
+  `{{papers_heading}}`, a heading for the main catalogue's list when
   there is one; both are empty otherwise, and a template written before
   they existed simply does not show the featured collection;
 - `{{count}}`, their number, and `{{updated}}`, the date of the pages.
@@ -99,7 +103,7 @@ draft: a reader should not take the archive's form as settled.
     <footer>
       <p>{{count}} documents · updated {{updated}} ·
       made with <a href="https://github.com/opensheaf/opensheaf-py">opensheaf-py</a> ·
-      format <a href="https://opensheaf.org">OpenSheaf 0.1</a> (a draft, which may still change)</p>
+      format <a href="https://opensheaf.org">OpenSheaf 0.2</a> (a draft, which may still change)</p>
       <p><a href="https://opensheaf.org/explorer/?url={{base_url}}">Explore and verify this archive</a>
       with the OpenSheaf Explorer, in the browser</p>
     </footer>
@@ -119,15 +123,21 @@ The landing page of a document receives, besides `{{archive_name}}`,
   version without a PDF, its entry in the list of versions);
 - `{{html_link}}`, the link to the HTML version of a TeXmacs document,
   preceded by its separator (` · <a href="...">HTML</a>`), or nothing;
-- `{{withdrawn}}`, the withdrawal notice, empty for a document that is
-  not withdrawn;
-- `{{versions}}`, the versions, as items of a list;
+- `{{withdrawn}}`, the withdrawal notice, empty for a line that is
+  not withdrawn (section 13.1), and `{{contested}}`, a warning that the
+  version presented is contested, signed only with keys its owner has
+  since exposed (section 7.3), empty otherwise;
+- `{{sheaf_uri}}`, the full `sheaf:` URI of the line, `{{sheaf_short}}`,
+  a short form of it for people (section 12.2), and `{{owner}}`, its owner,
+  linked to the owner's page, with its keeper and what a reader must know
+  of it (an end, exposed keys);
+- `{{versions}}`, the signed document versions, each with its status
+  and pin, as items of a list;
 - `{{cite}}`, the suggested citation, and `{{licence}}`, the licence,
   linked when it has an address;
-- `{{pin}}`, the pin by which the collection fixes the document (the head
-  of the object for a catalogue, the last revision for a
-  selection), and `{{pin_url}}`, the address of the inventory it is the
-  digest of.
+- `{{pin}}`, the pin by which the collection fixes the line (the version
+  pinned, for a catalogue; the last revision, for a selection), and
+  `{{pin_url}}`, the address of the inventory it is the digest of.
 
     <!-- in src/opensheaf/templates/paper.html: -->
     <!doctype html>
@@ -152,7 +162,7 @@ The landing page of a document receives, besides `{{archive_name}}`,
       <<the citation on a landing page>>
     </main>
     <footer>
-      <p>An <a href="https://opensheaf.org">OpenSheaf</a> archive (format 0.1, a draft, which may still change) ·
+      <p>An <a href="https://opensheaf.org">OpenSheaf</a> archive (format 0.2, a draft, which may still change) ·
       made with <a href="https://github.com/opensheaf/opensheaf-py">opensheaf-py</a></p>
     </footer>
     </body>
@@ -164,19 +174,31 @@ indented as its reference is, and the placeholder would move. They come
 in the order of the history, the last first.
 
 The page presents the version the collection presents, usually the
-current version of the document; the withdrawal
-notice, when there is one, comes before anything else about it, as
-section 11.1 requires.
+current version of the document; the withdrawal notice, when there is
+one, comes before anything else about it, as section 13.1 requires, and
+so does the mark of a contested version. Below the title come the names
+that last: the `sheaf:` URI of the line, in full and short, and its owner.
 
     <!-- in the document on its landing page: -->
     <h1>{{title}}</h1>
     <p class="paper-authors">{{authors}}</p>
     <p class="paper-meta">First issued {{issued}} · <a href="{{pdf}}">PDF</a>{{html_link}}</p>
     {{withdrawn}}
+    {{contested}}
+    <<the names of a line on its landing page>>
     <section class="abstract">
       <h2>Abstract</h2>
       {{abstract}}
     </section>
+
+The `sheaf:` URI is in a `<code>` element, so that it can be selected
+and copied whole; the short form follows, in the small sans.
+
+    <!-- in the names of a line on its landing page: -->
+    <dl class="identifiers">
+      <dt>Line</dt><dd><code>{{sheaf_uri}}</code> <span class="small">(short: <code>{{sheaf_short}}</code>)</span></dd>
+      <dt>Owner</dt><dd>{{owner}}</dd>
+    </dl>
 
 The last section is for those who cite or check: the citation, the
 licence, and the pin by which the collection fixes the document, linked
@@ -201,7 +223,8 @@ what a reader comes for is its list of members. An archive made before
 this template existed has no copy of it, and the default is used. It
 receives the placeholders of a landing page that a collection has
 (`{{root}}`, `{{archive_name}}`, `{{base_url}}`, `{{head}}`, `{{title}}`,
-`{{issued}}`, `{{withdrawn}}`, `{{versions}}`, `{{cite}}`, `{{licence}}`,
+`{{issued}}`, `{{withdrawn}}`, `{{contested}}`, `{{sheaf_uri}}`,
+`{{sheaf_short}}`, `{{owner}}`, `{{versions}}`, `{{cite}}`, `{{licence}}`,
 `{{pin}}`, `{{pin_url}}`), and:
 
 - `{{kind}}`, what it is and who curates it ("A selection curated by Jane
@@ -228,6 +251,8 @@ receives the placeholders of a landing page that a collection has
       <p class="paper-authors">{{kind}}</p>
       <p class="paper-meta">Since {{issued}} · {{count}}</p>
       {{withdrawn}}
+      {{contested}}
+      <<the names of a line on its landing page>>
       <section class="abstract">
         {{description}}
       </section>
@@ -246,7 +271,57 @@ receives the placeholders of a landing page that a collection has
       <<the citation on a landing page>>
     </main>
     <footer>
-      <p>An <a href="https://opensheaf.org">OpenSheaf</a> archive (format 0.1, a draft, which may still change) ·
+      <p>An <a href="https://opensheaf.org">OpenSheaf</a> archive (format 0.2, a draft, which may still change) ·
+      made with <a href="https://github.com/opensheaf/opensheaf-py">opensheaf-py</a></p>
+    </footer>
+    </body>
+    </html>
+
+The page of an owner
+--------------------
+
+The page of an owner, at `owner/<owner>/`, receives `{{root}}` (here
+`../../`), `{{archive_name}}`, `{{base_url}}`, and:
+
+- `{{owner}}`, the owner name;
+- `{{facts}}`, the summary of its key log, as items of a list: the URI
+  and pin of the key log, the keeper, the current keys, the rotation keys,
+  the number of rotations, the keys exposed, an end or a fork, a
+  successor;
+- `{{lines}}`, the lines of the owner with a landing page here, as items
+  of a list.
+
+    <!-- in src/opensheaf/templates/owner.html: -->
+    <!doctype html>
+    <html lang="en">
+    <head>
+    <<the character set and viewport of a page>>
+    <title>Owner {{owner}} · {{archive_name}}</title>
+    <link rel="stylesheet" href="{{root}}style.css">
+    </head>
+    <body>
+    <nav><a href="{{root}}">{{archive_name}}</a></nav>
+    <main class="paper-page owner-page">
+      <h1>Owner</h1>
+      <p class="paper-meta"><code>{{owner}}</code></p>
+      <p class="small">An owner is the keyed identity that signs the versions of its lines
+      (section 6 of the specification); its name identifies no one. What it signs is checked
+      against its key log, summarised here as this archive holds it.</p>
+      <section>
+        <h2>Key log</h2>
+        <ul class="facts">
+    {{facts}}
+        </ul>
+      </section>
+      <section>
+        <h2>Lines in this archive</h2>
+        <ul class="facts">
+    {{lines}}
+        </ul>
+      </section>
+    </main>
+    <footer>
+      <p>An <a href="https://opensheaf.org">OpenSheaf</a> archive (format 0.2, a draft, which may still change) ·
       made with <a href="https://github.com/opensheaf/opensheaf-py">opensheaf-py</a></p>
     </footer>
     </body>
@@ -268,7 +343,7 @@ the small IBM Plex Sans of the site, in grey; digests and code in
 JetBrains Mono. Hierarchy comes from size, space and weight, not from
 colour: headings in bold, links in ink with a thin grey underline. Three
 quiet tones only say a state: green for the current version, red for a
-withdrawal, amber for warnings.
+withdrawal, amber for warnings, among them contested versions.
 
     /* in src/opensheaf/templates/style.css: */
     /* The default style of an OpenSheaf archive (opensheaf-py); edit freely. */
@@ -432,7 +507,10 @@ keeps its place, its title in grey with a tag in the red of withdrawals.
 
 The versions of a landing page are divided by hairlines too. The current
 version is marked by a small tag in the green of what is current, the
-stage by a tag on the surface.
+stage by a tag on the surface, a contested version by a tag in the amber
+of warnings. The names of a line, its `sheaf:` URI and its owner, are a
+small list of terms in the sans, the URIs in the mono face; the facts of
+an owner's page are a plain list.
 
     /* in the versions in the default style: */
     ol.versions { list-style: none; padding: 0; margin: 0; border-top: 1px solid var(--os-rule); }
@@ -442,6 +520,16 @@ stage by a tag on the surface.
                        border-radius: 999px; background: var(--os-surface); margin-left: 0.3rem;
                        vertical-align: 0.1em; }
     .current { background: var(--os-ok-bg); color: var(--os-ok); }
+    .contested { font-family: var(--os-sans); font-size: 0.65rem; font-weight: 400; padding: 0.1rem 0.55rem;
+                 border-radius: 999px; background: var(--os-warn-bg); color: var(--os-warn); margin-left: 0.3rem; }
+    div.contested, li.contested { display: block; border-radius: 4px; padding: 0.7rem 1rem; margin: 0.6rem 0;
+                                  font-size: 0.85rem; }
+    dl.identifiers { font-family: var(--os-sans); font-size: 0.75rem; color: var(--os-muted);
+                     display: grid; grid-template-columns: max-content 1fr; gap: 0.2rem 0.8rem; margin: 1.2rem 0; }
+    dl.identifiers dt { font-weight: 600; }
+    dl.identifiers dd { margin: 0; min-width: 0; }
+    ul.facts { padding-left: 1.2rem; }
+    ul.facts li { margin: 0.3rem 0; }
     .changes { font-style: italic; }
     .files { font-size: 0.9rem; }
     .missing { color: var(--os-muted); }

@@ -5,10 +5,10 @@ Near the end of `core.py` is `osheaf init`, which creates a new archive.
 It comes late because it uses most of the others: it writes a
 [configuration](10-archive.md), creates the storage root, the owner of the
 archive with its key log (with the [commands of owners](19-owner-commands.md)),
-the empty [main catalogue](15-main-collection.md) and the
-[discovery document](16-index.md), after which the archive
-[verifies](17-verify.md) and is ready for its first
-[deposit](13-deposit.md).
+the empty [main catalogue](15-main-collection.md), the
+[discovery document](16-index.md) and the [website](30-website.md), with
+its templates, after which the archive [verifies](17-verify.md) and is
+ready for its first [deposit](13-deposit.md).
 
     # in create an archive:
     <<create an archive in a folder>>
@@ -48,9 +48,19 @@ no file (section 3).
 The main catalogue is sealed and signed at once, empty, kept by `collect`
 (newest first). A curated main collection (`--curated`), whose members of
 any archive and order are the curator's, is made empty, of order `manual`,
-and kept with the commands of [collections](21-collections.md). Then the discovery document is written, so that the new archive is
-complete, if empty, and passes verification. The website and its templates
-are not yet ported either: a new archive declares no profile.
+and kept with the commands of [collections](21-collections.md). Then the
+discovery document is written, so that the new archive is complete, if
+empty, and passes verification.
+
+A new archive has a website: it declares the profile `website` (appendix
+A.3), its configuration names the folder of its templates
+(`"index": {"html": {"templates": "templates"}}`), and the default
+templates of the [package](31-templates.md) are copied there, to be edited;
+a template already there is kept. The home page, the landing page of the
+main catalogue, the owner's page and the sitemap are written at once. An
+archive that wants a TeXmacs index instead changes `index` in its
+configuration (see `osheaf help-config`) and may remove the files of the
+website.
 
 Since OpenSheaf 0.2 is a draft, `init` says so: an archive made now may
 have to be rebuilt when the specification changes, as it has (section 16.1).
@@ -58,7 +68,8 @@ have to be rebuilt when the specification changes, as it has (section 16.1).
     # in create an archive in a folder:
     def init(args):
         """Create an archive in the folder: osheaf.json, the storage root, the owner and its
-        key log (made, or copied), the empty main catalogue and the discovery document."""
+        key log (made, or copied), the empty main catalogue, the discovery document, and the
+        website with its templates (to edit)."""
         root = Path(args.folder or ".").resolve()
         root.mkdir(parents=True, exist_ok=True)
         if any((root / n).exists() for n in CONFIG_NAMES):
@@ -75,12 +86,13 @@ have to be rebuilt when the specification changes, as it has (section 16.1).
             "name": args.name,
             "contact": args.contact or args.base_url,
             "baseUrl": args.base_url if args.base_url.endswith("/") else args.base_url + "/",
-            "profiles": [],
+            "profiles": ["website"],
             "storageLayout": layout,
             "mainCollection": "main",
             "curator": {"name": f"{family}, {given}" if given else family, "givenName": given,
                         "familyName": family, "affiliation": args.affiliation or ""},
             "depositor": {"name": f"{given} {family}".strip(), "address": args.contact or args.base_url},
+            "index": {"html": {"templates": "templates"}},
         }
         global ARCHIVE
         set_paths(root, layout)
@@ -89,11 +101,16 @@ have to be rebuilt when the specification changes, as it has (section 16.1).
         <<the owner of a new archive>>
         cfg["owner"] = log.owner
         (root / CONFIG_NAME).write_text(json.dumps(cfg, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        from . import html
+        (root / "templates").mkdir(exist_ok=True)
+        for f in sorted(html.DEFAULTS.iterdir()):
+            if f.is_file() and not (root / "templates" / f.name).exists():
+                shutil.copyfile(f, root / "templates" / f.name)
         configure(root)
         collect(args)
-        write_discovery()
-        print(f"archive created in {root}, owned by {log.owner}: edit {CONFIG_NAME}, then deposit "
-              f"(osheaf deposit --new LABEL ...)")
+        index(argparse_namespace(no_html=True))
+        print(f"archive created in {root}, owned by {log.owner}: edit {CONFIG_NAME} and templates/, then "
+              f"deposit (osheaf deposit --new LABEL ...)")
         print("note: OpenSheaf 0.2 is a draft; until version 1.0 a revision may change the format in"
               " incompatible ways, and archives may have to be rebuilt")
 

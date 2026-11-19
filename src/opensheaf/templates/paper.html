@@ -16,6 +16,11 @@
   <p class="paper-authors">{{authors}}</p>
   <p class="paper-meta">First issued {{issued}} · <a href="{{pdf}}">PDF</a>{{html_link}}</p>
   {{withdrawn}}
+  {{contested}}
+  <dl class="identifiers">
+    <dt>Line</dt><dd><code>{{sheaf_uri}}</code> <span class="small">(short: <code>{{sheaf_short}}</code>)</span></dd>
+    <dt>Owner</dt><dd>{{owner}}</dd>
+  </dl>
   <section class="abstract">
     <h2>Abstract</h2>
     {{abstract}}
@@ -35,7 +40,7 @@
   </section>
 </main>
 <footer>
-  <p>An <a href="https://opensheaf.org">OpenSheaf</a> archive (format 0.1, a draft, which may still change) ·
+  <p>An <a href="https://opensheaf.org">OpenSheaf</a> archive (format 0.2, a draft, which may still change) ·
   made with <a href="https://github.com/opensheaf/opensheaf-py">opensheaf-py</a></p>
 </footer>
 </body>
