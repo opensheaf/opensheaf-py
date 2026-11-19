@@ -1,29 +1,30 @@
 # Generated from literate/50-zenodo.md by opensheaf-literate: edit the document, not this file.
-"""Zenodo binding of OpenSheaf 0.1 (appendix A of the specification).
+"""Zenodo binding of OpenSheaf 0.2 (appendix A.1 of the specification).
 
-    osheaf zenodo ID [--production] [--keep]
+    osheaf zenodo LABEL [--production] [--keep]
 
-Deposits the current document version of object ID (the last of its
-history, section 7.3) on Zenodo and commits a description-only object version
-holding it, whose datacite.json carries the version DOI and whose object.json
-records the Zenodo record under `external` (role `deposit`).
+Deposits the current document version of the line LABEL (the last of the
+history of its latest signed version, section 4.2) on Zenodo and adds a
+description-only object version holding it, signed by the owner, whose
+datacite.json carries the version DOI and whose object.json records the Zenodo
+record under `external` (role `deposit`).
 
-The first deposit of a document creates a Zenodo record (its concept DOI
-stands for the document); later document versions are new versions of that
-record, linked IsNewVersionOf the DOI of the version before them in the
-history. Zenodo orders record versions by publication, so a document version
-that is not the current one (an earlier version found later) is not deposited
-as a new version of the record (appendix A). Files of notices are not
-uploaded: the files of a published record version are fixed. A version that
-was not public at the time gets its Available date when Zenodo publishes it.
-Order of operations (appendix A): create the draft (Zenodo reserves
-its DOI), write datacite.json and object.json with that DOI in a staging
-folder, upload the files and compare their MD5 checksums with the inventory's
-fixity, publish, then commit the object version and rewrite opensheaf.json.
+The first deposit of a line creates a Zenodo record (its concept DOI stands for
+the line); later document versions are new versions of that record, linked
+IsNewVersionOf the DOI of the version before them in the history. Zenodo orders
+record versions by publication, so a document version that is not the current
+one (an earlier version found later) is not deposited as a new version of the
+record (appendix A.1). Files of notices are not uploaded: the files of a
+published record version are fixed. A version that was not public at the time
+gets its Available date when Zenodo publishes it. Order of operations (appendix
+A.1): create the draft (Zenodo reserves its DOI), build the object version with
+that DOI in a staging folder and sign it, upload the files and compare their MD5
+checksums with the inventory's fixity, publish, then add the object version
+with its signatures and rewrite opensheaf.json.
 
 Without --production the Zenodo sandbox is used, and everything is done on a
-temporary copy of the object, so that test DOIs never enter the archive; the
-copy is printed and removed unless --keep is given.
+temporary copy of the line and of its owner's key log, so that test DOIs never
+enter the archive; the copy is printed and removed unless --keep is given.
 
 Tokens: the environment variable ZENODO_TOKEN (production) or
 ZENODO_SANDBOX_TOKEN (sandbox); otherwise the system's credential store,
@@ -34,16 +35,19 @@ Service on Linux); on macOS also the keychain directly. To store a token:
     keyring set zenodo-token "$USER"                              (any system)
     security add-generic-password -a "$USER" -s zenodo-token -w   (macOS)
 
-If publication succeeds and the commit fails, the staging folder
-zenodo-staging/ID/ is kept, and the next run completes the object version
-from it before anything else (appendix A).
+If publication succeeds and adding the version fails, the staging folder
+zenodo-staging/<owner>/<name>/ is kept, the line takes no other version, and
+the next run adds the version from it before anything else, signing it again
+if a key that signed it was exposed meanwhile (appendix A.1).
 """
 
 import datetime
 import getpass
+import hashlib
 import html
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -153,8 +157,8 @@ def zenodo_metadata(dc, archive, obj_id):
         "license": licence if licence in OPEN_LICENCES else "other-closed",
         "version": dc["version"],
         "publication_date": (dates.get("Issued") or dates.get("Available"))[:10],
-        "notes": (f"Deposited from the OpenSheaf archive {archive['archiveId']} "
-                  f"({archive['name']}), object {obj_id}, document version {dc['version']}. "
+        "notes": (f"Deposited from the OpenSheaf archive {archive['name']} ({archive['baseUrl']}), "
+                  f"line {obj_id}, document version {dc['version']}. "
                   f"Rights: {rights.get('rights', 'see the files')}."),
     }
     if dc.get("language") == "en":
@@ -182,7 +186,7 @@ def zenodo_entries(obj):
 
 
 def reproducible_zip(dest, files):
-    """sources.zip as appendix A asks: entries in byte order of their names,
+    """sources.zip as appendix A.1 asks: entries in byte order of their names,
     fixed timestamps, no extra attributes."""
     with zipfile.ZipFile(dest, "w", zipfile.ZIP_DEFLATED) as z:
         for name in sorted(files, key=lambda n: n.encode()):
@@ -226,10 +230,10 @@ def version_files(P, obj_dir, inv, ver):
             for paths in inv["versions"][ver]["state"].values() for lp in paths}
 
 
-def previous_record(P, obj_dir, inv, doc_version):
+def previous_record(P, obj_dir, inv, doc_version, signed):
     """The Zenodo record id and DOI of the latest document version before
-    DOC_VERSION in the history that is on Zenodo."""
-    hist = P.history_of(obj_dir, inv)
+    DOC_VERSION in the history (as of SIGNED) that is on Zenodo."""
+    hist = P.history_of(obj_dir, inv, signed)
     docs = [P.doc_version_of(obj_dir, inv, v) for v in hist]
     before = docs[:docs.index(doc_version)] if doc_version in docs else docs
     for n in reversed(before):
@@ -243,50 +247,94 @@ def previous_record(P, obj_dir, inv, doc_version):
 
 
 def commit(P, obj_id, stage, state):
-    files = {lp: stage / "files" / lp for lp in state["files"]}
-    inv = P.add_version(obj_id, files, f"Zenodo: document version {state['documentVersion']}, "
-                                       f"DOI {state['doi']}")
-    P.write_json(P.ROOT / "opensheaf.json", P.discovery())
-    shutil.rmtree(stage)
-    print(f"{obj_id}: {inv['head']} committed, DOI {state['doi']}")
+    label = P.label_of(obj_id) or obj_id
+    d = P.obj_dir(obj_id)
+    if state["phase"] == "published":
+        inv = P.install_version(obj_id, stage / "version")
+        state["phase"] = "added"
+        P.write_json(stage / "state.json", state)
+    else:
+        inv = P.load_inventory(d)
+    ver = state.get("version") or inv["head"]
+    statuses = P.line_statuses(d, P.load_inventory(d))[1]
+    if statuses[int(ver[1:]) - 1] == P.sign.CONTESTED:
+        print(f"{label}: {ver} is contested (a key that signed it was exposed): signing it again")
+        P.sign_again(P.argparse_namespace(id=obj_id, version=ver, yes=True))
+    P.write_discovery()
+    remove_stage(P, stage)
+    print(f"{label}: {ver} added, DOI {state['doi']}")
 
 
-def deposit(P, obj_id, z):
-    obj_dir = P.OCFL / obj_id
+def remove_stage(P, stage):
+    shutil.rmtree(stage, ignore_errors=True)
+    parent = stage.parent
+    while parent != P.ROOT and parent.is_dir() and not any(parent.iterdir()):
+        parent.rmdir()
+        parent = parent.parent
+
+
+def check_deposit_record(P, obj, doi):
+    """Stop, before anything is uploaded, if OBJ (the object.json built) is malformed."""
+    f = P.Findings()
+    P.schema_checker(f)("object.json", obj, "object")
+    problems = [x["message"] for x in f if x["severity"] == "error"]
+    for e in obj.get("external", []):
+        if not all(isinstance(e.get(k), str) and e.get(k) for k in ("role", "service", "record")):
+            problems.append(f"an external entry lacks role, service or record: {e}")
+        elif e["role"] not in ("deposit", "source") or not e["record"].startswith("https://"):
+            problems.append(f"an external entry with a bad role or record: {e}")
+        if "doi" in e and not re.match(r"^10\.[0-9]+(\.[0-9]+)*/\S+$", str(e["doi"])):
+            problems.append(f"an external entry with a malformed DOI: {e['doi']}")
+    if not [e for e in zenodo_entries(obj) if e.get("doi") == doi]:
+        problems.append(f"no external entry of the deposit of {doi}")
+    if problems:
+        raise RuntimeError("the object version built is malformed: " + "; ".join(problems))
+
+
+def deposit(P, label, z):
+    obj_id = P.resolve(label)
+    label = P.label_of(obj_id) or obj_id.split(":")[1]
+    obj_dir = P.obj_dir(obj_id)
     inv = P.load_inventory(obj_dir)
     if inv is None:
-        sys.exit(f"no object {obj_id}")
-    stage = P.ROOT / "zenodo-staging" / obj_id
+        sys.exit(f"no line {label}")
+    stage = P.ROOT / "zenodo-staging" / P.path_of(obj_id)
     state_path = stage / "state.json"
     if state_path.exists():
         state = json.loads(state_path.read_text())
-        if state["phase"] == "published":
-            print(f"{obj_id}: completing the object version of record {state['record']}")
+        if state["phase"] in ("published", "added"):
+            print(f"{label}: completing the object version of record {state['record']}")
             return commit(P, obj_id, stage, state)
-        print(f"{obj_id}: discarding the unpublished draft {state['record']}")
+        print(f"{label}: discarding the unpublished draft {state['record']}")
         try:
             z.call("DELETE", f"/deposit/depositions/{state['record']}")
         except RuntimeError as e:
             print(f"  (could not discard: {e})")
-        shutil.rmtree(stage)
+        remove_stage(P, stage)
 
     head_obj = P.read_json(obj_dir, inv, P.OBJ)
-    if head_obj["kind"] != "document":
-        sys.exit(f"{obj_id} is not a document")
-    if head_obj["status"] != "active":
-        sys.exit(f"{obj_id} is withdrawn")
-    # the current version: the last of the history (section 7.3)
-    cur = P.current_version(obj_dir, inv)
+    if head_obj.get("kind") != "document":
+        sys.exit(f"{label} is not a document")
+    if head_obj.get("parent"):
+        sys.exit(f"{label} is a branch (section 9), which these tools do not deposit on Zenodo yet")
+    signed = P.latest_signed(obj_dir, inv)
+    if signed is None:
+        sys.exit(f"{label} has no signed version that is not contested (section 7.3): nothing is deposited")
+    state_obj = P.read_json(obj_dir, inv, P.OBJ, signed)
+    if state_obj.get("status") != "active":
+        sys.exit(f"{label} is withdrawn")
+    # the current version: the last of the history (section 4.2)
+    cur = P.current_version(obj_dir, inv, signed)
     obj = P.read_json(obj_dir, inv, P.OBJ, cur)
     dc = P.read_json(obj_dir, inv, "datacite.json", cur)
     doc_version = obj["documentVersion"]
     if zenodo_entries(obj):
-        sys.exit(f"{obj_id}: document version {doc_version} is already on Zenodo "
+        sys.exit(f"{label}: document version {doc_version} is already on Zenodo "
                  f"({zenodo_entries(obj)[0]['doi']})")
 
     # 1-2. Draft: a new record, or a new version of the document's record;
     # Zenodo reserves the DOI when the draft is created.
-    prev_rec, prev_doi = previous_record(P, obj_dir, inv, doc_version)
+    prev_rec, prev_doi = previous_record(P, obj_dir, inv, doc_version, signed)
     if prev_rec:
         nv = z.call("POST", f"/deposit/depositions/{prev_rec}/actions/newversion")
         draft = z.call("GET", nv["links"]["latest_draft"])
@@ -303,32 +351,16 @@ def deposit(P, obj_id, z):
     P.write_json(state_path, state)
 
     try:
-        # 3. datacite.json and object.json with the DOI, in the staging area;
-        # the files are those of the object version holding the current version
-        files_dir = stage / "files"
-        files = {}
-        skip = notice_files(head_obj)
-        for lp, src in version_files(P, obj_dir, inv, cur).items():
-            if lp not in METADATA_FILES:
-                dest = files_dir / lp
-                dest.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copyfile(src, dest)
-                files[lp] = dest
-        # notices are kept in the archive (and in later object versions) but
-        # not uploaded: the files of a published record version are fixed
-        for lp in head_obj.get("notices", []):
-            if lp.get("path") and lp["path"] not in files:
-                src = obj_dir / P.content_path(inv, inv["head"], lp["path"])
-                dest = files_dir / lp["path"]
-                dest.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copyfile(src, dest)
-                files[lp["path"]] = dest
+        # 3. the object version, built in the staging area; its files are those of the
+        # object version holding the current version, and the files of the notices
+        files = {lp: f for lp, f in version_files(P, obj_dir, inv, cur).items() if lp not in METADATA_FILES}
+        skip = notice_files(state_obj)
+        for n in state_obj.get("notices", []):
+            if n.get("path") and n["path"] not in files:
+                files[n["path"]] = obj_dir / P.content_path(inv, signed, n["path"])
         today = datetime.date.today().isoformat()
         dc["doi"] = doi
-        if (P.SITE / obj_id / f"{obj_id}.html").exists():
-            dc["url"] = f"{P.ARCHIVE['baseUrl']}site/{obj_id}/{obj_id}.html"
-        else:
-            dc.setdefault("url", P.ARCHIVE["baseUrl"])
+        dc["url"] = dc.get("url") or P.landing_url(label)
         rel = [r for r in dc.get("relatedIdentifiers", [])
                if not (r["relationType"] in ("IsVersionOf", "IsNewVersionOf")
                        and "zenodo" in r["relatedIdentifier"])]
@@ -340,7 +372,7 @@ def deposit(P, obj_id, z):
                         "relationType": "IsNewVersionOf"})
         dc["relatedIdentifiers"] = rel
         if not P.date_of(dc, "Available"):
-            # a version not public at the time becomes public now (section 8)
+            # a version not public at the time becomes public now (section 4.4)
             P.set_date(dc, "Available", today)
         P.set_date(dc, "Updated", today)
         upload = {lp: f for lp, f in files.items() if lp not in skip}
@@ -350,26 +382,41 @@ def deposit(P, obj_id, z):
         if extra:
             entry["files"] = extra
         obj["external"] = obj.get("external", []) + [entry]
-        # notices and history as read from the head (section 7.3)
         obj.pop("notices", None)
         obj.pop("history", None)
-        P.carry_forward(head_obj, obj, inv, P.next_object_version(inv))
-        P.write_json(files_dir / "datacite.json", dc)
-        P.write_json(files_dir / P.OBJ, obj)
-        files["datacite.json"] = files_dir / "datacite.json"
-        files[P.OBJ] = files_dir / P.OBJ
-        plan["datacite.json"] = files["datacite.json"]
-        plan[P.OBJ] = files[P.OBJ]
-        state["files"] = sorted(files)
+        P.carry_forward(state_obj, obj, inv, P.next_object_version(inv))
+        content = dict(files, **{"datacite.json": P.json_bytes(dc)})
+        staged = P.add_version(obj_id, content, obj, f"Zenodo: document version {doc_version}, DOI {doi}",
+                               stage_in=stage / "version")
+        ver = staged["head"]
 
-        # 4. Upload, and compare the checksums Zenodo reports
+        def staged_file(logical):
+            cp = P.content_path(staged, ver, logical)
+            return (stage / "version" / cp) if cp.startswith(f"{ver}/") else obj_dir / cp
+        staged_obj = json.loads(staged_file(P.OBJ).read_text(encoding="utf-8"))
+        check_deposit_record(P, staged_obj, doi)
+        plan["datacite.json"] = staged_file("datacite.json")
+        plan[P.OBJ] = staged_file(P.OBJ)
+        state.update(phase="staged", version=ver)
+        P.write_json(state_path, state)
+
+        # 4. Upload, and compare the checksums Zenodo reports with the fixity of the inventory
         bucket = draft["links"]["bucket"]
         for name, path in sorted(plan.items()):
-            r = z.call("PUT", f"{bucket}/{urllib.parse.quote(name)}", raw=path.read_bytes())
-            local = P.digest(path, "md5")
-            if r.get("checksum") != f"md5:{local}":
-                raise RuntimeError(f"checksum of {name}: Zenodo {r.get('checksum')}, local md5:{local}")
-            print(f"  uploaded {name} (md5 {local})")
+            data = path.read_bytes()
+            if name == "sources.zip":
+                expect = extra[0]["md5"]
+            else:
+                cp = P.content_path(staged, ver, name)
+                expect = next((m for m, ps in staged.get("fixity", {}).get("md5", {}).items() if cp in ps), None)
+                if expect is None:
+                    raise RuntimeError(f"the inventory records no MD5 of {name} (appendix A.1)")
+            if hashlib.md5(data).hexdigest() != expect:
+                raise RuntimeError(f"{name} does not have the MD5 the inventory records")
+            r = z.call("PUT", f"{bucket}/{urllib.parse.quote(name)}", raw=data)
+            if r.get("checksum") != f"md5:{expect}":
+                raise RuntimeError(f"checksum of {name}: Zenodo {r.get('checksum')}, inventory md5:{expect}")
+            print(f"  uploaded {name} (md5 {expect})")
         z.call("PUT", f"/deposit/depositions/{recid}",
                {"metadata": zenodo_metadata(dc, P.ARCHIVE, obj_id)})
         state["phase"] = "uploaded"
@@ -378,21 +425,21 @@ def deposit(P, obj_id, z):
         # 5. Publish
         pub = z.call("POST", f"/deposit/depositions/{recid}/actions/publish")
     except BaseException:
-        print(f"{obj_id}: failed before publication; discarding draft {recid}")
+        print(f"{label}: failed before publication; discarding draft {recid}")
         try:
             z.call("DELETE", f"/deposit/depositions/{recid}")
         except RuntimeError as e:
             print(f"  (could not discard: {e})")
-        shutil.rmtree(stage, ignore_errors=True)
+        remove_stage(P, stage)
         raise
     state["phase"] = "published"
     P.write_json(state_path, state)
     if pub.get("doi") != doi:
-        sys.exit(f"Zenodo published DOI {pub.get('doi')}, not the reserved {doi}; "
-                 f"the staging folder {stage} is kept: fix datacite.json there and rerun")
-    print(f"{obj_id}: published {doi} (concept {pub.get('conceptdoi')})")
+        sys.exit(f"Zenodo published DOI {pub.get('doi')}, not the reserved {doi}; the staging folder "
+                 f"{stage} is kept: the version built there records the reserved DOI")
+    print(f"{label}: published {doi} (concept {pub.get('conceptdoi')})")
 
-    # 6. Commit the object version and rewrite the discovery document
+    # 6. Add the object version and rewrite the discovery document
     commit(P, obj_id, stage, state)
 
 
@@ -401,17 +448,24 @@ def run(P, args):
     if args.production:
         return deposit(P, args.id, z)
     # Sandbox: work on a temporary copy, so that test DOIs never enter the archive
+    obj_id = P.resolve(args.id)
+    owner = obj_id.split(":")[2]
     tmp = Path(tempfile.mkdtemp(prefix="opensheaf-zenodo-sandbox-"))
-    shutil.copytree(P.OCFL / args.id, tmp / "ocfl" / args.id)
-    for f in ("0=ocfl_1.1", "ocfl_layout.json"):
-        shutil.copyfile(P.OCFL / f, tmp / "ocfl" / f)
+    for oid in (obj_id, f"sheaf:{owner}:{owner}"):
+        if P.obj_dir(oid).exists():
+            shutil.copytree(P.obj_dir(oid), tmp / "ocfl" / P.path_of(oid))
+    for f in ("0=ocfl_1.1", "ocfl_layout.json", P.LAYOUT_FILE):
+        if (P.OCFL / f).exists():
+            shutil.copyfile(P.OCFL / f, tmp / "ocfl" / f)
     real_root, real_ocfl = P.ROOT, P.OCFL
     P.ROOT, P.OCFL = tmp, tmp / "ocfl"
     try:
         print(f"sandbox: working on a copy in {tmp}")
         deposit(P, args.id, z)
-        inv = P.load_inventory(P.OCFL / args.id)
-        print(json.dumps(P.read_json(P.OCFL / args.id, inv, P.OBJ)["external"], indent=2))
+        d = P.obj_dir(obj_id)
+        inv = P.load_inventory(d)
+        print(json.dumps(P.read_json(d, inv, P.OBJ)["external"], indent=2))
+        print("statuses: " + ", ".join(P.line_statuses(d, inv)[1]))
     finally:
         P.ROOT, P.OCFL = real_root, real_ocfl
         if args.keep:
@@ -421,9 +475,9 @@ def run(P, args):
 
 
 def add_parser(sub, P):
-    z = sub.add_parser("zenodo", help="deposit the current document version on Zenodo (appendix A)")
-    z.add_argument("id")
+    z = sub.add_parser("zenodo", help="deposit the current document version on Zenodo (appendix A.1)")
+    z.add_argument("id", metavar="LABEL")
     z.add_argument("--production", action="store_true",
-                   help="deposit on zenodo.org and commit (default: sandbox, on a copy)")
+                   help="deposit on zenodo.org and add the version (default: sandbox, on a copy)")
     z.add_argument("--keep", action="store_true", help="sandbox: keep the temporary copy")
     z.set_defaults(func=lambda args: run(P, args))
