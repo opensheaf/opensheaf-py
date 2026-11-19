@@ -42,7 +42,13 @@ in the archive.
     <<check the lines of an archive>>
 
 
+    <<check a branch>>
+
+
     <<check the members of a collection version>>
+
+
+    <<check the indexes of the archive>>
 
 
     <<check the archive as a whole>>
@@ -139,8 +145,9 @@ that such an archive is rebuilt, and these tools do not read it. Then the
 steps of section 14, in order.
 
     # in check an archive and list its findings:
-    def verify_findings():
-        """The findings of the checks of section 14 on the archive, in the order of 14.2 to 14.6."""
+    def verify_findings(remote=False):
+        """The findings of the checks of section 14 on the archive, in the order of 14.2 to 14.6;
+        REMOTE: also resolve the members of other archives (section 14.5)."""
         f = Findings()
         if OLD:
             f.error("archive", "specification 0.1: rebuild (section 16.1)")
@@ -160,8 +167,20 @@ steps of section 14, in order.
             schema("opensheaf.json", disc, "archive")
         found = check_storage(f, schema, disc)
         logs = check_key_logs(f, found, schema)
-        statuses = check_lines(f, found, logs, schema, disc)
+        resolver = None
+        if remote:
+            from . import remote as remote_
+            resolver = remote_.Resolver()
+        try:
+            statuses = check_lines(f, found, logs, schema, disc, resolver)
+            if resolver is not None:
+                for severity, message in resolver.notes:
+                    f.add(severity, "resolution", message)
+        finally:
+            if resolver is not None:
+                resolver.__exit__(None, None, None)
         check_archive(f, found, statuses, disc)
+        check_indexes(f, schema, disc)
         look_for_keys(f)
         return f
 
@@ -426,11 +445,13 @@ Lines (14.4)
 ------------
 
 For every other object, the verifier checks its identity, its records and
-its signatures. Drafts, of which these tools make none yet, are checked as
-section 10.1 says: no genesis record, and no line in `object.json`.
+its signatures. Drafts ([chapter 24](24-drafts.md)) are checked as section
+10.1 says, as they stand: no genesis record, and no line in `object.json`.
+With a resolver (`--remote`), the members of collections held in other
+archives are resolved.
 
     # in check the lines of an archive:
-    def check_lines(f, found, logs, schema, disc):
+    def check_lines(f, found, logs, schema, disc, resolver=None):
         """The checks of sections 14.4 and 14.5; returns {identifier: statuses} of the lines."""
         statuses, genesis_names = {}, {}
         tombstoned = {t.get("id") for t in disc.get("tombstones", []) if isinstance(t, dict)}
@@ -447,12 +468,15 @@ section 10.1 says: no genesis record, and no line in `object.json`.
             <<check the records of a line>>
             <<check the signatures of a line>>
         for gname, ids in genesis_names.items():
-            if len(ids) > 1:
-                f.error(", ".join(where(i) for i in ids), "objects with the same genesis record: only the "
+            lines = [i for i, branch in ids if not branch]
+            if len(lines) > 1:
+                f.error(", ".join(where(i) for i in lines), "objects with the same genesis record: only the "
                         "originator's line and its branches may share one (section 5.4)")
+        kept = {}
         for obj_id, (d, inv) in found.items():
             if (read_json(d, inv, OBJ) or {}).get("kind") == "collection" and obj_id in statuses:
-                check_members(f, found, logs, statuses, tombstoned, schema, obj_id, d, inv)
+                check_members(f, found, logs, statuses, tombstoned, schema, obj_id, d, inv, resolver)
+                check_accepted_copies(f, found, obj_id, d, inv, kept)
         return statuses
 
 ### Identity
@@ -462,10 +486,10 @@ and valid; the name in the identifier is one of its names (section 5.2),
 and every `object.json` records the line of the identifier. The owner of a
 line is the originator of its work, whose line is named by algorithm 0
 (section 5.3); a line of another owner is a branch, which declares its
-parent. Branches come with [phase b](20-collections.md) of the port, and
-are reported as not checked. Objects of the archive with the same genesis
+parent. Objects of the archive with the same genesis
 name must be the originator's line and its branches (section 5.4); here,
-where branches are not yet made, two such objects are an error.
+two lines that are not branches are an error. A branch is checked as
+section 9.3 says (below).
 
     # in check the identity of a line:
     _, nm, owner = obj_id.split(":")
@@ -490,19 +514,22 @@ where branches are not yet made, two such objects are an error.
         except ValueError as e:
             f.error(place, f"{GENESIS}: {e}")
     if rec is not None:
-        genesis_names.setdefault(names.name(genesis), []).append(obj_id)
+        genesis_names.setdefault(names.name(genesis), []).append((obj_id, "parent" in head))
         if rec["kind"] != head.get("kind"):
             f.error(place, f"its genesis record is of kind {rec['kind']}, its object.json of kind {head.get('kind')}")
         if not names.is_name_of(nm, genesis):
             f.error(place, "its name is not a name of its genesis record (section 5.2)")
         elif rec.get("originator") != owner:
             if "parent" in head:
-                f.warning(place, "a branch: its branch points are not checked by this version of the tools")
+                check_branch(f, place, obj_id, d, inv, genesis, logs, found, tombstoned, resolver)
             else:
                 f.error(place, "a line of another owner than the originator is a branch, and declares its "
                         "parent (section 5.3)")
         elif names.algorithm(nm) != 0:
             f.error(place, "the originator's line is named by algorithm 0 (section 5.3)")
+        elif any("parent" in (read_json(d, inv, OBJ, v) or {}) for v in inv["versions"]):
+            f.error(place, "the originator's line has no parent: an originator never owns a branch of its own "
+                    "work (sections 5.3 and 9)")
 
 ### Records
 
@@ -632,7 +659,8 @@ were missing.
         return errors
 
 A document version is its *own* files: everything except the descriptions,
-the identity files (the genesis record, section 4.1), and the files of
+the identity files (the genesis record and, in a branch, the evidence of
+its branch point, section 4.1), and the files of
 notices and of a withdrawal, which description-only versions add, and the
 file of the licence terms (`licence`, section 4.3): licence terms describe
 the object, like `rightsList` in `datacite.json`, not the document version,
@@ -652,8 +680,10 @@ belongs to the document version, since it was written and deposited with it
     if (obj.get("licence") or {}).get("path"):
         notes.add(obj["licence"]["path"])
     own = {p: dig for dig, ps in vinfo["state"].items() for p in ps
-           if p not in IDENTITY and p not in notes}
+           if p not in IDENTITY and not is_evidence(p) and p not in notes}
     change = (obj.get("changes") or {}).get("text")
+    if not seen and obj.get("parent"):
+        highest = n - 1          # a branch numbers on from its branch point (section 9.4)
 
 A document version seen before must have the same own files and change
 note, except while its sources are missing: then files may be added (a
@@ -737,11 +767,16 @@ the copy lacks, a warning. A revision set must also be in the order of the
 document's history (section 8.4), read from its latest signed version.
 A member of the head that is not held here is reported as removed when
 the archive has a tombstone of its line (section 13.3), and otherwise as
-not resolved, a warning: resolving members across archives comes with
-[phase b](20-collections.md) of the port.
+not resolved, a warning, unless the verifier resolves members (`--remote`):
+each pin is then resolved from the member's `at` as a resolver does
+([resolution](20-resolution.md)), and its status (section 8.5) is a result
+when verified, an error when not a version, and a warning otherwise,
+contested included (section 14.5). The copy found must be of the kind,
+name and owner the member gives, and a revision must hold its document
+version.
 
     # in check the members of a collection version:
-    def check_members(f, found, logs, statuses, tombstoned, schema, obj_id, d, inv):
+    def check_members(f, found, logs, statuses, tombstoned, schema, obj_id, d, inv, resolver=None):
         for ver in inv["versions"]:
             at = f"{where(obj_id)} {ver}"
             mem = read_json(d, inv, "members.json", ver)
@@ -758,11 +793,31 @@ not resolved, a warning: resolving members across archives comes with
                 if mid in found:
                     <<check the pins of a member held in the archive>>
                 elif ver == inv["head"]:
-                    if mid in tombstoned:
+                    if resolver is not None:
+                        <<resolve the pins of a member of another archive>>
+                    elif mid in tombstoned:
                         f.result(who, "removed: a tombstone in this archive (section 13.3)")
                     else:
-                        f.warning(who, "not held in this archive: not resolved (members of other archives are "
-                                  "resolved by a later version of these tools)")
+                        f.warning(who, "not held in this archive: not resolved (osheaf verify --remote resolves "
+                                  "it, section 14.5)")
+
+The pins of a member of another archive, resolved.
+
+    # in resolve the pins of a member of another archive:
+    for pv, pin, n in member_pins(m):
+        res = resolver.pin(m.get("name"), m.get("owner"), pv, pin, m.get("at", []))
+        if res.copy is not None:
+            pobj = res.copy.read(OBJ, int(pv[1:])) or {}
+            if (pobj.get("kind"), pobj.get("name"), pobj.get("owner")) != \
+                    (m.get("kind"), m.get("name"), m.get("owner")) or (n is not None and pobj.get("documentVersion") != n):
+                f.error(f"{who} {pv}", "the version pinned is not of the kind, line and document version the "
+                        "member gives (section 8.5)")
+        if res.status == "not a version":
+            f.error(f"{who} {pv}", "not a version: a collection pins only signed versions (section 8.5)")
+        elif res.status == "verified":
+            f.result(f"{who} {pv}", f"verified at {res.copy.where} (section 8.5)")
+        else:
+            f.warning(f"{who} {pv}", f"{res.status} (section 8.5)")
 
 The fields of a member, by the type of its collection.
 
@@ -811,6 +866,137 @@ The pins of a member held in the archive.
         pos = [order.index(x) for x in vetted if x in order]
         if pos != sorted(pos):
             f.error(who, "revisions not in the order of the history (section 8.4)")
+
+Selections keep their accepted copies apart: two selections of the
+archive with the same owner must not keep accepted copies of the same
+document (sections 9.6 and 14.5), which would be one line. An accepted copy
+is a member of a selection that is a branch owned by the selection's owner;
+the document is its genesis record, by its genesis name.
+
+    # in check the members of a collection version:
+    def check_accepted_copies(f, found, obj_id, d, inv, kept):
+        mem = read_json(d, inv, "members.json") or {}
+        if mem.get("type") != "selection":
+            return
+        owner = obj_id.split(":")[2]
+        for m in mem.get("members", []):
+            mid = names.object_id(m.get("name"), m.get("owner"))
+            if m.get("owner") != owner or mid not in found:
+                continue
+            md, minv = found[mid]
+            if "parent" not in (read_json(md, minv, OBJ) or {}):
+                continue
+            g = read_logical(md, minv, GENESIS, "v1")
+            key = (owner, names.name(g.read_bytes()) if g else mid)
+            other = kept.setdefault(key, obj_id)
+            if other != obj_id:
+                f.error(where(obj_id), f"keeps an accepted copy of the document that {where(other)}, a selection "
+                        "of the same owner, keeps: selections keeping copies of one document have different "
+                        "owners (section 9.6)")
+
+Branches (9.3, 9.4)
+-------------------
+
+A branch is checked at its first version and at every version that moves
+its branch point, as section 9.3 says, by the checks of the
+[branches](23-branches.md) module (`branch.verdict`), against the key logs
+held beside it; and between those versions the identity files (the
+genesis record and the evidence) must stay the same, byte for byte
+(section 9.4). A version that moves the branch point must keep to the same
+parent line, move forward, to another document version, and be
+continuous: the two parent inventories have the same `id`, every entry of
+`versions` of the previous one is equal to the entry of the same version
+in the new one, and the digests of those entries are in the new manifest.
+
+An inconsistent branch point is an error, an unchecked one a warning; the
+verdict of the branch, the weakest of its branch points, is a result, and
+so is whether the parent's line is held here, removed (a tombstone) or
+withdrawn, or found elsewhere (with `--remote`, at the base URL that
+`parent.url` gives when the storage root has its conventional name
+`ocfl/`, and at the places the resolver knows). A rename that neither the
+objects nor the tombstones of the archive justify (the names of smaller
+algorithm numbers are free here for the owner) is a warning (section 5.3).
+
+    # in check a branch:
+    def check_branch(f, place, obj_id, d, inv, genesis, logs, found, tombstoned, resolver=None):
+        from . import branch
+        _, nm, owner = obj_id.split(":")
+        prev_obj = prev_ev = None
+        verdicts = []
+        for ver in sorted(inv["versions"], key=lambda v: int(v[1:])):
+            at = f"{place} {ver}"
+            obj = read_json(d, inv, OBJ, ver) or {}
+            state = {p: dig for dig, ps in inv["versions"][ver]["state"].items() for p in ps}
+            ev = {p: dig for p, dig in state.items() if is_evidence(p) or p == GENESIS}
+            p = obj.get("parent")
+            if not isinstance(p, dict):
+                f.error(at, "every version of a branch has parent (section 9.1)")
+                continue
+            if prev_obj is not None and p == prev_obj.get("parent"):
+                if ev != prev_ev:
+                    f.error(at, "the identity files change without moving the branch point (section 9.4)")
+            else:
+                v, problems = branch.verdict(branch.level_of_version(d, inv, ver), obj, genesis, logs.get)
+                verdicts.append(v)
+                if v == branch.INCONSISTENT:
+                    f.error(at, "inconsistent branch point: " + "; ".join(problems))
+                elif v == branch.UNCHECKED:
+                    f.warning(at, "unchecked branch point: " + "; ".join(problems))
+                if prev_obj is not None and v != branch.INCONSISTENT:
+                    <<check that a branch point moves forward and continuously>>
+            prev_obj, prev_ev = obj, ev
+        if not verdicts:
+            return
+        verdict = max(verdicts, key=branch.ORDER.get)
+        p = prev_obj["parent"]
+        pid = names.object_id(p["name"], p["owner"])
+        f.result(place, f"a branch of {where(pid)}: {verdict} (section 9.3)")
+        <<report the parent line of a branch>>
+        rec = names.read_genesis(genesis)
+        if nm != p["name"] and names.algorithm(nm) > names.algorithm(p["name"]):
+            gone = {t.get("name") for t in TOMBSTONES if t.get("owner") == owner}
+            for k in range(names.algorithm(p["name"]), names.algorithm(nm)):
+                other = names.name(genesis, k)
+                if names.object_id(other, owner) not in found and other not in gone:
+                    f.warning(place, f"renamed by algorithm {names.algorithm(nm)}, though algorithm {k} gives a "
+                              "line free here (section 5.3)")
+                    break
+        if owner == rec.get("originator"):
+            f.error(place, "an originator never owns a branch of its own work (section 5.3)")
+
+Moving forward and continuously (section 9.4).
+
+    # in check that a branch point moves forward and continuously:
+    old = prev_obj["parent"]
+    pinv_old = json.loads(read_logical(d, inv, "parent.inventory.json", f"v{int(ver[1:]) - 1}").read_bytes())
+    pinv_new = json.loads(read_logical(d, inv, "parent.inventory.json", ver).read_bytes())
+    if (p.get("owner"), p.get("name")) != (old.get("owner"), old.get("name")):
+        f.error(at, "a branch point moves only to a version of the same parent line (section 9.4)")
+    elif int(p["objectVersion"][1:]) <= int(old["objectVersion"][1:]) or \
+            p.get("documentVersion") == old.get("documentVersion"):
+        f.error(at, "a branch point moves only to a higher object version, holding another document "
+                "version (section 9.4)")
+    if pinv_old.get("id") != pinv_new.get("id") or any(
+            pinv_new.get("versions", {}).get(v) != e for v, e in pinv_old.get("versions", {}).items()) or any(
+            dg not in pinv_new.get("manifest", {}) for e in pinv_old.get("versions", {}).values()
+            for dg in e.get("state", {})):
+        f.error(at, "the new parent inventory does not continue the previous one (section 9.4)")
+
+The parent's line, as far as the verifier finds it.
+
+    # in report the parent line of a branch:
+    if pid in found:
+        pd, pinv = found[pid]
+        signed = latest_signed(pd, pinv, logs.get(p["owner"]))
+        status = (read_json(pd, pinv, OBJ, signed) or {}).get("status") if signed else None
+        f.result(place, "the parent's line is held here" + (", withdrawn" if status == "withdrawn" else ""))
+    elif pid in tombstoned:
+        f.result(place, "the parent's line is removed: a tombstone in this archive (section 13.3)")
+    elif resolver is not None:
+        res = resolver.latest(p["name"], p["owner"], [p["url"].split("/ocfl/")[0] + "/"] if p.get("url") else [])
+        f.result(place, f"the parent's line: {res.status}" + (f" at {res.copy.where}" if res.copy else ""))
+    else:
+        f.result(place, "the parent's line is not held here (osheaf verify --remote looks for it)")
 
 The archive as a whole (14.6)
 -----------------------------
@@ -914,6 +1100,65 @@ The tombstones, each also reported as a removal, a result.
         else:
             f.result("opensheaf.json", f"removed: {tid} ({t.get('date')}: {t.get('reason')})")
 
+The indexes
+-----------
+
+The indexes the discovery document declares (section 12.5) are checked
+against the storage root: every file against the schema of indexes, under
+the name of its prefix; every object with a genesis record and every
+sealed version, carried key-log versions included, has its entry, with
+the values its object gives, in the file of its prefix; each tombstone has
+its entries in `names/` and `sha512/` with the status `removed`, and none
+in `owners/`; and, the verifier having access to the files, there are no
+other entries, among them none of a draft. The entries the tools would
+write now are the measure (`index_entries`, [chapter 16](16-index.md)).
+
+    # in check the indexes of the archive:
+    def check_indexes(f, schema, disc):
+        declared = disc.get("indexes") or {}
+        if not declared:
+            f.warning("opensheaf.json", "no indexes declared (section 12.5)")
+            return
+        expected = index_entries()
+        gone = {t.get("id"): t for t in disc.get("tombstones", []) if isinstance(t, dict)}
+        for index, length in declared.items():
+            if index not in INDEX_KEY:
+                continue
+            key, held = INDEX_KEY[index], []
+            for p in sorted((ROOT / index).glob("*.json")) if (ROOT / index).is_dir() else []:
+                place = f"{index}/{p.name}"
+                try:
+                    data = json.loads(p.read_text(encoding="utf-8"))
+                except ValueError as e:
+                    f.error(place, f"not JSON: {e}")
+                    continue
+                schema(place, data, "index")
+                if data.get("index") != index:
+                    f.error(place, f"an index file of {index}/ names the index {data.get('index')}")
+                for e in data.get("entries", []):
+                    if not isinstance(e, dict) or str(e.get(key, ""))[:length] != p.stem or len(p.stem) != length:
+                        f.error(place, f"an entry not in the file of its prefix ({str(e)[:60]}...)")
+                    held.append(e)
+            want = [e for e in expected[index] if e.get("status") != "removed"]
+            for e in want:
+                if e not in held:
+                    f.error(f"{index}/", f"no entry, or a stale one, for {e.get('id', e.get('owner'))} "
+                            f"{e.get('version', '')} (section 12.5)")
+            for e in held:
+                if e in want:
+                    continue
+                if e.get("id") in gone and e.get("status") == "removed":
+                    continue
+                f.error(f"{index}/", f"an entry the storage root does not justify: {e.get('id', e.get('owner'))} "
+                        f"{e.get('version', '')} (section 12.5)")
+            for tid, t in gone.items():
+                if index in ("names", "sha512") and not any(e.get("id") == tid and e.get("status") == "removed"
+                                                            for e in held):
+                    f.error(f"{index}/", f"no entry with the status removed for the tombstone {tid} (section 12.5)")
+                if index == "owners" and any(e.get("owner") == t.get("owner") and t.get("name") in e.get("names", [])
+                                             for e in held):
+                    f.error(f"{index}/", f"owners/ lists {tid}, which is taken down (section 12.5)")
+
 Keys left in the archive
 ------------------------
 
@@ -957,14 +1202,12 @@ The command prints the findings, one per line, with their severity and
 place, then their numbers; with `--json`, the findings as a JSON list, for
 programs. Its exit status counts the errors only, so that it can run in
 continuous integration: an archive with warnings passes (section 14.1).
-Resolving the members of other archives (`--remote`) comes back with
-[phase b](20-collections.md) of the port.
+With `--remote`, the members of collections held in other archives are
+resolved from their locations and given their statuses (section 14.5).
 
     # in the verify command:
     def verify(args):
-        if getattr(args, "remote", False):
-            sys.exit("verify --remote: not yet available for specification 0.2")
-        found = verify_findings()
+        found = verify_findings(remote=getattr(args, "remote", False))
         if getattr(args, "json", False):
             print(json.dumps(found, indent=2, ensure_ascii=False))
         else:

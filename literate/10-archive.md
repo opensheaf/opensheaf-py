@@ -6,7 +6,8 @@ This chapter and the nine that follow it (up to the
 heart of opensheaf-py. It knows what an OpenSheaf archive is on disk: a
 folder with a configuration file, an OCFL storage root holding the objects,
 a discovery document and the pages generated for readers. Everything else in
-the package (the [collections](20-collections.md) across archives, the
+the package (the [resolution](20-resolution.md) of other archives and the
+[collections](21-collections.md) across them, the
 [website](30-website.md), the imports from [arXiv](40-arxiv.md), the DOIs of
 [Zenodo](50-zenodo.md), the [command line](60-command-line.md)) is built on
 the functions defined here.
@@ -223,8 +224,9 @@ its storage root, `SITE` the folder of the HTML versions of TeXmacs
 documents, `TM_HOME` the private TeXmacs profile; `ARCHIVE` holds the
 settings that describe the archive, `TEXMACS` and `INDEX` those of the
 TeXmacs profile and of the index. `LAYOUT` is the storage layout,
-`LABELS` maps the labels of the archive's lines to their identifiers, and
-`OLD` says that the folder is an archive of specification 0.1, which these
+`LABELS` maps the labels of the archive's lines to their identifiers,
+`TOMBSTONES` holds the tombstones of the discovery document (section 13.3),
+which nothing else keeps, and `OLD` says that the folder is an archive of specification 0.1, which these
 tools no longer read (below).
 
     # in the settings of the archive, set when it is configured:
@@ -235,6 +237,7 @@ tools no longer read (below).
     INDEX = {}
     LAYOUT = None
     LABELS = {}
+    TOMBSTONES = []
     OLD = False
 
 The fixed values: the version of the specification written into every file;
@@ -308,8 +311,8 @@ that is not the TeXmacs profile or the index describes the archive; the
 contact defaults to the base URL, the profiles to none, the layout to the
 owner-name layout that section 3.2 recommends. The configuration may name
 the TeXmacs version the archive uses, which then goes into the toolchain of
-every typeset document. The labels are read from the discovery document,
-which keeps them (section 3.1).
+every typeset document. The labels and the tombstones are read from the
+discovery document, which keeps them (sections 3.1 and 13.3).
 
 An archive made under version 0.1 is recognised by its configuration,
 which names an `archiveId`, or by its discovery document. Section 16.1
@@ -330,7 +333,7 @@ other command stops with that message (see the
 
     def configure(root):
         """Load the archive configuration and set the paths."""
-        global ARCHIVE, TEXMACS, INDEX, TEXMACS_VERSION, LABELS, OLD
+        global ARCHIVE, TEXMACS, INDEX, TEXMACS_VERSION, LABELS, TOMBSTONES, OLD
         cfg = read_config(root)
         disc_path = Path(root) / "opensheaf.json"
         disc = json.loads(disc_path.read_text(encoding="utf-8")) if disc_path.exists() else {}
@@ -350,6 +353,7 @@ other command stops with that message (see the
         TEXMACS_VERSION = TEXMACS.get("version", TEXMACS_VERSION)
         INDEX = cfg.get("index", {})
         LABELS = {o["label"]: o["id"] for o in disc.get("objects", []) if o.get("label")}
+        TOMBSTONES = list(disc.get("tombstones", []))
         return ROOT
 
 The owners of the archive are the owner of the configuration and the
@@ -692,6 +696,12 @@ and a message. The function
    log (sections 7.1 and 7.2), in the witness folder;
 6. moves the version into place.
 
+A draft (section 10.1) goes through the same function, with three
+differences: it is never signed, so no key is needed and no witness folder
+is written; it has no `previous`, since its versions may be rewritten; and
+nothing is checked before extending it, since nothing relies on it. Its
+identifier, `sheaf:draft:<id>`, tells it apart.
+
 Everything is first written in a staging folder of the archive, outside the
 storage root, and moved into the storage root at the end: a new object by
 renaming its folder, which is atomic; a new version of an existing object
@@ -712,14 +722,15 @@ object only grows: a version, once written, never changes.
         content is not stored again. Returns the inventory."""
         d = obj_dir(obj_id)
         inv = load_inventory(d)
-        log, latest, signers = signing_keys(obj["owner"])
+        draft = obj_id.startswith("sheaf:draft:")
+        log, latest, signers = (None, None, []) if draft else signing_keys(obj["owner"])
         obj = {k: v for k, v in obj.items() if k != "previous"}
         if inv is None:
             if d.exists():
                 sys.exit(f"{d} exists, and is not an object")
             inv = {"id": obj_id, "type": owners.INVENTORY_TYPE, "digestAlgorithm": "sha512",
                    "head": "v0", "manifest": {}, "versions": {}, "fixity": {"md5": {}, "sha256": {}}}
-        else:
+        elif not draft:
             check_before_extending(obj_id, d, inv, acknowledged)
             obj["previous"] = owners.sidecar_digest((d / inv["head"] / "inventory.json.sha512").read_bytes())
         ver = f"v{int(inv['head'][1:]) + 1}"
@@ -754,7 +765,7 @@ object only grows: a version, once written, never changes.
             (stage / ver / "inventory.json.sha512").write_bytes(sidecar)
             wdir = stage / "witnesses"
             wdir.mkdir()
-            pin, dig = log.pin(latest.number), names.sha512_hex(data)
+            pin, dig = (log.pin(latest.number) if log else None), names.sha512_hex(data)
             for key in signers:
                 (wdir / sign.file_name(key.did)).write_bytes(
                     sign.signature_file(key, obj_id, ver, dig, obj["owner"], pin))
@@ -773,17 +784,19 @@ witness folder of the version, then the new root inventory.
         new.mkdir()
         (new / "0=ocfl_object_1.1").write_text("ocfl_object_1.1\n")
         os.rename(stage / ver, new / ver)
-        (new / sign.WITNESSES).parent.mkdir(parents=True)
-        (new / sign.WITNESSES).mkdir()
-        os.rename(wdir, new / sign.WITNESSES / ver)
+        if not draft:
+            (new / sign.WITNESSES).parent.mkdir(parents=True)
+            (new / sign.WITNESSES).mkdir()
+            os.rename(wdir, new / sign.WITNESSES / ver)
         (new / "inventory.json").write_bytes(data)
         (new / "inventory.json.sha512").write_bytes(sidecar)
         d.parent.mkdir(parents=True, exist_ok=True)
         os.rename(new, d)
     else:
         os.rename(stage / ver, d / ver)
-        (d / sign.WITNESSES).mkdir(parents=True, exist_ok=True)
-        os.rename(wdir, d / sign.WITNESSES / ver)
+        if not draft:
+            (d / sign.WITNESSES).mkdir(parents=True, exist_ok=True)
+            os.rename(wdir, d / sign.WITNESSES / ver)
         for name, b in (("inventory.json", data), ("inventory.json.sha512", sidecar)):
             (stage / name).write_bytes(b)
             os.replace(stage / name, d / name)

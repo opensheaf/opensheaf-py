@@ -14,8 +14,10 @@ Every line needs its owner's key log beside it, in the same storage root
 owner: the owner-name layout puts it at `<owner>/<owner>/`, next to them,
 and a new version of the key log, written there, is at once beside every
 line. An owner that also writes in other archives copies its owner object
-there; [phase b](20-collections.md) of the port will bring `owner pull`,
-which fetches a longer copy of a key log.
+there, and brings each copy up to date from another with `osheaf owner
+pull`, which meets two copies of a key log as section 6.3 says
+([copies](22-mirrors.md)). The last command of this chapter, `osheaf
+sign`, signs a version of a line again after an exposure.
 
     # in the commands of owners and their keys:
     <<the owner a command is about>>
@@ -43,6 +45,9 @@ which fetches a longer copy of a key log.
 
 
     <<a new current key for this device>>
+
+
+    <<sign again a version contested by an exposed key>>
 
 The owner a command is about is the archive's, unless `--owner` names
 another owner it hosts. Its key log must be in the storage root.
@@ -360,3 +365,66 @@ rotation keys kept apart. Until then it signs nothing.
         print(f"kept in {store}; it signs once a version of the key log adds it: "
               f"osheaf owner rotate --add {key.did} --rotation-key FILE ... --export DIR")
         return key
+
+Signing again
+-------------
+
+The signatures made with a key that the owner's key log exposes stay good,
+since the format does not date signatures; but the versions that need
+them are *contested* (section 7.3), never the latest signed version, and
+archives that know of the exposure never add them (section 7.5). The owner
+may add signatures to a version later, with current keys that have not
+signed it, only to a version it knows it made, and only while it is not
+ended (sections 6.4 and 7.1): so it signs again, with keys not exposed, a
+version contested by an exposed key, which is then signed by keys that
+are not suspect, and no longer contested.
+
+`osheaf sign LABEL --version vN` does that. It refuses a version that is
+not contested (there is nothing to repair), an owner that has ended (by an
+ending version or a fork: `signing_keys` signs nothing for it, and after a
+fork nothing is added without evidence, section 7.5), and a device that
+does not hold `threshold` current keys of the latest version of the key
+log that have not signed the version. The owner confirms that it made the
+version, by typing the first eight characters of its inventory digest,
+unless `--yes`: a thief holding an exposed key could have made it
+(section 7.3). The signature files name the latest version of the key log,
+and are added to the witness folder, never replacing one.
+
+    # in sign again a version contested by an exposed key:
+    def sign_again(args):
+        """Sign again a version of a line contested by an exposed key (sections 6.4 and 7.1)."""
+        obj_id = resolve(args.id)
+        d = obj_dir(obj_id)
+        inv = load_inventory(d)
+        ver = args.version
+        if ver not in inv["versions"]:
+            sys.exit(f"{args.id} has no object version {ver}")
+        owner = obj_id.split(":")[2]
+        if owner not in archive_owners():
+            sys.exit(f"{args.id} is a line of an owner this archive does not host: only its owner signs it")
+        log, latest, signers = signing_keys(owner)
+        statuses = line_statuses(d, inv, log)[1]
+        status = statuses[int(ver[1:]) - 1]
+        if status != sign.CONTESTED:
+            sys.exit(f"{args.id} {ver} is {status}: signing again is for a version contested by an exposed key "
+                     "(section 7.1)")
+        held = set(witnesses_of(d, ver))
+        fresh = [k for k in signers if k.did not in log.exposed_keys() and sign.file_name(k.did) not in held]
+        if len(fresh) < latest.keys["threshold"]:
+            sys.exit(f"this device holds {len(fresh)} current key(s) of {owner} that have not signed {ver}, and "
+                     f"v{latest.number} of the key log needs {latest.keys['threshold']}")
+        dig = names.sha512_hex((d / ver / "inventory.json").read_bytes())
+        if not getattr(args, "yes", False):
+            print(f"{args.id} {ver}: document version {doc_version_of(d, inv, ver)}, deposited "
+                  f"{inv['versions'][ver]['created']}: {inv['versions'][ver].get('message', '')}")
+            if input(f"did {owner[:16]}... make it? type {dig[:8]} to sign it again: ").strip() != dig[:8]:
+                sys.exit("not confirmed: nothing was signed")
+        wdir = d / sign.WITNESSES / ver
+        wdir.mkdir(parents=True, exist_ok=True)
+        pin = log.pin(latest.number)
+        for key in fresh:
+            with open(wdir / sign.file_name(key.did), "xb") as f:
+                f.write(sign.signature_file(key, obj_id, ver, dig, owner, pin))
+        write_discovery()
+        print(f"{args.id} {ver}: signed again by {len(fresh)} key(s), naming v{latest.number} of the key log: "
+              f"{line_statuses(d, inv, log)[1][int(ver[1:]) - 1]}")

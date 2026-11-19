@@ -27,26 +27,36 @@ file, as the specification says ("as its checksum file states it").
 
 The status is the line's, read from its latest signed version, whatever
 document version that holds (section 13.1); a copy without a signed version
-gives that of its head. A key log is always `active`. Drafts, of which these
-tools make none yet, would be listed apart, in `drafts`, with their kind and
-head, as unfinished work on which nothing may rely (section 10.1).
+gives that of its head. A key log is always `active`. Drafts
+([chapter 24](24-drafts.md)) are listed apart, in `drafts`, with their kind
+and head, as unfinished work on which nothing may rely (section 10.1).
 
 The discovery document is rewritten whole every time, from the storage
 root, so that it cannot drift, by every command that adds or changes an
 object (section 3.1: "rewritten whenever an object is added or changed").
 Two things in it are not in the storage root, and are carried from the
 document it replaces: the labels, which `LABELS` holds, and the tombstones
-of objects taken down (section 13.3), which are never removed but when the
-line returns, and which no command of these tools writes yet. Version 0.1
-had `archiveId`, `mirrorOf` and `mirrors`; version 0.2 names no archive, and
-a mirror is listed like any line (section 11). The other optional parts
-(`indexes`, `feed`) are not written yet.
+of objects taken down (section 13.3), which `TOMBSTONES` holds, never
+removed but when the line returns ([takedowns](25-takedown.md)). Version
+0.1 had `archiveId`, `mirrorOf` and `mirrors`; version 0.2 names no
+archive, and a mirror is listed like any line (section 11). `indexes`
+declares the three indexes, which are written with the discovery document
+(below); `feed` is not written yet.
 
 `extensions` lists the extensions the objects use (section 2): the names
 of the data of extensions in the key logs, as of their latest version (or
 their genesis record), and in the `object.json` of the heads.
 
     # in write the discovery document of the archive:
+    def line_status(d, inv, head):
+        """The status of the object in D (section 13.1): that of its latest signed version, or
+        else of its head; always active for a key log."""
+        if head.get("kind") == "owner":
+            return "active"
+        signed = latest_signed(d, inv)
+        return (read_json(d, inv, OBJ, signed) if signed else head).get("status", "active")
+
+
     def discovery():
         objs, drafts, used = [], [], set()
         for obj_id, d, inv in objects():
@@ -57,15 +67,12 @@ their genesis record), and in the `object.json` of the heads.
             if obj_id.startswith("sheaf:draft:"):
                 drafts.append({"id": obj_id, "kind": head.get("kind"), "head": inv["head"]})
                 continue
-            status = "active"
             if head.get("kind") == "owner":
                 try:
                     used.update(owners.load_key_log(d).extensions() or {})
                 except owners.OwnerError:
                     pass
-            else:
-                signed = latest_signed(d, inv)
-                status = (read_json(d, inv, OBJ, signed) if signed else head).get("status", "active")
+            status = line_status(d, inv, head)
             entry = {"id": obj_id, "kind": head.get("kind"), "name": head.get("name"),
                      "owner": head.get("owner"), "head": inv["head"],
                      "inventorySha512": owners.sidecar_digest((d / "inventory.json.sha512").read_bytes()),
@@ -73,23 +80,160 @@ their genesis record), and in the `object.json` of the heads.
             if label_of(obj_id):
                 entry["label"] = label_of(obj_id)
             objs.append(entry)
-        old = ROOT / "opensheaf.json"
-        tombstones = json.loads(old.read_text(encoding="utf-8")).get("tombstones") if old.exists() else None
         doc = {"format": "opensheaf-archive/0.2", "specification": SPEC, "name": ARCHIVE["name"],
                "contact": ARCHIVE["contact"], "storageRoot": "ocfl/", "storageLayout": LAYOUT}
         if ARCHIVE["mainCollection"] in LABELS:
             doc["mainCollection"] = LABELS[ARCHIVE["mainCollection"]]
-        doc.update(profiles=ARCHIVE["profiles"], extensions=sorted(used), owners=archive_owners(), objects=objs)
+        doc.update(profiles=ARCHIVE["profiles"], extensions=sorted(used), owners=archive_owners(),
+                   indexes=dict(INDEXES), objects=objs)
         if drafts:
             doc["drafts"] = drafts
-        if tombstones:
-            doc["tombstones"] = tombstones
+        if TOMBSTONES:
+            doc["tombstones"] = TOMBSTONES
         return doc
 
 
     def write_discovery():
-        """Write the discovery document opensheaf.json from the storage root."""
+        """Write the discovery document opensheaf.json and the indexes from the storage root."""
+        write_indexes()
         write_json(ROOT / "opensheaf.json", discovery())
+
+The indexes
+-----------
+
+An archive SHOULD keep three indexes of its objects, next to its discovery
+document (section 12.5): `names/`, by name, `owners/`, by owner name, and
+`sha512/`, by inventory digest. A resolver that knows a name, an owner or
+a pin finds what it looks for by fetching one small file, without reading
+the whole discovery document or any object; and since `names/` holds the
+text of every genesis record, the lines of a work can be searched for from
+the indexes alone (section 12.4). Each index is a folder of files
+`<p>.json`, one per prefix `<p>` of the keys, of the length the discovery
+document declares in `indexes`: these tools use two characters, so that
+`names/` and `owners/` (base32) have at most 1024 files and `sha512/`
+(hexadecimal) 256. A file without entries is omitted.
+
+The indexes are maps, like the discovery document, and are rewritten with
+it, whole, from the storage root, by every command that adds or changes an
+object. The entries:
+
+- in `names/`, for each object with a genesis record, its `name`, `owner`,
+  `id` and `status`, its `originator` (for a key log, the owner itself),
+  the text of its `genesis.json` and its label, if any;
+- in `owners/`, for each owner with lines in the storage root, its owner
+  name and the names of those lines, its key log among them;
+- in `sha512/`, for each sealed object version, and each key-log version
+  carried by a fork record (section 6.3), its `inventorySha512`, `id`,
+  `version` and `status`, a carried version having the identifier of its
+  key log and its own number.
+
+Drafts are never indexed. An object taken down
+([takedowns](25-takedown.md)) keeps its entries in `names/` and `sha512/`,
+with the status `removed`: since its files are gone, they are carried from
+the index files being replaced (the takedown writes them just before
+deleting), and the tombstone's own pin is added if it is missing. A
+takedown removes the name from `owners/`.
+
+    # in write the discovery document of the archive:
+    INDEXES = {"names": 2, "owners": 2, "sha512": 2}
+    INDEX_FORMAT = "opensheaf-index/0.2"
+    INDEX_KEY = {"names": "name", "owners": "owner", "sha512": "inventorySha512"}
+
+
+    def index_entries():
+        """{index: [entries]} of the storage root and of its tombstones (section 12.5)."""
+        out = {"names": [], "owners": [], "sha512": []}
+        lines = {}
+        for obj_id, d, inv in objects():
+            if inv is None or obj_id is None or obj_id.startswith("sheaf:draft:"):
+                continue
+            head = read_json(d, inv, OBJ) or {}
+            gpath = read_logical(d, inv, GENESIS)
+            if gpath is None or len(obj_id.split(":")) != 3:
+                continue
+            genesis = gpath.read_bytes()
+            try:
+                rec = names.read_genesis(genesis)
+            except ValueError:
+                continue
+            _, nm, owner = obj_id.split(":")
+            status = line_status(d, inv, head)
+            entry = {"name": nm, "owner": owner, "id": obj_id, "status": status,
+                     "originator": owner if rec["kind"] == "owner" else rec.get("originator"),
+                     "genesis": genesis.decode("utf-8")}
+            if label_of(obj_id):
+                entry["label"] = label_of(obj_id)
+            out["names"].append(entry)
+            lines.setdefault(owner, []).append(nm)
+            for n in range(1, int(inv["head"][1:]) + 1):
+                sc = d / f"v{n}" / "inventory.json.sha512"
+                if sc.exists():
+                    out["sha512"].append({"inventorySha512": owners.sidecar_digest(sc.read_bytes()),
+                                          "id": obj_id, "version": f"v{n}", "status": status})
+            if head.get("kind") == "owner":
+                try:
+                    log = owners.load_key_log(d)
+                except owners.OwnerError:
+                    continue
+                for v in log.versions:
+                    for c in (v.carried if v.fork_record else []):
+                        out["sha512"].append({"inventorySha512": c.digest, "id": obj_id,
+                                              "version": f"v{c.number}", "status": "active"})
+        out["owners"] = [{"owner": o, "names": sorted(ns)} for o, ns in sorted(lines.items())]
+        out["names"] += removed_entries("names")
+        out["sha512"] += removed_entries("sha512")
+        return out
+
+
+    def removed_entries(index):
+        """The entries of the lines taken down, kept from the index files of INDEX with the status
+        removed, and the tombstones' own entries when the files lack them (sections 12.5 and 13.3)."""
+        gone = {t["id"]: t for t in TOMBSTONES}
+        kept = [dict(e, status="removed") for e in read_index(index) if e.get("id") in gone]
+        for t in gone.values():
+            if index == "names" and not any(e["id"] == t["id"] for e in kept):
+                kept.append({"name": t["name"], "owner": t["owner"], "id": t["id"], "status": "removed"})
+            if index == "sha512" and not any(e["id"] == t["id"] and e["version"] == t["lastVersion"]
+                                             for e in kept):
+                kept.append({"inventorySha512": t["inventorySha512"], "id": t["id"],
+                             "version": t["lastVersion"], "status": "removed"})
+        return kept
+
+
+    def read_index(index):
+        """Every entry of the files of the index INDEX held next to the discovery document."""
+        out = []
+        for p in sorted((ROOT / index).glob("*.json")) if (ROOT / index).is_dir() else []:
+            try:
+                out += json.loads(p.read_text(encoding="utf-8")).get("entries", [])
+            except (ValueError, AttributeError):
+                pass
+        return out
+
+
+    def index_files(entries):
+        """{index: {prefix: file contents}} of ENTRIES, by the prefixes INDEXES declares."""
+        out = {}
+        for index, es in entries.items():
+            files = out.setdefault(index, {})
+            key = INDEX_KEY[index]
+            for e in sorted(es, key=lambda e: (e[key], e.get("id", ""), int(e.get("version", "v0")[1:]))):
+                p = e[key][:INDEXES[index]]
+                files.setdefault(p, {"format": INDEX_FORMAT, "index": index, "entries": []})["entries"].append(e)
+        return out
+
+
+    def write_indexes():
+        """Write the files of the three indexes, replacing those of the folders."""
+        files = index_files(index_entries())
+        for index in INDEXES:
+            folder = ROOT / index
+            want = files.get(index, {})
+            for p in sorted(folder.glob("*.json")) if folder.is_dir() else []:
+                if p.stem not in want:
+                    p.unlink()
+            for prefix, data in want.items():
+                write_json(folder / f"{prefix}.json", data)
 
 
 The TeXmacs index
@@ -168,8 +312,8 @@ of other archives needs the website.
 Version 0.2 of the specification changed what the pages must show (labels
 and `sheaf:` URIs instead of identifiers, the statuses of versions, the
 owners), and the [website](30-website.md) has not been ported yet. Until
-it is, `osheaf index` writes the discovery document only, and says so when
-a website or a TeXmacs index is configured; the code that writes them stays,
+it is, `osheaf index` writes the discovery document and the indexes only,
+and says so when a website or a TeXmacs index is configured; the code that writes them stays,
 as `readable_index`, for the port, with its entries read from the lines of
 the members (`index_entry`, below).
 
@@ -177,10 +321,10 @@ the members (`index_entry`, below).
     def index(args):
         write_discovery()
         if INDEX.get("html") or INDEX.get("template"):
-            print("opensheaf.json written; the website and the TeXmacs index are not yet available for "
-                  "specification 0.2")
+            print("opensheaf.json and the indexes written; the website and the TeXmacs index are not yet "
+                  "available for specification 0.2")
             return
-        print("opensheaf.json written (no index configured)")
+        print("opensheaf.json and the indexes written (no readable index configured)")
 
 
     def readable_index(args):

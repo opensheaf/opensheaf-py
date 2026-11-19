@@ -69,6 +69,7 @@ TEXMACS = {}
 INDEX = {}
 LAYOUT = None
 LABELS = {}
+TOMBSTONES = []
 OLD = False
 
 SPEC = "0.2"
@@ -116,7 +117,7 @@ def set_paths(root, layout=OWNER_NAME_LAYOUT):
 
 def configure(root):
     """Load the archive configuration and set the paths."""
-    global ARCHIVE, TEXMACS, INDEX, TEXMACS_VERSION, LABELS, OLD
+    global ARCHIVE, TEXMACS, INDEX, TEXMACS_VERSION, LABELS, TOMBSTONES, OLD
     cfg = read_config(root)
     disc_path = Path(root) / "opensheaf.json"
     disc = json.loads(disc_path.read_text(encoding="utf-8")) if disc_path.exists() else {}
@@ -136,6 +137,7 @@ def configure(root):
     TEXMACS_VERSION = TEXMACS.get("version", TEXMACS_VERSION)
     INDEX = cfg.get("index", {})
     LABELS = {o["label"]: o["id"] for o in disc.get("objects", []) if o.get("label")}
+    TOMBSTONES = list(disc.get("tombstones", []))
     return ROOT
 
 
@@ -307,12 +309,28 @@ def carried_files(obj_id, inv):
     return out
 
 
-def carry_forward(prev, new, inv, new_ver, after_doc=None):
+EVIDENCE = ("parent.inventory.json", "parent.object.json", "parent.signatures/", "parent.chain/")
+
+
+def is_evidence(logical):
+    """Whether LOGICAL is a file of the evidence of a branch point (section 9.2)."""
+    return logical in EVIDENCE[:2] or logical.startswith(EVIDENCE[2:])
+
+
+def evidence_paths(inv, version=None):
+    """The logical paths of the evidence of a branch point held in VERSION (default: the head)."""
+    if not inv:
+        return []
+    state = inv["versions"][version or inv["head"]]["state"]
+    return sorted(p for ps in state.values() for p in ps if is_evidence(p))
+
+
+def carry_forward(prev, new, inv, new_ver, after_doc=None, obj_id=None):
     """Keep the notices of the head (they persist unchanged) and its history,
     updated for NEW, the object.json of object version NEW_VER: a new document
     version is appended (or placed after document version AFTER_DOC, which
     then writes a history); a description-only version replaces the entry of
-    its document version."""
+    its document version (OBJ_ID: the object, by default the line NEW names)."""
     if prev is None:
         if after_doc:
             sys.exit("--after needs an existing document")
@@ -321,7 +339,7 @@ def carry_forward(prev, new, inv, new_ver, after_doc=None):
         new["notices"] = list(prev["notices"])
     if prev.get("history") is None and after_doc is None:
         return
-    d = obj_dir(names.object_id(new["name"], new["owner"]))
+    d = obj_dir(obj_id or names.object_id(new["name"], new["owner"]))
     hist = list(prev.get("history") or default_history(d, inv))
     docs = {doc_version_of(d, inv, v): v for v in hist}
     n = new["documentVersion"]
@@ -381,14 +399,15 @@ def add_version(obj_id, files, obj, message, *, acknowledged=False):
     content is not stored again. Returns the inventory."""
     d = obj_dir(obj_id)
     inv = load_inventory(d)
-    log, latest, signers = signing_keys(obj["owner"])
+    draft = obj_id.startswith("sheaf:draft:")
+    log, latest, signers = (None, None, []) if draft else signing_keys(obj["owner"])
     obj = {k: v for k, v in obj.items() if k != "previous"}
     if inv is None:
         if d.exists():
             sys.exit(f"{d} exists, and is not an object")
         inv = {"id": obj_id, "type": owners.INVENTORY_TYPE, "digestAlgorithm": "sha512",
                "head": "v0", "manifest": {}, "versions": {}, "fixity": {"md5": {}, "sha256": {}}}
-    else:
+    elif not draft:
         check_before_extending(obj_id, d, inv, acknowledged)
         obj["previous"] = owners.sidecar_digest((d / inv["head"] / "inventory.json.sha512").read_bytes())
     ver = f"v{int(inv['head'][1:]) + 1}"
@@ -423,7 +442,7 @@ def add_version(obj_id, files, obj, message, *, acknowledged=False):
         (stage / ver / "inventory.json.sha512").write_bytes(sidecar)
         wdir = stage / "witnesses"
         wdir.mkdir()
-        pin, dig = log.pin(latest.number), names.sha512_hex(data)
+        pin, dig = (log.pin(latest.number) if log else None), names.sha512_hex(data)
         for key in signers:
             (wdir / sign.file_name(key.did)).write_bytes(
                 sign.signature_file(key, obj_id, ver, dig, obj["owner"], pin))
@@ -432,17 +451,19 @@ def add_version(obj_id, files, obj, message, *, acknowledged=False):
             new.mkdir()
             (new / "0=ocfl_object_1.1").write_text("ocfl_object_1.1\n")
             os.rename(stage / ver, new / ver)
-            (new / sign.WITNESSES).parent.mkdir(parents=True)
-            (new / sign.WITNESSES).mkdir()
-            os.rename(wdir, new / sign.WITNESSES / ver)
+            if not draft:
+                (new / sign.WITNESSES).parent.mkdir(parents=True)
+                (new / sign.WITNESSES).mkdir()
+                os.rename(wdir, new / sign.WITNESSES / ver)
             (new / "inventory.json").write_bytes(data)
             (new / "inventory.json.sha512").write_bytes(sidecar)
             d.parent.mkdir(parents=True, exist_ok=True)
             os.rename(new, d)
         else:
             os.rename(stage / ver, d / ver)
-            (d / sign.WITNESSES).mkdir(parents=True, exist_ok=True)
-            os.rename(wdir, d / sign.WITNESSES / ver)
+            if not draft:
+                (d / sign.WITNESSES).mkdir(parents=True, exist_ok=True)
+                os.rename(wdir, d / sign.WITNESSES / ver)
             for name, b in (("inventory.json", data), ("inventory.json.sha512", sidecar)):
                 (stage / name).write_bytes(b)
                 os.replace(stage / name, d / name)
@@ -807,10 +828,8 @@ def seal(kind, owner):
     taken = set()
     for obj_id, _, _ in objects():
         taken.update((obj_id or "").split(":")[1:2])
-    disc = ROOT / "opensheaf.json"
-    tombs = json.loads(disc.read_text(encoding="utf-8")).get("tombstones", []) if disc.exists() else []
-    taken.update(t.get("genesisName") for t in tombs)
-    taken.update(t.get("name") for t in tombs)
+    taken.update(t.get("genesisName") for t in TOMBSTONES)
+    taken.update(t.get("name") for t in TOMBSTONES)
     while True:
         genesis = names.genesis_record(kind, originator=owner)
         nm = names.name(genesis)
@@ -824,7 +843,18 @@ def deposit(args):
     alone (--no-source REASON)."""
     label = args.id
     new = getattr(args, "new", False)
-    if label in LABELS:
+    draft = getattr(args, "draft", False)
+    if draft:
+        if not label or not LABEL_RE.match(label) or len(label) > 64:
+            sys.exit("the identifier of a draft matches ^[a-z0-9]+(-[a-z0-9]+)*$ and has at most 64 "
+                     "characters (section 10.1)")
+        obj_id, owner = f"sheaf:draft:{label}", None
+        held = (obj_dir(obj_id) / "inventory.json").exists()
+        if new and held:
+            sys.exit(f"the draft {label} exists: osheaf draft deposit {label} adds a version to it")
+        if not new and not held:
+            sys.exit(f"no draft {label} in this archive (osheaf draft new {label} makes one)")
+    elif label in LABELS:
         if new:
             sys.exit(f"{label} is the label of a line already: deposit a new version without --new, "
                      "or choose another label for a new work")
@@ -858,7 +888,7 @@ def deposit(args):
         if prev_obj.get("status") == "withdrawn":
             sys.exit(f"{label} is withdrawn (section 13.1): a withdrawn document gets no new versions")
         doc_version = max(doc_version_of(d, inv, v) for v in inv["versions"]) + 1
-        owner = prev_obj["owner"]
+        owner = prev_obj.get("owner")
     if args.created and args.available:
         sys.exit("give --created (a version not public at the time) or --available, not both")
     available = None if args.created else (args.available or TODAY)
@@ -941,6 +971,8 @@ def deposit(args):
     related = related_from_args(args.related)
     if related:
         datacite["relatedIdentifiers"] = related
+    if draft:
+        datacite.pop("url")        # a draft has no landing page
     obj = {
         "format": OBJ_FORMAT,
         "specification": SPEC,
@@ -973,20 +1005,28 @@ def deposit(args):
         obj["licence"] = {"path": args.licence_file, "mediaType": {
             ".pdf": "application/pdf", ".md": "text/markdown", ".txt": "text/plain", ".html": "text/html",
         }.get(Path(args.licence_file).suffix.lower(), "text/plain")}
-    if obj_id is None:
+    if draft:
+        del obj["name"], obj["owner"]
+    elif obj_id is None:
         genesis, obj_id = seal("document", owner)
         files[GENESIS] = genesis
     else:
         files[GENESIS] = read_logical(d, inv, GENESIS)
-    obj["name"] = obj_id.split(":")[1]
-    carry_forward(prev_obj, obj, inv, next_object_version(inv), args.after)
+    if not draft:
+        obj["name"] = obj_id.split(":")[1]
+    if prev_obj and prev_obj.get("parent"):
+        obj["parent"] = prev_obj["parent"]
+        for lp in evidence_paths(inv):
+            files[lp] = read_logical(d, inv, lp)
+    carry_forward(prev_obj, obj, inv, next_object_version(inv), args.after, obj_id)
     for lp, f in carried_files(obj_id, inv).items():
         files.setdefault(lp, f)
     files["datacite.json"] = json_bytes(datacite)
     inv = add_version(obj_id, files, obj, args.message or f"Deposit: document version {doc_version}",
                       acknowledged=getattr(args, "i_know", False))
     shutil.rmtree(tmp, ignore_errors=True)
-    LABELS[label] = obj_id
+    if not draft:
+        LABELS[label] = obj_id
     write_discovery()
     print(f"{label}: {inv['head']} (document version {doc_version}) {obj_id}")
 
@@ -1300,8 +1340,10 @@ def collect(args):
     coll_dir = obj_dir(coll_id) if coll_id else None
     cinv = load_inventory(coll_dir) if coll_dir else None
     if cinv and read_json(coll_dir, cinv, "members.json").get("order") == "manual":
-        print(f"{label} is curated (order manual): use osheaf collection sync|update")
+        print(f"{label} is curated (order manual): use osheaf collection add|sync|update")
         return
+    curated = cinv is None and bool(getattr(args, "curated", False))
+    order = "manual" if curated else ORDER
     members = []
     for obj_id, d, inv, signed, cur, obj, dc in documents():
         cite = {"title": dc["titles"][0]["title"],
@@ -1315,7 +1357,7 @@ def collect(args):
         # the Available date only orders, it is not part of the cached citation
         m["cite"]["available"] = date_of(dc, "Available", "Created")
         members.append(m)
-    members = member_order(members)
+    members = [] if curated else member_order(members)
     for m in members:
         m["cite"].pop("available", None)
     version, issued = 1, TODAY
@@ -1339,7 +1381,7 @@ def collect(args):
         creator_["affiliation"] = [{"name": cur["affiliation"]}]
     files = {
         "members.json": json_bytes({"format": "opensheaf-collection/0.2", "type": "catalogue",
-                                    "order": ORDER, "members": members}),
+                                    "order": order, "members": members}),
         "datacite.json": json_bytes({
             "titles": [{"title": ARCHIVE["name"]}],
             "creators": [creator_],
@@ -1364,6 +1406,15 @@ def collect(args):
     print(f"{label}: {inv['head']} ({len(members)} members)")
 
 
+def line_status(d, inv, head):
+    """The status of the object in D (section 13.1): that of its latest signed version, or
+    else of its head; always active for a key log."""
+    if head.get("kind") == "owner":
+        return "active"
+    signed = latest_signed(d, inv)
+    return (read_json(d, inv, OBJ, signed) if signed else head).get("status", "active")
+
+
 def discovery():
     objs, drafts, used = [], [], set()
     for obj_id, d, inv in objects():
@@ -1374,15 +1425,12 @@ def discovery():
         if obj_id.startswith("sheaf:draft:"):
             drafts.append({"id": obj_id, "kind": head.get("kind"), "head": inv["head"]})
             continue
-        status = "active"
         if head.get("kind") == "owner":
             try:
                 used.update(owners.load_key_log(d).extensions() or {})
             except owners.OwnerError:
                 pass
-        else:
-            signed = latest_signed(d, inv)
-            status = (read_json(d, inv, OBJ, signed) if signed else head).get("status", "active")
+        status = line_status(d, inv, head)
         entry = {"id": obj_id, "kind": head.get("kind"), "name": head.get("name"),
                  "owner": head.get("owner"), "head": inv["head"],
                  "inventorySha512": owners.sidecar_digest((d / "inventory.json.sha512").read_bytes()),
@@ -1390,23 +1438,124 @@ def discovery():
         if label_of(obj_id):
             entry["label"] = label_of(obj_id)
         objs.append(entry)
-    old = ROOT / "opensheaf.json"
-    tombstones = json.loads(old.read_text(encoding="utf-8")).get("tombstones") if old.exists() else None
     doc = {"format": "opensheaf-archive/0.2", "specification": SPEC, "name": ARCHIVE["name"],
            "contact": ARCHIVE["contact"], "storageRoot": "ocfl/", "storageLayout": LAYOUT}
     if ARCHIVE["mainCollection"] in LABELS:
         doc["mainCollection"] = LABELS[ARCHIVE["mainCollection"]]
-    doc.update(profiles=ARCHIVE["profiles"], extensions=sorted(used), owners=archive_owners(), objects=objs)
+    doc.update(profiles=ARCHIVE["profiles"], extensions=sorted(used), owners=archive_owners(),
+               indexes=dict(INDEXES), objects=objs)
     if drafts:
         doc["drafts"] = drafts
-    if tombstones:
-        doc["tombstones"] = tombstones
+    if TOMBSTONES:
+        doc["tombstones"] = TOMBSTONES
     return doc
 
 
 def write_discovery():
-    """Write the discovery document opensheaf.json from the storage root."""
+    """Write the discovery document opensheaf.json and the indexes from the storage root."""
+    write_indexes()
     write_json(ROOT / "opensheaf.json", discovery())
+
+
+INDEXES = {"names": 2, "owners": 2, "sha512": 2}
+INDEX_FORMAT = "opensheaf-index/0.2"
+INDEX_KEY = {"names": "name", "owners": "owner", "sha512": "inventorySha512"}
+
+
+def index_entries():
+    """{index: [entries]} of the storage root and of its tombstones (section 12.5)."""
+    out = {"names": [], "owners": [], "sha512": []}
+    lines = {}
+    for obj_id, d, inv in objects():
+        if inv is None or obj_id is None or obj_id.startswith("sheaf:draft:"):
+            continue
+        head = read_json(d, inv, OBJ) or {}
+        gpath = read_logical(d, inv, GENESIS)
+        if gpath is None or len(obj_id.split(":")) != 3:
+            continue
+        genesis = gpath.read_bytes()
+        try:
+            rec = names.read_genesis(genesis)
+        except ValueError:
+            continue
+        _, nm, owner = obj_id.split(":")
+        status = line_status(d, inv, head)
+        entry = {"name": nm, "owner": owner, "id": obj_id, "status": status,
+                 "originator": owner if rec["kind"] == "owner" else rec.get("originator"),
+                 "genesis": genesis.decode("utf-8")}
+        if label_of(obj_id):
+            entry["label"] = label_of(obj_id)
+        out["names"].append(entry)
+        lines.setdefault(owner, []).append(nm)
+        for n in range(1, int(inv["head"][1:]) + 1):
+            sc = d / f"v{n}" / "inventory.json.sha512"
+            if sc.exists():
+                out["sha512"].append({"inventorySha512": owners.sidecar_digest(sc.read_bytes()),
+                                      "id": obj_id, "version": f"v{n}", "status": status})
+        if head.get("kind") == "owner":
+            try:
+                log = owners.load_key_log(d)
+            except owners.OwnerError:
+                continue
+            for v in log.versions:
+                for c in (v.carried if v.fork_record else []):
+                    out["sha512"].append({"inventorySha512": c.digest, "id": obj_id,
+                                          "version": f"v{c.number}", "status": "active"})
+    out["owners"] = [{"owner": o, "names": sorted(ns)} for o, ns in sorted(lines.items())]
+    out["names"] += removed_entries("names")
+    out["sha512"] += removed_entries("sha512")
+    return out
+
+
+def removed_entries(index):
+    """The entries of the lines taken down, kept from the index files of INDEX with the status
+    removed, and the tombstones' own entries when the files lack them (sections 12.5 and 13.3)."""
+    gone = {t["id"]: t for t in TOMBSTONES}
+    kept = [dict(e, status="removed") for e in read_index(index) if e.get("id") in gone]
+    for t in gone.values():
+        if index == "names" and not any(e["id"] == t["id"] for e in kept):
+            kept.append({"name": t["name"], "owner": t["owner"], "id": t["id"], "status": "removed"})
+        if index == "sha512" and not any(e["id"] == t["id"] and e["version"] == t["lastVersion"]
+                                         for e in kept):
+            kept.append({"inventorySha512": t["inventorySha512"], "id": t["id"],
+                         "version": t["lastVersion"], "status": "removed"})
+    return kept
+
+
+def read_index(index):
+    """Every entry of the files of the index INDEX held next to the discovery document."""
+    out = []
+    for p in sorted((ROOT / index).glob("*.json")) if (ROOT / index).is_dir() else []:
+        try:
+            out += json.loads(p.read_text(encoding="utf-8")).get("entries", [])
+        except (ValueError, AttributeError):
+            pass
+    return out
+
+
+def index_files(entries):
+    """{index: {prefix: file contents}} of ENTRIES, by the prefixes INDEXES declares."""
+    out = {}
+    for index, es in entries.items():
+        files = out.setdefault(index, {})
+        key = INDEX_KEY[index]
+        for e in sorted(es, key=lambda e: (e[key], e.get("id", ""), int(e.get("version", "v0")[1:]))):
+            p = e[key][:INDEXES[index]]
+            files.setdefault(p, {"format": INDEX_FORMAT, "index": index, "entries": []})["entries"].append(e)
+    return out
+
+
+def write_indexes():
+    """Write the files of the three indexes, replacing those of the folders."""
+    files = index_files(index_entries())
+    for index in INDEXES:
+        folder = ROOT / index
+        want = files.get(index, {})
+        for p in sorted(folder.glob("*.json")) if folder.is_dir() else []:
+            if p.stem not in want:
+                p.unlink()
+        for prefix, data in want.items():
+            write_json(folder / f"{prefix}.json", data)
 
 
 TEX_ACCENTS = {"'": "\u0301", "`": "\u0300", '"': "\u0308", "^": "\u0302", "~": "\u0303",
@@ -1570,10 +1719,10 @@ def index_entry(member):
 def index(args):
     write_discovery()
     if INDEX.get("html") or INDEX.get("template"):
-        print("opensheaf.json written; the website and the TeXmacs index are not yet available for "
-              "specification 0.2")
+        print("opensheaf.json and the indexes written; the website and the TeXmacs index are not yet "
+              "available for specification 0.2")
         return
-    print("opensheaf.json written (no index configured)")
+    print("opensheaf.json and the indexes written (no readable index configured)")
 
 
 def readable_index(args):
@@ -1679,8 +1828,10 @@ def document_version_errors(obj_id, d, inv):
         if (obj.get("licence") or {}).get("path"):
             notes.add(obj["licence"]["path"])
         own = {p: dig for dig, ps in vinfo["state"].items() for p in ps
-               if p not in IDENTITY and p not in notes}
+               if p not in IDENTITY and not is_evidence(p) and p not in notes}
         change = (obj.get("changes") or {}).get("text")
+        if not seen and obj.get("parent"):
+            highest = n - 1          # a branch numbers on from its branch point (section 9.4)
         if n in seen:
             before, mis = files_of[n], missing_of[n]
             if mis:
@@ -1932,7 +2083,7 @@ def check_key_logs(f, found, schema):
     return logs
 
 
-def check_lines(f, found, logs, schema, disc):
+def check_lines(f, found, logs, schema, disc, resolver=None):
     """The checks of sections 14.4 and 14.5; returns {identifier: statuses} of the lines."""
     statuses, genesis_names = {}, {}
     tombstoned = {t.get("id") for t in disc.get("tombstones", []) if isinstance(t, dict)}
@@ -1967,19 +2118,22 @@ def check_lines(f, found, logs, schema, disc):
             except ValueError as e:
                 f.error(place, f"{GENESIS}: {e}")
         if rec is not None:
-            genesis_names.setdefault(names.name(genesis), []).append(obj_id)
+            genesis_names.setdefault(names.name(genesis), []).append((obj_id, "parent" in head))
             if rec["kind"] != head.get("kind"):
                 f.error(place, f"its genesis record is of kind {rec['kind']}, its object.json of kind {head.get('kind')}")
             if not names.is_name_of(nm, genesis):
                 f.error(place, "its name is not a name of its genesis record (section 5.2)")
             elif rec.get("originator") != owner:
                 if "parent" in head:
-                    f.warning(place, "a branch: its branch points are not checked by this version of the tools")
+                    check_branch(f, place, obj_id, d, inv, genesis, logs, found, tombstoned, resolver)
                 else:
                     f.error(place, "a line of another owner than the originator is a branch, and declares its "
                             "parent (section 5.3)")
             elif names.algorithm(nm) != 0:
                 f.error(place, "the originator's line is named by algorithm 0 (section 5.3)")
+            elif any("parent" in (read_json(d, inv, OBJ, v) or {}) for v in inv["versions"]):
+                f.error(place, "the originator's line has no parent: an originator never owns a branch of its own "
+                        "work (sections 5.3 and 9)")
         for ver in inv["versions"]:
             for message in description_errors(d, inv, ver):
                 f.error(f"{place} {ver}", message)
@@ -2019,16 +2173,90 @@ def check_lines(f, found, logs, schema, disc):
             if (read_json(d, inv, OBJ, f"v{signed}") or {}).get("status") == "withdrawn":
                 f.result(place, "withdrawn (section 13.1)")
     for gname, ids in genesis_names.items():
-        if len(ids) > 1:
-            f.error(", ".join(where(i) for i in ids), "objects with the same genesis record: only the "
+        lines = [i for i, branch in ids if not branch]
+        if len(lines) > 1:
+            f.error(", ".join(where(i) for i in lines), "objects with the same genesis record: only the "
                     "originator's line and its branches may share one (section 5.4)")
+    kept = {}
     for obj_id, (d, inv) in found.items():
         if (read_json(d, inv, OBJ) or {}).get("kind") == "collection" and obj_id in statuses:
-            check_members(f, found, logs, statuses, tombstoned, schema, obj_id, d, inv)
+            check_members(f, found, logs, statuses, tombstoned, schema, obj_id, d, inv, resolver)
+            check_accepted_copies(f, found, obj_id, d, inv, kept)
     return statuses
 
 
-def check_members(f, found, logs, statuses, tombstoned, schema, obj_id, d, inv):
+def check_branch(f, place, obj_id, d, inv, genesis, logs, found, tombstoned, resolver=None):
+    from . import branch
+    _, nm, owner = obj_id.split(":")
+    prev_obj = prev_ev = None
+    verdicts = []
+    for ver in sorted(inv["versions"], key=lambda v: int(v[1:])):
+        at = f"{place} {ver}"
+        obj = read_json(d, inv, OBJ, ver) or {}
+        state = {p: dig for dig, ps in inv["versions"][ver]["state"].items() for p in ps}
+        ev = {p: dig for p, dig in state.items() if is_evidence(p) or p == GENESIS}
+        p = obj.get("parent")
+        if not isinstance(p, dict):
+            f.error(at, "every version of a branch has parent (section 9.1)")
+            continue
+        if prev_obj is not None and p == prev_obj.get("parent"):
+            if ev != prev_ev:
+                f.error(at, "the identity files change without moving the branch point (section 9.4)")
+        else:
+            v, problems = branch.verdict(branch.level_of_version(d, inv, ver), obj, genesis, logs.get)
+            verdicts.append(v)
+            if v == branch.INCONSISTENT:
+                f.error(at, "inconsistent branch point: " + "; ".join(problems))
+            elif v == branch.UNCHECKED:
+                f.warning(at, "unchecked branch point: " + "; ".join(problems))
+            if prev_obj is not None and v != branch.INCONSISTENT:
+                old = prev_obj["parent"]
+                pinv_old = json.loads(read_logical(d, inv, "parent.inventory.json", f"v{int(ver[1:]) - 1}").read_bytes())
+                pinv_new = json.loads(read_logical(d, inv, "parent.inventory.json", ver).read_bytes())
+                if (p.get("owner"), p.get("name")) != (old.get("owner"), old.get("name")):
+                    f.error(at, "a branch point moves only to a version of the same parent line (section 9.4)")
+                elif int(p["objectVersion"][1:]) <= int(old["objectVersion"][1:]) or \
+                        p.get("documentVersion") == old.get("documentVersion"):
+                    f.error(at, "a branch point moves only to a higher object version, holding another document "
+                            "version (section 9.4)")
+                if pinv_old.get("id") != pinv_new.get("id") or any(
+                        pinv_new.get("versions", {}).get(v) != e for v, e in pinv_old.get("versions", {}).items()) or any(
+                        dg not in pinv_new.get("manifest", {}) for e in pinv_old.get("versions", {}).values()
+                        for dg in e.get("state", {})):
+                    f.error(at, "the new parent inventory does not continue the previous one (section 9.4)")
+        prev_obj, prev_ev = obj, ev
+    if not verdicts:
+        return
+    verdict = max(verdicts, key=branch.ORDER.get)
+    p = prev_obj["parent"]
+    pid = names.object_id(p["name"], p["owner"])
+    f.result(place, f"a branch of {where(pid)}: {verdict} (section 9.3)")
+    if pid in found:
+        pd, pinv = found[pid]
+        signed = latest_signed(pd, pinv, logs.get(p["owner"]))
+        status = (read_json(pd, pinv, OBJ, signed) or {}).get("status") if signed else None
+        f.result(place, "the parent's line is held here" + (", withdrawn" if status == "withdrawn" else ""))
+    elif pid in tombstoned:
+        f.result(place, "the parent's line is removed: a tombstone in this archive (section 13.3)")
+    elif resolver is not None:
+        res = resolver.latest(p["name"], p["owner"], [p["url"].split("/ocfl/")[0] + "/"] if p.get("url") else [])
+        f.result(place, f"the parent's line: {res.status}" + (f" at {res.copy.where}" if res.copy else ""))
+    else:
+        f.result(place, "the parent's line is not held here (osheaf verify --remote looks for it)")
+    rec = names.read_genesis(genesis)
+    if nm != p["name"] and names.algorithm(nm) > names.algorithm(p["name"]):
+        gone = {t.get("name") for t in TOMBSTONES if t.get("owner") == owner}
+        for k in range(names.algorithm(p["name"]), names.algorithm(nm)):
+            other = names.name(genesis, k)
+            if names.object_id(other, owner) not in found and other not in gone:
+                f.warning(place, f"renamed by algorithm {names.algorithm(nm)}, though algorithm {k} gives a "
+                          "line free here (section 5.3)")
+                break
+    if owner == rec.get("originator"):
+        f.error(place, "an originator never owns a branch of its own work (section 5.3)")
+
+
+def check_members(f, found, logs, statuses, tombstoned, schema, obj_id, d, inv, resolver=None):
     for ver in inv["versions"]:
         at = f"{where(obj_id)} {ver}"
         mem = read_json(d, inv, "members.json", ver)
@@ -2083,11 +2311,93 @@ def check_members(f, found, logs, statuses, tombstoned, schema, obj_id, d, inv):
                     if pos != sorted(pos):
                         f.error(who, "revisions not in the order of the history (section 8.4)")
             elif ver == inv["head"]:
-                if mid in tombstoned:
+                if resolver is not None:
+                    for pv, pin, n in member_pins(m):
+                        res = resolver.pin(m.get("name"), m.get("owner"), pv, pin, m.get("at", []))
+                        if res.copy is not None:
+                            pobj = res.copy.read(OBJ, int(pv[1:])) or {}
+                            if (pobj.get("kind"), pobj.get("name"), pobj.get("owner")) != \
+                                    (m.get("kind"), m.get("name"), m.get("owner")) or (n is not None and pobj.get("documentVersion") != n):
+                                f.error(f"{who} {pv}", "the version pinned is not of the kind, line and document version the "
+                                        "member gives (section 8.5)")
+                        if res.status == "not a version":
+                            f.error(f"{who} {pv}", "not a version: a collection pins only signed versions (section 8.5)")
+                        elif res.status == "verified":
+                            f.result(f"{who} {pv}", f"verified at {res.copy.where} (section 8.5)")
+                        else:
+                            f.warning(f"{who} {pv}", f"{res.status} (section 8.5)")
+                elif mid in tombstoned:
                     f.result(who, "removed: a tombstone in this archive (section 13.3)")
                 else:
-                    f.warning(who, "not held in this archive: not resolved (members of other archives are "
-                              "resolved by a later version of these tools)")
+                    f.warning(who, "not held in this archive: not resolved (osheaf verify --remote resolves "
+                              "it, section 14.5)")
+
+
+def check_accepted_copies(f, found, obj_id, d, inv, kept):
+    mem = read_json(d, inv, "members.json") or {}
+    if mem.get("type") != "selection":
+        return
+    owner = obj_id.split(":")[2]
+    for m in mem.get("members", []):
+        mid = names.object_id(m.get("name"), m.get("owner"))
+        if m.get("owner") != owner or mid not in found:
+            continue
+        md, minv = found[mid]
+        if "parent" not in (read_json(md, minv, OBJ) or {}):
+            continue
+        g = read_logical(md, minv, GENESIS, "v1")
+        key = (owner, names.name(g.read_bytes()) if g else mid)
+        other = kept.setdefault(key, obj_id)
+        if other != obj_id:
+            f.error(where(obj_id), f"keeps an accepted copy of the document that {where(other)}, a selection "
+                    "of the same owner, keeps: selections keeping copies of one document have different "
+                    "owners (section 9.6)")
+
+
+def check_indexes(f, schema, disc):
+    declared = disc.get("indexes") or {}
+    if not declared:
+        f.warning("opensheaf.json", "no indexes declared (section 12.5)")
+        return
+    expected = index_entries()
+    gone = {t.get("id"): t for t in disc.get("tombstones", []) if isinstance(t, dict)}
+    for index, length in declared.items():
+        if index not in INDEX_KEY:
+            continue
+        key, held = INDEX_KEY[index], []
+        for p in sorted((ROOT / index).glob("*.json")) if (ROOT / index).is_dir() else []:
+            place = f"{index}/{p.name}"
+            try:
+                data = json.loads(p.read_text(encoding="utf-8"))
+            except ValueError as e:
+                f.error(place, f"not JSON: {e}")
+                continue
+            schema(place, data, "index")
+            if data.get("index") != index:
+                f.error(place, f"an index file of {index}/ names the index {data.get('index')}")
+            for e in data.get("entries", []):
+                if not isinstance(e, dict) or str(e.get(key, ""))[:length] != p.stem or len(p.stem) != length:
+                    f.error(place, f"an entry not in the file of its prefix ({str(e)[:60]}...)")
+                held.append(e)
+        want = [e for e in expected[index] if e.get("status") != "removed"]
+        for e in want:
+            if e not in held:
+                f.error(f"{index}/", f"no entry, or a stale one, for {e.get('id', e.get('owner'))} "
+                        f"{e.get('version', '')} (section 12.5)")
+        for e in held:
+            if e in want:
+                continue
+            if e.get("id") in gone and e.get("status") == "removed":
+                continue
+            f.error(f"{index}/", f"an entry the storage root does not justify: {e.get('id', e.get('owner'))} "
+                    f"{e.get('version', '')} (section 12.5)")
+        for tid, t in gone.items():
+            if index in ("names", "sha512") and not any(e.get("id") == tid and e.get("status") == "removed"
+                                                        for e in held):
+                f.error(f"{index}/", f"no entry with the status removed for the tombstone {tid} (section 12.5)")
+            if index == "owners" and any(e.get("owner") == t.get("owner") and t.get("name") in e.get("names", [])
+                                         for e in held):
+                f.error(f"{index}/", f"owners/ lists {tid}, which is taken down (section 12.5)")
 
 
 def check_archive(f, found, statuses, disc):
@@ -2185,8 +2495,9 @@ def look_for_keys(f):
                       "(section 15.4)")
 
 
-def verify_findings():
-    """The findings of the checks of section 14 on the archive, in the order of 14.2 to 14.6."""
+def verify_findings(remote=False):
+    """The findings of the checks of section 14 on the archive, in the order of 14.2 to 14.6;
+    REMOTE: also resolve the members of other archives (section 14.5)."""
     f = Findings()
     if OLD:
         f.error("archive", "specification 0.1: rebuild (section 16.1)")
@@ -2206,8 +2517,20 @@ def verify_findings():
         schema("opensheaf.json", disc, "archive")
     found = check_storage(f, schema, disc)
     logs = check_key_logs(f, found, schema)
-    statuses = check_lines(f, found, logs, schema, disc)
+    resolver = None
+    if remote:
+        from . import remote as remote_
+        resolver = remote_.Resolver()
+    try:
+        statuses = check_lines(f, found, logs, schema, disc, resolver)
+        if resolver is not None:
+            for severity, message in resolver.notes:
+                f.add(severity, "resolution", message)
+    finally:
+        if resolver is not None:
+            resolver.__exit__(None, None, None)
     check_archive(f, found, statuses, disc)
+    check_indexes(f, schema, disc)
     look_for_keys(f)
     return f
 
@@ -2218,9 +2541,7 @@ def verify_errors():
 
 
 def verify(args):
-    if getattr(args, "remote", False):
-        sys.exit("verify --remote: not yet available for specification 0.2")
-    found = verify_findings()
+    found = verify_findings(remote=getattr(args, "remote", False))
     if getattr(args, "json", False):
         print(json.dumps(found, indent=2, ensure_ascii=False))
     else:
@@ -2238,8 +2559,6 @@ def init(args):
     root.mkdir(parents=True, exist_ok=True)
     if any((root / n).exists() for n in CONFIG_NAMES):
         sys.exit(f"{root} has a configuration already")
-    if getattr(args, "curated", False):
-        sys.exit("init --curated: curated collections are not yet available for specification 0.2")
     layout = LAYOUTS.get(getattr(args, "layout", None) or "owner-name")
     if layout is None:
         sys.exit(f"--layout is one of {', '.join(LAYOUTS)}")
@@ -2281,7 +2600,7 @@ def init(args):
     cfg["owner"] = log.owner
     (root / CONFIG_NAME).write_text(json.dumps(cfg, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     configure(root)
-    collect(None)
+    collect(args)
     write_discovery()
     print(f"archive created in {root}, owned by {log.owner}: edit {CONFIG_NAME}, then deposit "
           f"(osheaf deposit --new LABEL ...)")
@@ -2509,3 +2828,42 @@ def key_new(args):
     print(f"kept in {store}; it signs once a version of the key log adds it: "
           f"osheaf owner rotate --add {key.did} --rotation-key FILE ... --export DIR")
     return key
+
+
+def sign_again(args):
+    """Sign again a version of a line contested by an exposed key (sections 6.4 and 7.1)."""
+    obj_id = resolve(args.id)
+    d = obj_dir(obj_id)
+    inv = load_inventory(d)
+    ver = args.version
+    if ver not in inv["versions"]:
+        sys.exit(f"{args.id} has no object version {ver}")
+    owner = obj_id.split(":")[2]
+    if owner not in archive_owners():
+        sys.exit(f"{args.id} is a line of an owner this archive does not host: only its owner signs it")
+    log, latest, signers = signing_keys(owner)
+    statuses = line_statuses(d, inv, log)[1]
+    status = statuses[int(ver[1:]) - 1]
+    if status != sign.CONTESTED:
+        sys.exit(f"{args.id} {ver} is {status}: signing again is for a version contested by an exposed key "
+                 "(section 7.1)")
+    held = set(witnesses_of(d, ver))
+    fresh = [k for k in signers if k.did not in log.exposed_keys() and sign.file_name(k.did) not in held]
+    if len(fresh) < latest.keys["threshold"]:
+        sys.exit(f"this device holds {len(fresh)} current key(s) of {owner} that have not signed {ver}, and "
+                 f"v{latest.number} of the key log needs {latest.keys['threshold']}")
+    dig = names.sha512_hex((d / ver / "inventory.json").read_bytes())
+    if not getattr(args, "yes", False):
+        print(f"{args.id} {ver}: document version {doc_version_of(d, inv, ver)}, deposited "
+              f"{inv['versions'][ver]['created']}: {inv['versions'][ver].get('message', '')}")
+        if input(f"did {owner[:16]}... make it? type {dig[:8]} to sign it again: ").strip() != dig[:8]:
+            sys.exit("not confirmed: nothing was signed")
+    wdir = d / sign.WITNESSES / ver
+    wdir.mkdir(parents=True, exist_ok=True)
+    pin = log.pin(latest.number)
+    for key in fresh:
+        with open(wdir / sign.file_name(key.did), "xb") as f:
+            f.write(sign.signature_file(key, obj_id, ver, dig, owner, pin))
+    write_discovery()
+    print(f"{args.id} {ver}: signed again by {len(fresh)} key(s), naming v{latest.number} of the key log: "
+          f"{line_statuses(d, inv, log)[1][int(ver[1:]) - 1]}")

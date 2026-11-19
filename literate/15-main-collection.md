@@ -24,9 +24,9 @@ archive, never the copies it holds of others' lines.
 This chapter is `osheaf collect`, which writes a new version of the main
 catalogue when the documents have changed. Collections curated by hand,
 with members of other archives, are the subject of
-[collections](20-collections.md), not yet ported to specification 0.2; a
-main collection may be one of those (a *curated* archive), and then
-`collect` leaves it alone.
+[collections](21-collections.md); a main collection may be one of those
+(a *curated* archive, `osheaf init --curated`), and then `collect` leaves
+it alone.
 
     # in maintain the main collection of the archive:
     <<the order of the main collection>>
@@ -156,7 +156,8 @@ Writing a new version
 A main collection whose order is `manual` is curated: its members and
 their order are decisions of its curator, made with `osheaf collection`.
 A main catalogue not yet made (by `osheaf init`, which calls this command)
-has no identifier yet: it will be sealed below.
+has no identifier yet: it will be sealed below; `osheaf init --curated`
+asks for it curated from the start, empty and of order `manual`.
 
     # in leave a curated main collection to its curator:
     init_storage_root()
@@ -165,8 +166,10 @@ has no identifier yet: it will be sealed below.
     coll_dir = obj_dir(coll_id) if coll_id else None
     cinv = load_inventory(coll_dir) if coll_dir else None
     if cinv and read_json(coll_dir, cinv, "members.json").get("order") == "manual":
-        print(f"{label} is curated (order manual): use osheaf collection sync|update")
+        print(f"{label} is curated (order manual): use osheaf collection add|sync|update")
         return
+    curated = cinv is None and bool(getattr(args, "curated", False))
+    order = "manual" if curated else ORDER
 
 Each document becomes a member pinned at the latest signed version of its
 line, with `follow: latest`: the main catalogue follows its members whatever
@@ -199,7 +202,7 @@ the work, and would make the citation change at every new version.
         # the Available date only orders, it is not part of the cached citation
         m["cite"]["available"] = date_of(dc, "Available", "Created")
         members.append(m)
-    members = member_order(members)
+    members = [] if curated else member_order(members)
     for m in members:
         m["cite"].pop("available", None)
 
@@ -245,7 +248,7 @@ discovery document is rewritten.
         creator_["affiliation"] = [{"name": cur["affiliation"]}]
     files = {
         "members.json": json_bytes({"format": "opensheaf-collection/0.2", "type": "catalogue",
-                                    "order": ORDER, "members": members}),
+                                    "order": order, "members": members}),
         "datacite.json": json_bytes({
             "titles": [{"title": ARCHIVE["name"]}],
             "creators": [creator_],

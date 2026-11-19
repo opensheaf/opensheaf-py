@@ -42,8 +42,8 @@ media types (section 4.3). The PDF, which landing pages, the home page and
 the index link, is the first rendition of type `application/pdf`, or else
 the first whose logical path ends in `.pdf`; a document version may have
 none. Its logical path depends on how the version was deposited: these
-tools call it `paper.pdf`, but an [accepted copy](22-accepted-copies.md)
-or a mirror keeps the name its source gave it.
+tools call it `paper.pdf`, but a [branch](23-branches.md) or a
+[mirror](22-mirrors.md) keeps the name its parent or source gave it.
 
     # in the PDF of a document version:
     def pdf_of(obj):
@@ -169,12 +169,12 @@ before the current version; with these tools the depositor says so, with
 `--after` and the number before the current one.
 
     # in carry the notices and the history to a new object version:
-    def carry_forward(prev, new, inv, new_ver, after_doc=None):
+    def carry_forward(prev, new, inv, new_ver, after_doc=None, obj_id=None):
         """Keep the notices of the head (they persist unchanged) and its history,
         updated for NEW, the object.json of object version NEW_VER: a new document
         version is appended (or placed after document version AFTER_DOC, which
         then writes a history); a description-only version replaces the entry of
-        its document version."""
+        its document version (OBJ_ID: the object, by default the line NEW names)."""
         if prev is None:
             if after_doc:
                 sys.exit("--after needs an existing document")
@@ -183,7 +183,7 @@ before the current version; with these tools the depositor says so, with
             new["notices"] = list(prev["notices"])
         if prev.get("history") is None and after_doc is None:
             return
-        d = obj_dir(names.object_id(new["name"], new["owner"]))
+        d = obj_dir(obj_id or names.object_id(new["name"], new["owner"]))
         hist = list(prev.get("history") or default_history(d, inv))
         docs = {doc_version_of(d, inv, v): v for v in hist}
         n = new["documentVersion"]
@@ -215,6 +215,29 @@ files of the new version.
             if n.get("path"):
                 out[n["path"]] = d / content_path(inv, inv["head"], n["path"])
         return out
+
+A [branch](23-branches.md) carries more: the *evidence* of its branch
+point, `parent.inventory.json`, `parent.object.json`, the folder
+`parent.signatures/` and, for a branch of a branch, `parent.chain/`
+(section 9.2), which every version keeps unchanged until one moves the
+branch point (section 9.4). With the genesis record they are the identity
+files of the object (section 4.1), never files of the document.
+
+    # in the notice files that every later object version keeps:
+    EVIDENCE = ("parent.inventory.json", "parent.object.json", "parent.signatures/", "parent.chain/")
+
+
+    def is_evidence(logical):
+        """Whether LOGICAL is a file of the evidence of a branch point (section 9.2)."""
+        return logical in EVIDENCE[:2] or logical.startswith(EVIDENCE[2:])
+
+
+    def evidence_paths(inv, version=None):
+        """The logical paths of the evidence of a branch point held in VERSION (default: the head)."""
+        if not inv:
+            return []
+        state = inv["versions"][version or inv["head"]]["state"]
+        return sorted(p for ps in state.values() for p in ps if is_evidence(p))
 
 Dates
 -----

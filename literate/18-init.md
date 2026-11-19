@@ -47,9 +47,8 @@ no file (section 3).
 
 The main catalogue is sealed and signed at once, empty, kept by `collect`
 (newest first). A curated main collection (`--curated`), whose members of
-any archive and order are the curator's, needs the
-[collections](20-collections.md), not yet ported to specification 0.2.
-Then the discovery document is written, so that the new archive is
+any archive and order are the curator's, is made empty, of order `manual`,
+and kept with the commands of [collections](21-collections.md). Then the discovery document is written, so that the new archive is
 complete, if empty, and passes verification. The website and its templates
 are not yet ported either: a new archive declares no profile.
 
@@ -64,8 +63,6 @@ have to be rebuilt when the specification changes, as it has (section 16.1).
         root.mkdir(parents=True, exist_ok=True)
         if any((root / n).exists() for n in CONFIG_NAMES):
             sys.exit(f"{root} has a configuration already")
-        if getattr(args, "curated", False):
-            sys.exit("init --curated: curated collections are not yet available for specification 0.2")
         layout = LAYOUTS.get(getattr(args, "layout", None) or "owner-name")
         if layout is None:
             sys.exit(f"--layout is one of {', '.join(LAYOUTS)}")
@@ -93,7 +90,7 @@ have to be rebuilt when the specification changes, as it has (section 16.1).
         cfg["owner"] = log.owner
         (root / CONFIG_NAME).write_text(json.dumps(cfg, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
         configure(root)
-        collect(None)
+        collect(args)
         write_discovery()
         print(f"archive created in {root}, owned by {log.owner}: edit {CONFIG_NAME}, then deposit "
               f"(osheaf deposit --new LABEL ...)")

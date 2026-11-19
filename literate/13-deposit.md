@@ -13,8 +13,8 @@ is [typeset](12-texmacs.md) by the archive.
 `deposit()` is called by `osheaf deposit`, whose options (see the
 [command line](60-command-line.md)) arrive as the attributes of `args`; the
 same options may come from a YAML file. The [arXiv import](42-arxiv-import.md)
-and the [accepted copies](22-accepted-copies.md) build document versions in
-the same way, with the helpers of the previous chapters, but on their own.
+and the [branches](23-branches.md) build document versions in the same
+way, with the helpers of the previous chapters, but on their own.
 
 From arguments to DataCite
 --------------------------
@@ -173,7 +173,8 @@ The `url` of `datacite.json` is where readers are sent: the landing page,
 if the archive has one, or else the HTML version of the TeXmacs document.
 Landing pages are written by `osheaf index` with either kind of index:
 with the [website](30-website.md), and also beside a
-[TeXmacs index](16-index.md), which has no landing pages of its own. The [accepted copies](22-accepted-copies.md) use it too.
+[TeXmacs index](16-index.md), which has no landing pages of its own. The
+[branches](23-branches.md) and [collections](21-collections.md) use it too.
 
 The address is made from the label of the line (section 3.1), which is
 the archive's choice for readable URLs; permanent links are `sheaf:` URIs
@@ -211,10 +212,8 @@ every later version, never re-serialised.
         taken = set()
         for obj_id, _, _ in objects():
             taken.update((obj_id or "").split(":")[1:2])
-        disc = ROOT / "opensheaf.json"
-        tombs = json.loads(disc.read_text(encoding="utf-8")).get("tombstones", []) if disc.exists() else []
-        taken.update(t.get("genesisName") for t in tombs)
-        taken.update(t.get("name") for t in tombs)
+        taken.update(t.get("genesisName") for t in TOMBSTONES)
+        taken.update(t.get("name") for t in TOMBSTONES)
         while True:
             genesis = names.genesis_record(kind, originator=owner)
             nm = names.name(genesis)
@@ -263,10 +262,28 @@ or another owner the archive hosts (`--owner`). All files are checked
 before anything is written, so that a mistyped name stops the deposit
 early.
 
+The same function deposits into a *draft* (section 10.1), which
+[`osheaf draft`](24-drafts.md) calls with `draft` set: the label is then
+the draft's own identifier, `sheaf:draft:<id>`, with the form of labels,
+local to the archive; `--new` makes the draft, and without it the draft
+must exist. A draft has no owner, no name and no genesis record, and is
+not listed among the labels.
+
     # in check the identifier and the files of a deposit:
     label = args.id
     new = getattr(args, "new", False)
-    if label in LABELS:
+    draft = getattr(args, "draft", False)
+    if draft:
+        if not label or not LABEL_RE.match(label) or len(label) > 64:
+            sys.exit("the identifier of a draft matches ^[a-z0-9]+(-[a-z0-9]+)*$ and has at most 64 "
+                     "characters (section 10.1)")
+        obj_id, owner = f"sheaf:draft:{label}", None
+        held = (obj_dir(obj_id) / "inventory.json").exists()
+        if new and held:
+            sys.exit(f"the draft {label} exists: osheaf draft deposit {label} adds a version to it")
+        if not new and not held:
+            sys.exit(f"no draft {label} in this archive (osheaf draft new {label} makes one)")
+    elif label in LABELS:
         if new:
             sys.exit(f"{label} is the label of a line already: deposit a new version without --new, "
                      "or choose another label for a new work")
@@ -301,6 +318,12 @@ is when section 4.2 assigns one; changing only the description of an
 existing version is the work of the
 [description-only versions](14-description.md).
 
+A branch (section 9) gets new document versions like any line, numbered on
+from its branch point; its identity files (the genesis record and the
+evidence of its branch point) are kept unchanged, byte for byte, and its
+`object.json` keeps `parent`, until a version moves the branch point
+(section 9.4), which only [`osheaf branch`](23-branches.md) makes.
+
     # in find the earlier versions of a deposited document and the new number:
     d = obj_dir(obj_id) if obj_id else None
     inv = load_inventory(d) if d else None
@@ -313,7 +336,7 @@ existing version is the work of the
         if prev_obj.get("status") == "withdrawn":
             sys.exit(f"{label} is withdrawn (section 13.1): a withdrawn document gets no new versions")
         doc_version = max(doc_version_of(d, inv, v) for v in inv["versions"]) + 1
-        owner = prev_obj["owner"]
+        owner = prev_obj.get("owner")
 
 ### Dates
 
@@ -442,6 +465,8 @@ the document version, as a string; the publication year is that of the
     related = related_from_args(args.related)
     if related:
         datacite["relatedIdentifiers"] = related
+    if draft:
+        datacite.pop("url")        # a draft has no landing page
 
 `object.json` (section 4.3) names the line, by its name and its owner
 (sections 5 and 6); it names no archive, and no label, which are the
@@ -496,7 +521,8 @@ package.
 
 Last, a new work is sealed: its genesis record is written and its name
 computed, which `object.json` records; an existing line carries the
-genesis record of its head, byte for byte. The notices and the history of
+genesis record of its head, byte for byte, and a branch its evidence and
+`parent`; a draft has none of them. The notices and the history of
 the head are carried forward (placing the version `--after` another if
 asked), the notice files are added to the files, and `datacite.json` is
 added like the others. The object version is then added and signed in one
@@ -506,20 +532,28 @@ moment no object has changed, so an error anywhere above leaves the archive
 as it was (only `site/` may have a new HTML version).
 
     # in record the deposited version as a new object version:
-    if obj_id is None:
+    if draft:
+        del obj["name"], obj["owner"]
+    elif obj_id is None:
         genesis, obj_id = seal("document", owner)
         files[GENESIS] = genesis
     else:
         files[GENESIS] = read_logical(d, inv, GENESIS)
-    obj["name"] = obj_id.split(":")[1]
-    carry_forward(prev_obj, obj, inv, next_object_version(inv), args.after)
+    if not draft:
+        obj["name"] = obj_id.split(":")[1]
+    if prev_obj and prev_obj.get("parent"):
+        obj["parent"] = prev_obj["parent"]
+        for lp in evidence_paths(inv):
+            files[lp] = read_logical(d, inv, lp)
+    carry_forward(prev_obj, obj, inv, next_object_version(inv), args.after, obj_id)
     for lp, f in carried_files(obj_id, inv).items():
         files.setdefault(lp, f)
     files["datacite.json"] = json_bytes(datacite)
     inv = add_version(obj_id, files, obj, args.message or f"Deposit: document version {doc_version}",
                       acknowledged=getattr(args, "i_know", False))
     shutil.rmtree(tmp, ignore_errors=True)
-    LABELS[label] = obj_id
+    if not draft:
+        LABELS[label] = obj_id
     write_discovery()
     print(f"{label}: {inv['head']} (document version {doc_version}) {obj_id}")
 
