@@ -6,7 +6,7 @@ edited directly:
 
 - `src/opensheaf/**/*.py` (every module of the package)
 - `src/opensheaf/templates/*` (`index.html`, `paper.html`, `style.css`)
-- `tests/test_core.py`
+- `tests/test_core.py` and `tests/test_identity.py`
 
 Every tangled file that can hold a comment starts with a notice
 "Generated from literate/… by opensheaf-literate"; `literate tangle --list`

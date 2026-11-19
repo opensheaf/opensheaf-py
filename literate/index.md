@@ -31,9 +31,11 @@ every version of the document is kept with its sources and its PDF, fixed
 by SHA-512 digests, and described by [DataCite](https://datacite.org)
 metadata; collections list documents, of the same archive or of others,
 pinned by digests; a discovery document and a website make it all findable.
-The chapters follow that order: first the archive and its documents, then
-collections and copies across archives, the website, the services the tools
-talk to (arXiv and Zenodo), the command line, and the tests.
+The chapters follow that order, after the identity that version 0.2 of the
+specification gives works and owners: names, owners and their keys,
+signatures; then the archive and its documents, collections and copies
+across archives, the website, the services the tools talk to (arXiv and
+Zenodo), the command line, and the tests.
 
 Reading the code
 ----------------
@@ -51,53 +53,62 @@ repository), is not under the GPL of this program: it is licensed under
 CC BY 4.0, and its use as a mark follows the OpenSheaf
 [trademark policy](https://github.com/opensheaf/opensheaf.github.io/blob/main/TRADEMARKS.md).
 
+Identity
+--------
+
+1. [Names: genesis records, digests and sheaf: URIs](05-names.md).
+2. [Owners and their key logs](06-owners.md).
+3. [Keys: making them, keeping them, exporting them](07-keys.md).
+4. [Signatures and the statuses of versions](08-signatures.md).
+
 The archive
 -----------
 
-1. [The archive: configuration and storage](10-archive.md): the settings,
+5. [The archive: configuration and storage](10-archive.md): the settings,
    the OCFL storage root, inventories, object versions; the structure of
    the core module.
-2. [Document versions, history and dates](11-versions.md): document
+6. [Document versions, history and dates](11-versions.md): document
    versions as opposed to object versions, the history and the current
    version, notices carried forward, dates.
-3. [TeXmacs: typesetting and reading markup](12-texmacs.md).
-4. [Depositing a document](13-deposit.md).
-5. [Description-only versions and completions](14-description.md):
+7. [TeXmacs: typesetting and reading markup](12-texmacs.md).
+8. [Depositing a document](13-deposit.md).
+9. [Description-only versions and completions](14-description.md):
    notices, withdrawals, relations, licences, corrections of the
    description; sources found later.
-6. [The main collection](15-main-collection.md).
-7. [The discovery document and the index](16-index.md).
-8. [Verifying an archive](17-verify.md).
-9. [Creating an archive](18-init.md).
+10. [The main collection](15-main-collection.md).
+11. [The discovery document and the index](16-index.md).
+12. [Verifying an archive](17-verify.md).
+13. [Creating an archive](18-init.md).
 
 Across archives
 ---------------
 
-10. [Collections across archives](20-collections.md).
-11. [Mirrors](21-mirrors.md).
-12. [Accepted copies](22-accepted-copies.md).
+14. [Collections across archives](20-collections.md).
+15. [Mirrors](21-mirrors.md).
+16. [Accepted copies](22-accepted-copies.md).
 
 The website
 -----------
 
-13. [The website](30-website.md): the home page, and the landing pages
+17. [The website](30-website.md): the home page, and the landing pages
     and sitemap, also written beside a TeXmacs index.
-14. [The templates of the website](31-templates.md).
+18. [The templates of the website](31-templates.md).
 
 Services
 --------
 
-15. [Importing from arXiv: fetching](40-arxiv.md).
-16. [Importing from arXiv: the metadata](41-arxiv-metadata.md).
-17. [Importing from arXiv: the object versions](42-arxiv-import.md).
-18. [Zenodo: DOIs for document versions](50-zenodo.md).
+19. [Importing from arXiv: fetching](40-arxiv.md).
+20. [Importing from arXiv: the metadata](41-arxiv-metadata.md).
+21. [Importing from arXiv: the object versions](42-arxiv-import.md).
+22. [Zenodo: DOIs for document versions](50-zenodo.md).
 
 The command line and the tests
 ------------------------------
 
-19. [The command line](60-command-line.md), with options read from YAML
+23. [The command line](60-command-line.md), with options read from YAML
     files.
-20. [The tests](70-tests.md).
+24. [The tests](70-tests.md), and
+25. [the tests of names, owners, keys and signatures](71-tests-identity.md).
 
 The literate tools, tangling and weaving, are described in their own
 literate program, [opensheaf-literate](https://opensheaf.org/literate/).
