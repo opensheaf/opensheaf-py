@@ -3,30 +3,32 @@ The tests
 
 The tests check the archive machinery on small archives built in temporary
 folders. They need neither TeXmacs nor the network: the sources are LaTeX
-files of one line, the PDFs a few bytes that start like a PDF, and the
-"other archives" of the tests on collections are folders next to the
-first. They run with `pytest`, on every push, on the oldest and the newest
-supported Python.
+files of one line, the PDFs a few bytes that start like a PDF. They run
+with `pytest`, on every push, on the oldest and the newest supported
+Python. The [tests of identity](71-tests-identity.md), which check names,
+owners, keys and signatures against appendix C, are in a file of their own.
 
 There are two kinds of tests. The first kind writes object versions by
-hand, without the deposit command, so as to build archives that the
-command would refuse to make, and checks that verification (section 14 of
-the specification) finds what is wrong with them; it tests the rules of
-document versions of section 7.3. The second kind runs `osheaf` as a user
-would, through the `main` function of the [command line](60-command-line.md),
-and checks the files it writes: the deposits, the website, files of
-options, and the work across archives (collections, mirrors, accepted
-copies), explained in the chapters on the core and on collections. A few
-tests in between check small functions on their own.
+hand, through `add_version` but without the deposit command, so as to
+build archives that the command would refuse to make, and checks that
+verification (section 14 of the specification) finds what is wrong with
+them; it tests the rules of document versions of section 4.2, the inventory
+chain of section 4.3, and the signatures of section 7. The second kind runs
+`osheaf` as a user would, through the `main` function of the
+[command line](60-command-line.md), and checks the files it writes: the
+archive and its owner, the deposits, files of options, the changes of keys.
+A few tests in between check small functions on their own.
 
-All the tests are in one file, `tests/test_core.py`, in this order. The
-prose below follows it, except that the helper `make_archive` is explained
-with `run`, before the first test that uses it.
+The tests of the commands not yet ported to specification 0.2 (the
+website, and the work across archives: collections, mirrors, accepted
+copies) are kept, skipped, for phases b and c of the port.
+
+All the tests are in one file, `tests/test_core.py`, in this order.
 
     # in tests/test_core.py:
     <<test: the imports of the tests>>
 
-    <<test: the configuration of a test archive>>
+    <<test: the keys of the tests>>
 
 
     <<test: a fresh archive for each test>>
@@ -44,30 +46,44 @@ with `run`, before the first test that uses it.
     <<test: the rules of document versions>>
 
 
+    <<test: lines, signatures and the inventory chain>>
+
+
     <<test: small functions>>
 
 
     <<test: running osheaf>>
 
 
-    <<test: deposits through osheaf>>
-
-
     <<test: making an archive with osheaf init>>
+
+
+    <<test: deposits through osheaf>>
 
 
     <<test: notices, withdrawal and completion through osheaf>>
 
 
+    <<test: owners and keys through osheaf>>
+
+
+    <<test: verifying broken archives>>
+
+
+    <<test: the website, not yet ported>>
+
+
     <<test: collections, mirrors and accepted copies>>
 
 The tests use the core under the short name `P`, as the other modules of
-the package do, and the arXiv module for its text functions.
+the package do, the arXiv module for its text functions, and the modules
+of identity.
 
     # in test: the imports of the tests:
     """Tests of the archive machinery on small archives built in temporary
     folders (no TeXmacs, no network)."""
 
+    import functools
     import json
     import shutil
     import sys
@@ -76,72 +92,80 @@ the package do, and the arXiv module for its text functions.
 
     import pytest
 
-    from opensheaf import arxiv, core as P
+    from opensheaf import arxiv, core as P, keys, names, owners, sign
+
+The keys of the tests
+---------------------
+
+Every archive has an owner, and every version is signed, so every test
+makes keys. They must never touch the keys of the person running the tests:
+the key store is pinned to files (`OPENSHEAF_KEY_STORE=file`), in a
+configuration folder of the test (`XDG_CONFIG_HOME`), and no signing key or
+passphrase is taken from the environment. Keys are predictable, through the
+hook of [chapter 7](07-keys.md), `OSHEAF_TEST_KEYS`, which pytest alone may
+use: each test gets labels of its own, made from its name, so that its keys
+differ from those of the other tests, and the same at every run.
+
+    # in test: the keys of the tests:
+    @pytest.fixture(autouse=True)
+    def keys_of_the_tests(tmp_path, monkeypatch, request):
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+        monkeypatch.setenv(keys.KEY_STORE, "file")
+        monkeypatch.delenv(keys.SIGNING_KEY, raising=False)
+        monkeypatch.delenv(P.PASSPHRASE, raising=False)
+        monkeypatch.setenv(keys.TEST_KEYS, ",".join(f"{request.node.name} {i}" for i in range(80)))
 
 Archives built by hand
 ----------------------
 
 ### A test archive
 
-The configuration of the archives built by hand is the content of an
-`osheaf.json`, with only what the core needs: the identifier of the
-archive, its name and address, the identifier of its main collection, the
-curator, and the depositor recorded in the inventories (section 7.1).
-
-    # in test: the configuration of a test archive:
-    CONFIG = {
-        "archiveId": "tag:example.org,2026:test",
-        "name": "Test archive",
-        "baseUrl": "https://example.org/archive/",
-        "mainCollection": "collection-test",
-        "curator": {"name": "Doe, Jane", "givenName": "Jane", "familyName": "Doe", "affiliation": "Nowhere"},
-        "depositor": {"name": "Jane Doe", "address": "https://example.org/jane"},
-    }
-
-The fixture `archive` gives each test that asks for it a new archive: a
-temporary folder with that configuration and an empty storage root. The
-core keeps the paths of the archive it works on in module variables, set
-by `P.configure`; so the fixture configures the core, and every later call
-of the test acts on this archive. The folder is removed after the test.
+The fixture `archive` gives each test that asks for it a new archive, made
+by `osheaf init` with a new owner, whose rotation keys go to a folder
+`keys` beside the archive; it is configured, with its main catalogue and its
+discovery document. `CONFIG` names its base URL.
 
     # in test: a fresh archive for each test:
+    CONFIG = {"baseUrl": "https://example.org/archive/"}
+
+
     @pytest.fixture
-    def archive():
-        root = Path(tempfile.mkdtemp())
-        (root / "osheaf.json").write_text(json.dumps(CONFIG))
-        P.configure(root)
-        P.init_storage_root()
+    def archive(tmp_path):
+        root = tmp_path / "archive"
+        run("init", str(root), "--name", "Test archive", "--base-url", CONFIG["baseUrl"],
+            "--curator", "Doe, Jane", "--new-owner", "--export", str(tmp_path / "keys"),
+            "--no-passphrase", "--yes")
         yield root
-        shutil.rmtree(root, ignore_errors=True)
 
 ### Writing object versions directly
 
-`put` adds one object version to an object, holding document version N
-with the given files. It does by hand what a deposit does, but decides
-nothing: the document version number is whatever the test says, which is
-how the tests make the mistakes that verification must find.
-
-It writes an `object.json` and a `datacite.json` of the minimal form
-(sections 8 and 9), a document with a LaTeX main source and a PDF
-rendition. `extra_obj` adds or replaces fields of `object.json`, such as
-notices; with `sourcesMissing` the version has no main source, as section
-9 requires. The one thing taken from the core is `carry_forward`, which
-keeps the notices of the previous head and maintains the history: with
-`after`, a document version is placed after another (a version found
-later); with `description_only`, the version replaces the entry of its
-document version in the history instead. Finally `P.add_version` writes
-the files as a new OCFL version of the object.
+`put` adds an object version holding document version `n` of the line
+labelled `label`, with the given files, without the checks of a deposit.
+A new label seals a new work, as a deposit with `--new` does; a known one
+carries its genesis record. It writes an `object.json` and a
+`datacite.json` of the minimal form (sections 4.3 and 4.4), a document with
+a LaTeX main source and a PDF unless `extra_obj` says otherwise. The notices
+and the history are carried forward as the commands do, which lets the
+tests build histories with versions found later (`after`) and
+description-only versions. The version is added, and signed, by
+`add_version`.
 
     # in test: writing an object version by hand:
-    def put(obj_id, n, files, *, after=None, available="2026-01-01", message="test", extra_obj=None,
+    def put(label, n, files, *, after=None, available="2026-01-01", message="test", extra_obj=None,
             description_only=False):
-        """Add an object version holding document version N with FILES ({name: bytes})."""
-        tmp = Path(tempfile.mkdtemp())
-        d = P.OCFL / obj_id
-        inv = P.load_inventory(d)
-        prev = P.read_json(d, inv, P.OBJ) if inv else None
+        """Add an object version of LABEL holding document version N with FILES ({name: bytes})."""
+        owner = P.ARCHIVE["owner"]
+        if label in P.LABELS:
+            obj_id = P.LABELS[label]
+            d = P.obj_dir(obj_id)
+            inv = P.load_inventory(d)
+            prev, genesis = P.read_json(d, inv, P.OBJ), P.read_logical(d, inv, P.GENESIS).read_bytes()
+        else:
+            genesis, obj_id = P.seal("document", owner)
+            inv = prev = None
+            P.LABELS[label] = obj_id
         obj = {"format": P.OBJ_FORMAT, "specification": P.SPEC, "kind": "document",
-               "archiveId": CONFIG["archiveId"], "objectId": obj_id, "documentVersion": n,
+               "name": obj_id.split(":")[1], "owner": owner, "documentVersion": n,
                "mainSource": "main.tex", "sourceFormat": "application/x-tex",
                "renditions": [{"path": "paper.pdf", "mediaType": "application/pdf"}], "status": "active"}
         obj.update(extra_obj or {})
@@ -149,49 +173,48 @@ the files as a new OCFL version of the object.
             obj.pop("mainSource")
             obj.pop("sourceFormat")
         P.carry_forward(prev, obj, inv, P.next_object_version(inv), None if description_only else after)
-        dc = {"titles": [{"title": f"Paper {obj_id}"}], "creators": [{"name": "Doe, Jane"}],
+        dc = {"titles": [{"title": f"Paper {label}"}], "creators": [{"name": "Doe, Jane", "nameType": "Personal"}],
               "publisher": {"name": "Test"}, "publicationYear": 2026,
               "types": {"resourceTypeGeneral": "Preprint"}, "version": str(n),
               "dates": [{"date": "2026-01-01", "dateType": "Issued"},
                         {"date": available, "dateType": "Available"}]}
-        content = {}
-        for name, data in files.items():
-            (tmp / name).write_bytes(data)
-            content[name] = tmp / name
-        P.write_json(tmp / P.OBJ, obj)
-        P.write_json(tmp / "datacite.json", dc)
-        content[P.OBJ], content["datacite.json"] = tmp / P.OBJ, tmp / "datacite.json"
-        inv = P.add_version(obj_id, content, message)
-        shutil.rmtree(tmp)
-        return inv
+        content = dict(files, **{"datacite.json": P.json_bytes(dc), P.GENESIS: genesis})
+        content.update({p: f for p, f in P.carried_files(obj_id, inv).items() if p not in content})
+        return P.add_version(obj_id, content, obj, message, acknowledged=True)
+
+
+    def head_of(label):
+        """The folder and the inventory of the line LABEL."""
+        d = P.obj_dir(P.LABELS[label])
+        return d, P.load_inventory(d)
 
 Three sets of files, each a source and a PDF, stand for three different
 document versions: what matters to the rules is only whether two versions
-hold the same files or not.
+hold the same files.
 
     # in test: three document versions:
     FILES1 = {"main.tex": b"\\documentclass{article}one", "paper.pdf": b"%PDF one"}
     FILES2 = {"main.tex": b"\\documentclass{article}two", "paper.pdf": b"%PDF two"}
     FILES3 = {"main.tex": b"\\documentclass{article}three", "paper.pdf": b"%PDF three"}
 
-`finish` does what one does after deposits: a new version of the main
-collection, the discovery document, and the checks. It returns the list of
-errors found, empty for a valid archive.
+`finish` does what the commands do after deposits: a new version of the
+main catalogue, the discovery document; then it returns the errors of
+verification. A test that expects none compares them with the empty list.
 
     # in test: closing and verifying an archive:
     def finish():
         P.collect(None)
-        P.write_json(P.ROOT / "opensheaf.json", P.discovery())
+        P.write_discovery()
         return P.verify_errors()
 
 ### The rules of document versions
 
-The tests of this section follow section 7.3 of the specification. The
+The tests of this section follow section 4.2 of the specification. The
 first builds the simplest valid archive: two document versions of one
-paper and one of another. The current version of `paper-a` is its object
-version `v2`, and the main collection, ordered by date of issue
-(`issued-desc`, section 10.2), pins each document at the object version
-that holds its current version.
+paper, one of another. It must verify without errors; the current version
+of the first paper is its second object version; and the main catalogue,
+newest first (`issued-desc`), pins the latest signed version of each,
+naming each member by its line.
 
     # in test: the rules of document versions:
     def test_simple_archive_verifies(archive):
@@ -199,13 +222,14 @@ that holds its current version.
         put("paper-a", 2, FILES2, available="2026-02-01")
         put("paper-b", 1, FILES3, available="2026-03-01")
         assert finish() == []
-        d = P.OCFL / "paper-a"
-        inv = P.load_inventory(d)
+        d, inv = head_of("paper-a")
         assert P.current_version(d, inv) == "v2"
-        members = P.read_json(P.OCFL / CONFIG["mainCollection"],
-                              P.load_inventory(P.OCFL / CONFIG["mainCollection"]), "members.json")
-        assert members["order"] == "issued-desc"
-        assert {m["id"]: m["version"] for m in members["members"]} == {"paper-a": "v2", "paper-b": "v1"}
+        cdir, cinv = head_of("main")
+        members = P.read_json(cdir, cinv, "members.json")
+        assert members["order"] == "issued-desc" and members["format"] == "opensheaf-collection/0.2"
+        name = {lb: P.LABELS[lb].split(":")[1] for lb in ("paper-a", "paper-b")}
+        assert {m["name"]: m["version"] for m in members["members"]} == {name["paper-a"]: "v2", name["paper-b"]: "v1"}
+        assert all(m["owner"] == P.ARCHIVE["owner"] and m["at"] == [CONFIG["baseUrl"]] for m in members["members"])
 
 Document versions are numbered from 1 without gaps. A paper whose second
 object version claims to be document version 3 breaks the numbering.
@@ -229,9 +253,10 @@ Here the second object version reuses number 1 with other files.
 
 The converse: an object version holding the same files and change note as
 an earlier document version keeps its number (the rule of new versions,
-section 7.3). Here `paper-a` gives number 3 to the files of document
-version 1. `paper-b` gives number 2 to the files of version 1 with a
-change note of its own, which is a new document version.
+section 4.2). Version 3 of `paper-a` holds the files of version 1, which is
+an error; version 2 of `paper-b` holds the files of version 1 with a change
+note of its own, which makes it a new document version. The genesis record
+is not one of the document's own files.
 
     # in test: the rules of document versions:
     def test_new_number_with_the_same_files_is_an_error(archive):
@@ -241,15 +266,13 @@ change note of its own, which is a new document version.
         put("paper-b", 1, FILES3)
         put("paper-b", 2, FILES3, extra_obj={"changes": {"text": "The same files, now refereed."}})
         errors = finish()
-        assert errors == ["ocfl/paper-a: v3 document version 3 holds the same files and change note"
+        assert errors == ["paper-a: v3 document version 3 holds the same files and change note"
                           " as document version 1, whose number it keeps"]
 
 A version found later, earlier in the work than the current one, is
 deposited with `after`: it gets the next number, 3, but its place in the
-history is after document version 1. The object then has a `history`,
-listing the object versions in the order of the work, and the current
-version, the last entry of the history, stays `v2`: dates and numbers
-never decide it.
+history is after document version 1. The history is then written in
+`object.json`, and the current version stays document version 2.
 
     # in test: the rules of document versions:
     def test_version_found_later_keeps_the_current_version(archive):
@@ -257,8 +280,7 @@ never decide it.
         put("paper-a", 2, FILES2)
         # an earlier version found later, placed between 1 and 2
         put("paper-a", 3, FILES3, after=1)
-        d = P.OCFL / "paper-a"
-        inv = P.load_inventory(d)
+        d, inv = head_of("paper-a")
         head = P.read_json(d, inv, P.OBJ)
         assert head["history"] == ["v1", "v3", "v2"]
         assert P.current_version(d, inv) == "v2"
@@ -266,9 +288,7 @@ never decide it.
 
 The same archive then gets a description-only version of document version
 2: the same files, a new object version `v4`. The entry of document
-version 2 in the history becomes `v4`, the last object version holding
-it, since it carries the most complete description; so `v4` is now the
-current version.
+version 2 in the history becomes `v4`, which is now the current version.
 
     # in test: the rules of document versions:
     def test_description_only_version_updates_the_history(archive):
@@ -277,15 +297,14 @@ current version.
         put("paper-a", 3, FILES3, after=1)
         # a description-only version of the current version (document version 2)
         put("paper-a", 2, FILES2, description_only=True)
-        d = P.OCFL / "paper-a"
-        inv = P.load_inventory(d)
+        d, inv = head_of("paper-a")
         assert P.read_json(d, inv, P.OBJ)["history"] == ["v1", "v3", "v4"]
         assert P.current_version(d, inv) == "v4"
         assert finish() == []
 
 A notice about document version 1 is added by a description-only version;
 a later document version must keep it, unchanged. `carry_forward` copies
-it, and the verifier checks that every notice stays.
+it, and verification accepts the result.
 
     # in test: the rules of document versions:
     def test_notices_are_kept(archive):
@@ -293,80 +312,82 @@ it, and the verifier checks that every notice stays.
         put("paper-a", 1, FILES1)
         put("paper-a", 1, FILES1, extra_obj={"notices": [notice]}, description_only=True)
         put("paper-a", 2, FILES2)
-        d = P.OCFL / "paper-a"
-        assert P.read_json(d, P.load_inventory(d), P.OBJ)["notices"] == [notice]
+        d, inv = head_of("paper-a")
+        assert P.read_json(d, inv, P.OBJ)["notices"] == [notice]
         assert finish() == []
 
-The main collection is a catalogue (section 10.2): it says so
-in its `type`, and each member pins the head of its object, whatever the
-head holds. Here the head of `paper-a` holds a version found later, and
-is not the object version holding the current version; the member pins
-the head all the same, and presentations show the current version, read
-from the history of the pinned version.
+The main catalogue (section 8.3) says so in its `type`, and each member
+pins the latest signed version of its line, whatever document version it
+holds: here `v3`, a version found later. The version presented is the
+current version as of the pin, `v2`.
 
     # in test: the rules of document versions:
-    def test_main_collection_pins_heads(archive):
+    def test_main_collection_pins_the_latest_signed_versions(archive):
         put("paper-a", 1, FILES1)
         put("paper-a", 2, FILES2)
         put("paper-a", 3, FILES3, after=1)
         assert finish() == []
-        cdir = P.OCFL / CONFIG["mainCollection"]
-        members = P.read_json(cdir, P.load_inventory(cdir), "members.json")
+        cdir, cinv = head_of("main")
+        members = P.read_json(cdir, cinv, "members.json")
         assert members["type"] == "catalogue"
         m = members["members"][0]
-        d = P.OCFL / "paper-a"
+        d, inv = head_of("paper-a")
         assert m["version"] == "v3" and m["inventorySha512"] == P.digest(d / "v3" / "inventory.json")
         assert m["follow"] == "latest"
-        assert P.presented_version(m, d, P.load_inventory(d)) == "v2"
+        assert P.presented_version(m, d, inv) == "v2"
 
-A selection's members pin revisions and nothing else (section 10.2), and
-verification checks it (section 14). This collection, written by hand, has
-a member with both a version and revisions, and a member whose revision
-states a document version that its object version does not hold; a third
-collection has no `type` at all.
+A selection's members pin revisions and nothing else (section 8.4), and
+verification checks it (section 14.5). This collection, written by hand as
+a line of the archive's owner, has one member with both a pin and a
+revision set, and one whose revision claims a document version that the
+pinned object version does not hold.
 
     # in test: the rules of document versions:
+    def put_collection(label, members, kind):
+        genesis, obj_id = P.seal("collection", P.ARCHIVE["owner"])
+        P.LABELS[label] = obj_id
+        obj = {"format": P.OBJ_FORMAT, "specification": P.SPEC, "kind": "collection",
+               "name": obj_id.split(":")[1], "owner": P.ARCHIVE["owner"], "documentVersion": 1, "status": "active"}
+        dc = {"titles": [{"title": label}], "creators": [{"name": "Doe, Jane", "nameType": "Personal"}],
+              "publisher": {"name": "Test"}, "publicationYear": 2026,
+              "types": {"resourceTypeGeneral": "Collection"}, "version": "1"}
+        files = {"members.json": P.json_bytes({"format": "opensheaf-collection/0.2", "type": kind,
+                                               "members": members}),
+                 "datacite.json": P.json_bytes(dc), P.GENESIS: genesis}
+        return P.add_version(obj_id, files, obj, "a collection")
+
+
     def test_verify_catches_malformed_selection_members(archive):
-        from opensheaf import collections
         put("paper-a", 1, FILES1)
         put("paper-a", 2, FILES2)
-        d = P.OCFL / "paper-a"
+        d, inv = head_of("paper-a")
         pin1 = P.digest(d / "v1" / "inventory.json")
-        base = {"kind": "document", "archive": CONFIG["archiveId"], "archiveUrl": CONFIG["baseUrl"], "id": "paper-a"}
+        _, nm, owner = P.LABELS["paper-a"].split(":")
+        base = {"kind": "document", "name": nm, "owner": owner, "at": [CONFIG["baseUrl"]]}
         both = dict(base, version="v1", inventorySha512=pin1,
                     revisions=[{"documentVersion": 1, "version": "v1", "inventorySha512": pin1}])
         wrong = dict(base, revisions=[{"documentVersion": 2, "version": "v1", "inventorySha512": pin1}])
-        collections.write("issue", [both, wrong], "Issue", "An issue.", "manual", None, "selection")
+        put_collection("issue", [both, wrong], "selection")
         errors = finish()
         assert any("has no version, inventorySha512 or follow" in e for e in errors)
-        assert any("v1 does not hold document version 2" in e for e in errors)
-        collections.write("untyped", [base], "Untyped", "No type.", "manual", None, "catalogue")
-        cdir = P.OCFL / "untyped"
-        mem = P.read_json(cdir, P.load_inventory(cdir), "members.json")
-        mem.pop("type")
-        tmp = Path(tempfile.mkdtemp())
-        P.write_json(tmp / "members.json", mem)
-        files = {n: P.read_logical(cdir, P.load_inventory(cdir), n) for n in ("datacite.json", P.OBJ)}
-        P.add_version("untyped", dict(files, **{"members.json": tmp / "members.json"}), "no type")
-        P.write_json(P.ROOT / "opensheaf.json", P.discovery())
-        assert any("untyped: v2 members.json has no valid type" in e for e in P.verify_errors())
+        assert any("v1: does not hold document version 2" in e for e in errors)
 
 A version may have no sources, only its PDF, as for some old versions on
 arXiv. Its `object.json` then says why in `sourcesMissing` and names no
-main source, and the archive is valid.
+main source.
 
     # in test: the rules of document versions:
     def test_sources_missing(archive):
         put("paper-a", 1, {"paper.pdf": b"%PDF only"},
             extra_obj={"sourcesMissing": {"text": "arXiv keeps only the PDF of this version"}})
-        d = P.OCFL / "paper-a"
-        obj = P.read_json(d, P.load_inventory(d), P.OBJ)
+        d, inv = head_of("paper-a")
+        obj = P.read_json(d, inv, P.OBJ)
         assert "mainSource" not in obj and obj["sourcesMissing"]
         assert finish() == []
 
-The file of the licence terms (`licence`, section 9) describes the object,
-not the document version: a description-only version may add it, and the
-document version keeps the same files (sections 7.3 and 9).
+The file of the licence terms (`licence`, section 4.3) describes the
+object, not the document version: a description-only version may add it,
+and the document version keeps its number.
 
     # in test: the rules of document versions:
     def test_licence_terms_added_by_a_description_only_version(archive):
@@ -377,73 +398,60 @@ document version keeps the same files (sections 7.3 and 9).
         assert finish() == []
 
 The copy of the inventory in each version is the inventory as of that
-version (OCFL 1.1, section 3.5.3): its head is the version, and it records
-the versions up to it as the root inventory does. Here the copy of `v2`
-is replaced by that of `v1`, which has another head and lacks `v2`; then by
-a copy of the right shape whose `v1` has another message.
+version (section 14.2): its head is the version, and it records exactly
+the versions up to it, as the root inventory records them. A copy of `v1`
+put in place of that of `v2` is found, and so is a copy that records the
+right versions with another message.
 
     # in test: the rules of document versions:
     def test_inventory_copies_record_the_versions_up_to_theirs(archive):
         put("paper-a", 1, FILES1)
         put("paper-a", 2, FILES2)
         assert finish() == []
-        d = P.OCFL / "paper-a"
+        d, _ = head_of("paper-a")
         shutil.copyfile(d / "v1" / "inventory.json", d / "v2" / "inventory.json")
         errors = P.verify_errors()
-        assert "ocfl/paper-a: v2 the inventory copy has the head v1" in errors
-        assert "ocfl/paper-a: v2 the inventory copy does not record exactly the versions v1 to v2" in errors
+        assert "paper-a v2: the inventory copy has the head v1" in errors
+        assert "paper-a v2: the inventory copy does not record exactly the versions v1 to v2" in errors
         copy = P.load_inventory(d)
         copy["versions"]["v1"]["message"] = "another message"
         (d / "v2" / "inventory.json").write_text(json.dumps(copy))
         errors = P.verify_errors()
-        assert ("ocfl/paper-a: v2 the inventory copy disagrees with the inventory"
-                " about the versions it records") in errors
+        assert "paper-a v2: the inventory copy disagrees with the inventory about the versions it records" in errors
         assert not any("the inventory copy has the head" in e for e in errors)
 
-The index page must show the pins of the main collection only in an
-archive that declares the profile `website` (appendix C); in another, a
-missing pin is a note, printed but not counted among the problems.
-
-    # in test: the rules of document versions:
-    def test_index_pins_required_by_the_profile_website(archive, monkeypatch, capsys):
-        put("paper-a", 1, FILES1)
-        assert finish() == []
-        (archive / "index.html").write_text("<p>an index made by other tools</p>")
-        assert P.verify_errors() == []
-        assert "index.html does not show the pin of paper-a (the archive does not declare" \
-            " the profile website)" in capsys.readouterr().out
-        monkeypatch.setitem(P.ARCHIVE, "profiles", ["website"])
-        P.write_json(archive / "opensheaf.json", P.discovery())
-        assert "index.html does not show the pin of paper-a" in P.verify_errors()
-
-An object taken down (section 11.2) leaves the storage root and gets a
+An object taken down (section 13.2) leaves the storage root and gets a
 tombstone in the discovery document; a pin to it, here that of the main
-collection, is reported as removed, not as unavailable (section 11.3), in
-a note that does not count among the problems.
+catalogue, is reported as removed, a result, not as a missing object.
 
     # in test: the rules of document versions:
-    def test_pin_to_a_removed_object_is_reported_as_removed(archive, capsys):
+    def test_pin_to_a_removed_object_is_reported_as_removed(archive):
         put("paper-a", 1, FILES1)
         put("paper-b", 1, FILES2)
         assert finish() == []
         disc = json.loads((archive / "opensheaf.json").read_text())
-        entry = next(o for o in disc["objects"] if o["id"] == "paper-a")
+        obj_id = P.LABELS["paper-a"]
+        entry = next(o for o in disc["objects"] if o["id"] == obj_id)
         disc["objects"].remove(entry)
-        disc["tombstones"] = [{"id": "paper-a", "kind": "document", "lastVersion": entry["head"],
+        d, _ = head_of("paper-a")
+        genesis = P.read_logical(d, P.load_inventory(d), P.GENESIS).read_bytes()
+        disc["tombstones"] = [{"id": obj_id, "kind": "document", "name": entry["name"], "owner": entry["owner"],
+                               "genesisName": names.name(genesis), "lastVersion": entry["head"],
                                "inventorySha512": entry["inventorySha512"], "date": "2026-03-01",
                                "reason": "Removed at the request of a rights holder."}]
         (archive / "opensheaf.json").write_text(json.dumps(disc))
-        shutil.rmtree(P.OCFL / "paper-a")
-        capsys.readouterr()
-        assert P.verify_errors() == []
-        assert "member paper-a v1: removed (a tombstone in this archive)" in capsys.readouterr().out
+        shutil.rmtree(d)
+        P.configure(archive)
+        found = P.verify_findings()
+        assert [x for x in found if x["severity"] == "error"] == []
+        assert any(x["severity"] == "result" and "removed: a tombstone" in x["message"] for x in found)
 
-Formats are checked as assertions (section 14): a contact that is not a
+Formats are checked as assertions (section 14.2): a contact that is not a
 URI is an error. Without `jsonschema`, the schemas are not checked, and a
-note says so.
+warning says so.
 
     # in test: the rules of document versions:
-    def test_schema_formats_are_checked(archive, monkeypatch, capsys):
+    def test_schema_formats_are_checked(archive, monkeypatch):
         put("paper-a", 1, FILES1)
         assert finish() == []
         disc = json.loads((archive / "opensheaf.json").read_text())
@@ -451,26 +459,129 @@ note says so.
         (archive / "opensheaf.json").write_text(json.dumps(disc))
         assert "opensheaf.json: 'not a uri' is not a 'uri'" in P.verify_errors()
         monkeypatch.setitem(sys.modules, "jsonschema", None)
-        capsys.readouterr()
-        assert P.verify_errors() == []
-        assert "the JSON Schemas are not checked: jsonschema is not installed" in capsys.readouterr().out
+        found = P.verify_findings()
+        assert [x for x in found if x["severity"] == "error"] == []
+        assert any("the JSON Schemas are not checked" in x["message"] for x in found)
+
+Lines, signatures and the inventory chain
+-----------------------------------------
+
+These tests follow sections 3.2, 4.3 and 7. Every version written by
+`add_version` is signed with the current key of the device, naming the
+latest version of the key log; every version after the first records in
+`previous` the digest of the inventory before it, as its checksum file
+states it.
+
+    # in test: lines, signatures and the inventory chain:
+    def test_versions_are_signed_and_chained(archive):
+        put("paper-a", 1, FILES1)
+        put("paper-a", 2, FILES2)
+        d, inv = head_of("paper-a")
+        log = P.key_log(P.ARCHIVE["owner"])
+        v1, v2 = (P.read_json(d, inv, P.OBJ, v) for v in ("v1", "v2"))
+        assert "previous" not in v1
+        assert v2["previous"] == P.digest(d / "v1" / "inventory.json")
+        assert (d / "v1" / "inventory.json.sha512").read_text().endswith("  inventory.json\n")
+        judgements, statuses = P.line_statuses(d, inv)
+        assert statuses == [sign.SIGNED, sign.SIGNED]
+        j = judgements[1][0]
+        assert j.status == sign.GOOD and j.key in log.latest().keys["keys"] and j.key_log == (1, log.versions[0].digest)
+        assert P.latest_signed(d, inv) == "v2"
+        assert P.read_logical(d, inv, P.GENESIS, "v1").read_bytes() == P.read_logical(d, inv, P.GENESIS).read_bytes()
+
+The inventories of every object are written alike: the keys in
+alphabetical order, as those of the key logs (`owners.ordered_inventory`).
+
+    # in test: lines, signatures and the inventory chain:
+    def test_inventories_in_the_order_of_the_key_logs(archive):
+        put("paper-a", 1, FILES1)
+        d, inv = head_of("paper-a")
+        data = (d / "inventory.json").read_bytes()
+        assert data == owners.inventory_file(owners.ordered_inventory(json.loads(data)))
+        assert list(json.loads(data)) == sorted(json.loads(data))
+
+The hashed layout of section 3.2: appendix C gives the path of its paper,
+an identifier of 111 characters encoded to 115 and shortened.
+
+    # in test: lines, signatures and the inventory chain:
+    def test_paths_of_the_layouts():
+        paper = ("sheaf:zzgdggwlldcrw4bdeuvntiaobtw2kge6bc4go737pfekhfc5oz4q:"
+                 "56wo6cdpjsxk7ddgnqfp2quipfghukhtmvjuahvwzko7m4tkz3pa")
+        assert P.path_of(paper, P.HASHED_LAYOUT) == (
+            "946/75e/b2e/sheaf%3azzgdggwlldcrw4bdeuvntiaobtw2kge6bc4go737pfekhfc5oz4q%3a56wo6cdpjsxk7ddgnqfp2quip"
+            "fghukhtmvjua-94675eb2e27de7146a912666db928784432a4c206a6b390da5a0ed7d15975580")
+        assert P.path_of(paper, P.OWNER_NAME_LAYOUT) == (
+            "56wo6cdpjsxk7ddgnqfp2quipfghukhtmvjuahvwzko7m4tkz3pa/zzgdggwlldcrw4bdeuvntiaobtw2kge6bc4go737pfekhfc5oz4q")
+        assert P.path_of("sheaf:draft:notes-1", P.OWNER_NAME_LAYOUT) == "draft/notes-1"
+        with pytest.raises(ValueError):
+            P.path_of("paper-a", P.OWNER_NAME_LAYOUT)
+
+The files the tools write validate against the schemas of version 0.2
+(appendix B): the discovery document, `object.json` of every kind,
+`members.json`, the genesis records, `keys.json` and the signature files.
+Verification checks most of them; this test checks each kind directly.
+
+    # in test: lines, signatures and the inventory chain:
+    def test_files_validate_against_the_schemas(archive):
+        jsonschema = pytest.importorskip("jsonschema")
+        put("paper-a", 1, FILES1)
+        put("paper-a", 2, FILES2)
+        finish()
+
+        def check(name, data):
+            schema = json.loads((P.SCHEMAS / f"opensheaf-{name}-0.2.schema.json").read_text())
+            errors = list(jsonschema.Draft202012Validator(schema, format_checker=jsonschema.FormatChecker())
+                          .iter_errors(data))
+            assert not errors, (name, data, errors[0].message)
+        check("archive", json.loads((archive / "opensheaf.json").read_text()))
+        for obj_id, d, inv in P.objects():
+            for ver in inv["versions"]:
+                obj = P.read_json(d, inv, P.OBJ, ver)
+                if obj["kind"] != "owner":
+                    check("object", obj)
+                check("genesis", P.read_json(d, inv, P.GENESIS, ver))
+                if obj["kind"] == "collection":
+                    check("collection", P.read_json(d, inv, "members.json", ver))
+                if obj["kind"] == "owner":
+                    check("keys", P.read_json(d, inv, "keys.json", ver))
+                for data in P.witnesses_of(d, ver).values():
+                    check("signature", json.loads(data))
+
+An independent OCFL validator accepts every object: its only warnings are
+on what OpenSheaf does on purpose, the witness folder (an extension folder
+not registered with OCFL, section 7.2) and the first version of a key log,
+which has no message or user (section 6.1).
+
+    # in test: lines, signatures and the inventory chain:
+    def test_ocfl_validator_accepts_the_objects(archive):
+        validator = pytest.importorskip("ocfl.validator")
+        import ocfl
+        put("paper-a", 1, FILES1)
+        put("paper-a", 2, FILES2)
+        finish()
+        for obj_id, d, inv in P.objects():
+            v = validator.Validator(log_warnings=True)
+            assert v.validate_object(str(d)), v.status_str()
+            codes = {line.split("]")[0].strip("[") for line in v.status_str().splitlines() if line}
+            assert codes <= {"W007a", "W007b", "W013"}, v.status_str()
+        assert ocfl.StorageRoot(root=str(P.OCFL)).validate(log_warnings=False)
 
 Small functions
 ---------------
 
 Seven tests check functions on their own, without an archive.
 
-The order `issued-desc` of section 10.2 sorts the members by their
+The order `issued-desc` of section 8.2 sorts the members by their
 `Issued` date, newest first, then by their `Available` date; members with
-neither date come last, and ties are broken by the object identifier, so
+neither date come last, and ties are broken by `name` and then `owner`, so
 that the order is reproducible. Here `a` and `b` have the same date and
 `c` has none.
 
     # in test: small functions:
     def test_member_order():
-        m = lambda i, issued, avail=None: {"id": i, "cite": {"issued": issued, "available": avail}}
+        m = lambda i, issued, avail=None: {"name": i, "owner": "o", "cite": {"issued": issued, "available": avail}}
         out = P.member_order([m("b", "2020-01-01"), m("a", "2020-01-01"), m("c", None), m("d", "2024-05-01")])
-        assert [x["id"] for x in out] == ["d", "a", "b", "c"]
+        assert [x["name"] for x in out] == ["d", "a", "b", "c"]
 
 Titles and abstracts imported from arXiv are LaTeX; the specification
 wants plain text with mathematics between single dollars (section 8). The
@@ -542,7 +653,7 @@ TeX accents and special letters of author names into Unicode.
         assert P.tm_escape("Brzeźniak a|b <x>") == "Brze\\<#17A\\>niak a\\|b <less>x<gtr>"
         assert P.tex_text(r"H{\o}egh It\^o Pawe{\l}") == "Høegh Itô Paweł"
 
-An arXiv e-print is untrusted (section 15). `unpack` extracts a small
+An arXiv e-print is untrusted (section 15.2). `unpack` extracts a small
 tar archive, skipping a member whose path would leave the folder, and
 refuses an archive with too many members or one that expands beyond the
 limit. The limits are lowered for the test, so that the archives stay
@@ -636,106 +747,685 @@ command is a `SystemExit`, which a test expects with `pytest.raises`.
 
 Since every command configures the core for its archive, the checks a
 test makes afterwards with `P.verify_errors()` and `P.ARCHIVE` concern the
-archive of the last command run. The tests therefore end with a command
-(usually `index`) on the archive they then verify.
+archive of the last command run.
 
 Most tests begin by creating archives with `osheaf init`. `make_archive`
-gives each a name, from which come its identifier and address, and makes
-its main collection curated if asked.
+gives each a name, from which comes its address, and a new owner, whose
+rotation keys are exported, unencrypted, to a folder beside the archive,
+`<name>-keys`, never inside it.
 
     # in test: making an archive with osheaf init:
-    def make_archive(root, name="T", curated=False):
-        argv = ["init", str(root), "--archive-id", f"tag:example.org,2026:{name}", "--name", name,
-                "--base-url", f"https://example.org/{name}/", "--curator", "Doe, Jane"]
-        run(*(argv + (["--curated"] if curated else [])))
+    def make_archive(root, name="T", *extra):
+        run("init", str(root), "--name", name, "--base-url", f"https://example.org/{name}/",
+            "--curator", "Doe, Jane", "--new-owner", "--export", str(Path(root).parent / f"{name}-keys"),
+            "--no-passphrase", "--yes", *extra)
 
-### Deposits and the website
+
+    def rotation_files(folder):
+        return sorted(str(p) for p in Path(folder).glob("rotation-*.txt"))
+
+A new archive (section 3) holds its owner's key log, computed from the
+genesis record, at `<owner>/<owner>/` in the owner-name layout, with the
+text file that describes the layout and no `ocfl_layout.json`; its main
+catalogue, a signed line of the owner; and a discovery document of
+version 0.2 listing both, with the label of the catalogue and the owner.
+The current key is kept in the configuration of the test, the rotation keys
+in the folder of the export; the archive verifies.
+
+    # in test: making an archive with osheaf init:
+    def test_init_with_a_new_owner(tmp_path):
+        root = tmp_path / "a"
+        make_archive(root)
+        owner = json.loads((root / "osheaf.json").read_text())["owner"]
+        assert names.OWNER_NAME.match(owner) and "archiveId" not in json.loads((root / "osheaf.json").read_text())
+        log_dir = root / "ocfl" / owner / owner
+        log = owners.load_key_log(log_dir)
+        assert log.owner == owner and len(log.versions) == 1 and log.check() == ([], [])
+        assert (log_dir / "v1" / "inventory.json").read_bytes() == owners.first_version(log.genesis).inventory
+        assert (root / "ocfl" / P.LAYOUT_FILE).exists() and not (root / "ocfl" / "ocfl_layout.json").exists()
+        rk = rotation_files(tmp_path / "T-keys")
+        assert len(rk) == 3 and all(keys.read_rotation_key(Path(f)).owner == owner for f in rk)
+        assert json.loads(log.versions[0].files["keys.json"])["nextThreshold"] == 2
+        disc = json.loads((root / "opensheaf.json").read_text())
+        assert (disc["format"], disc["specification"], disc["owners"]) == ("opensheaf-archive/0.2", "0.2", [owner])
+        assert {o["kind"] for o in disc["objects"]} == {"owner", "collection"}
+        assert next(o for o in disc["objects"] if o["kind"] == "collection")["label"] == "main"
+        assert disc["mainCollection"] == P.LABELS["main"]
+        assert (tmp_path / "config" / "opensheaf" / "keys" / owner).is_dir()
+        assert P.verify_errors() == []
+
+The hashed layout (section 3.2) is chosen with `--layout hashed`: the
+storage root then has `ocfl_layout.json` naming it, and every object is at
+the path the digest of its identifier gives.
+
+    # in test: making an archive with osheaf init:
+    def test_init_with_the_hashed_layout(tmp_path):
+        root = tmp_path / "h"
+        make_archive(root, "H", "--layout", "hashed")
+        assert json.loads((root / "ocfl" / "ocfl_layout.json").read_text())["extension"] == P.HASHED_LAYOUT
+        assert not (root / "ocfl" / P.LAYOUT_FILE).exists()
+        for obj_id, d, inv in P.objects():
+            assert d.relative_to(P.OCFL).as_posix() == P.path_of(obj_id, P.HASHED_LAYOUT)
+        (tmp_path / "p.tex").write_text("\\documentclass{article}")
+        (tmp_path / "p.pdf").write_bytes(b"%PDF-1.4 p")
+        run("--root", str(root), "deposit", "p", str(tmp_path / "p.tex"), "--pdf", str(tmp_path / "p.pdf"),
+            "--title", "P", "--author", "Doe, J", "--new")
+        run("--root", str(root), "collect")
+        assert json.loads((root / "opensheaf.json").read_text())["storageLayout"] == P.HASHED_LAYOUT
+        assert P.verify_errors() == []
+
+An archive may also be made for an owner that exists already, whose key
+log is copied from the folder of its owner object in another archive.
+
+    # in test: making an archive with osheaf init:
+    def test_init_with_an_existing_owner(tmp_path):
+        make_archive(tmp_path / "a")
+        owner = P.ARCHIVE["owner"]
+        root = tmp_path / "b"
+        run("init", str(root), "--name", "B", "--base-url", "https://example.org/b/", "--curator", "Doe, Jane",
+            "--owner", owner, "--key-log", str(tmp_path / "a" / "ocfl" / owner / owner))
+        assert P.ARCHIVE["owner"] == owner and P.verify_errors() == []
+        with pytest.raises(SystemExit):
+            run("init", str(tmp_path / "c"), "--name", "C", "--base-url", "https://example.org/c/",
+                "--curator", "Doe, Jane", "--owner", owner)
+
+### Deposits
 
 The first test follows the life of a small archive kept without TeXmacs.
-After `init`, it deposits a LaTeX source with its PDF, with an abstract
-and a licence; then a second version of the same paper with only a change
-note; then a paper of which only the PDF remains. After `collect` and
-`index` the archive must verify. The second version must have kept the
-abstract and the licence of the first, since a new version inherits them
-unless they are given. The website must show the title with its
-mathematics in the `citation_title` tag read by Google Scholar, both
-versions with the change note, the reason why the sources of the old notes
-are missing, and both papers in the index and in the sitemap.
+After `init`, it deposits a LaTeX source with its PDF under the new label
+`first-paper`, with an abstract and a licence: `--new` seals the work, whose
+first version is signed; then a second version of the same paper with only
+a change note, whose `object.json` records `previous` and which is signed
+too; then a paper of which only the PDF remains. An unknown label without
+`--new` is refused, as is `--new` with a label in use. After `collect` the
+archive must verify. The second version must have kept the abstract and
+the licence of the first, since a new version inherits them unless they are
+given, and the discovery document lists the lines with their labels.
 
     # in test: deposits through osheaf:
-    def test_init_deposit_website(tmp_path):
-        """A house-made archive without TeXmacs: init, a LaTeX deposit with its
-        PDF, a new version keeping abstract and licence, a PDF-only deposit, the
-        website, and the checks."""
+    def test_init_deposit(tmp_path):
         root = tmp_path / "archive"
-        run("init", str(root), "--archive-id", "tag:example.org,2026:t", "--name", "Papers of Jane Doe",
-            "--base-url", "https://example.org/papers", "--curator", "Doe, Jane")
+        make_archive(root)
         src, pdf = tmp_path / "main.tex", tmp_path / "paper.pdf"
         src.write_text("\\documentclass{article}\\begin{document}x\\end{document}")
         pdf.write_bytes(b"%PDF-1.4 test")
         r = ["--root", str(root)]
-        run(*r, "deposit", "first-paper", str(src), "--pdf", str(pdf), "--title", "On $\\Phi^4_3$",
-            "--author", "Doe, Jane", "--abstract", "We prove $x<y$.", "--rights", "cc-by-4.0",
-            "--available", "2025-01-02")
-        run(*r, "deposit", "first-paper", str(src), "--pdf", str(pdf), "--title", "On $\\Phi^4_3$",
-            "--author", "Doe, Jane", "--changes", "Typos.", "--available", "2025-02-03")
+        paper = [str(src), "--pdf", str(pdf), "--title", "On $\\Phi^4_3$", "--author", "Doe, Jane"]
+        with pytest.raises(SystemExit, match="give --new"):
+            run(*r, "deposit", "first-paper", *paper)
+        run(*r, "deposit", "first-paper", *paper, "--abstract", "We prove $x<y$.", "--rights", "cc-by-4.0",
+            "--available", "2025-01-02", "--new")
+        with pytest.raises(SystemExit, match="label of a line already"):
+            run(*r, "deposit", "first-paper", *paper, "--new")
+        run(*r, "deposit", "first-paper", *paper, "--changes", "Typos.", "--available", "2025-02-03")
         run(*r, "deposit", "old-notes", "--pdf", str(pdf), "--no-source", "lost",
-            "--title", "Old notes", "--author", "Doe, Jane", "--available", "2019-05-01")
+            "--title", "Old notes", "--author", "Doe, Jane", "--available", "2019-05-01", "--new")
         run(*r, "collect")
         run(*r, "index")
         assert P.verify_errors() == []
-        d = root / "ocfl" / "first-paper"
+        d = P.obj_dir(P.resolve("first-paper"))
         inv = P.load_inventory(d)
+        _, nm, owner = P.LABELS["first-paper"].split(":")
+        genesis = P.read_logical(d, inv, P.GENESIS).read_bytes()
+        assert nm == names.name(genesis) and json.loads(genesis)["originator"] == owner == P.ARCHIVE["owner"]
+        v1, v2 = (P.read_json(d, inv, P.OBJ, v) for v in ("v1", "v2"))
+        assert (v1["name"], v1["owner"]) == (nm, owner) and "previous" not in v1
+        assert v2["previous"] == P.digest(d / "v1" / "inventory.json")
+        assert P.line_statuses(d, inv)[1] == [sign.SIGNED, sign.SIGNED]
         dc2 = P.read_json(d, inv, "datacite.json", "v2")
         assert dc2["rightsList"][0]["rightsIdentifier"] == "cc-by-4.0"
         assert dc2["descriptions"][0]["description"] == "We prove $x<y$."
-        assert P.read_json(d, inv, P.OBJ, "v2")["changes"] == {"text": "Typos."}
-        page = (root / "paper" / "first-paper" / "index.html").read_text()
-        assert 'name="citation_title" content="On $\\Phi^4_3$"' in page
-        assert "Version 2" in page and "Version 1" in page and "Typos." in page
-        notes = (root / "paper" / "old-notes" / "index.html").read_text()
-        assert "sources not available: lost" in notes
-        assert "first-paper" in (root / "index.html").read_text()
-        assert "paper/old-notes/" in (root / "sitemap.xml").read_text()
+        assert v2["changes"] == {"text": "Typos."}
+        disc = json.loads((root / "opensheaf.json").read_text())
+        assert {o.get("label") for o in disc["objects"]} == {"main", "first-paper", "old-notes", None}
 
 The archive typesets only TeXmacs sources. Any other source must come
-with its PDF, and a deposit of a LaTeX source alone is refused.
+with its PDF; a deposit of a LaTeX source alone is refused.
 
     # in test: deposits through osheaf:
     def test_deposit_needs_pdf_or_texmacs(tmp_path):
         root = tmp_path / "archive"
-        run("init", str(root), "--archive-id", "tag:example.org,2026:t", "--name", "T",
-            "--base-url", "https://example.org/", "--curator", "Doe, Jane")
+        make_archive(root)
         src = tmp_path / "main.tex"
         src.write_text("x")
         with pytest.raises(SystemExit):
-            run("--root", str(root), "deposit", "p", str(src), "--title", "T", "--author", "Doe, J")
+            run("--root", str(root), "deposit", "p", str(src), "--title", "T", "--author", "Doe, J", "--new")
 
 A deposit may point to the file of its sources that holds the licence
-(section 9: `licence`): a `LICENSE` given with `--extra-source` becomes the
-licence note of `object.json`, and the verifier finds it among the files.
+terms (section 4.3, `licence`), here a `LICENSE` given as an extra source.
 A licence file that is not among the files deposited is refused.
 
     # in test: deposits through osheaf:
     def test_licence_file_of_a_deposit(tmp_path):
         root = tmp_path / "archive"
-        run("init", str(root), "--archive-id", "tag:example.org,2026:t", "--name", "T",
-            "--base-url", "https://example.org/", "--curator", "Doe, Jane")
+        make_archive(root)
         src, pdf, lic = tmp_path / "main.tex", tmp_path / "p.pdf", tmp_path / "LICENSE"
         src.write_text("x")
         pdf.write_bytes(b"%PDF-1.4 p")
         lic.write_text("Licence terms of the sources.")
         base = ["--root", str(root), "deposit", "p", str(src), "--pdf", str(pdf), "--title", "T",
-                "--author", "Doe, J", "--rights", "Licence of the authors", "--extra-source", str(lic)]
+                "--author", "Doe, J", "--rights", "Licence of the authors", "--extra-source", str(lic), "--new"]
         with pytest.raises(SystemExit):
             run(*base, "--licence-file", "COPYING")
         run(*base, "--licence-file", "LICENSE")
-        d = root / "ocfl" / "p"
+        d = P.obj_dir(P.resolve("p"))
         obj = P.read_json(d, P.load_inventory(d), P.OBJ)
         assert obj["licence"] == {"path": "LICENSE", "mediaType": "text/plain"}
         run("--root", str(root), "collect")
+        assert P.verify_errors() == []
+
+### Files of options
+
+The next test checks the files of options of the command line. The
+archive is created from `archive.yaml`. The paper lives in a folder of
+its own with a figure in a sub-folder, and `paper.yaml` holds two entries,
+two versions of the same paper, deposited in order with one command. The
+first entry uses every convenience: plural keys, an extra source and an
+author written as mappings, an abstract of two paragraphs, a relation.
+Its values are those a converting YAML reader would spoil: the arXiv
+identifier `2611.14296`, the date `2025-01-02`, the version `1.10` in the
+change note. The test checks that they arrive as written, that the paths
+were read relative to the file, and that the second version inherits the
+licence.
+
+Then three more things: a title given on the command line overrides the
+one of the file; a file with an unknown key (`titel`) is refused; and an
+archive whose configuration is `osheaf.yaml` instead of `osheaf.json` is
+found, read and verified like any other.
+
+    # in test: deposits through osheaf:
+    def test_yaml_inputs(tmp_path):
+        """init and deposits from YAML: values stay text, paths are relative to
+        the file, a list deposits in order, the command line overrides, unknown
+        keys are refused, and osheaf.yaml works as configuration."""
+        (tmp_path / "archive.yaml").write_text(
+            "new-owner: yes\n"
+            f"export: {tmp_path / 'keys'}\n"
+            "no-passphrase: yes\n"
+            "yes: yes\n"
+            "name: Papers of Jane Doe\n"
+            "base-url: https://example.org/papers/\n"
+            "curator: Doe, Jane\n")
+        root = tmp_path / "archive"
+        run("init", str(root), "--from", str(tmp_path / "archive.yaml"))
+        w = tmp_path / "work"
+        (w / "fig").mkdir(parents=True)
+        (w / "main.tex").write_text("\\documentclass{article}")
+        (w / "fig" / "a.pdf").write_bytes(b"%PDF fig")
+        (w / "paper.pdf").write_bytes(b"%PDF-1.4 paper")
+        (w / "paper.yaml").write_text(
+            "- id: yaml-paper\n"
+            "  new: yes\n"
+            "  source: main.tex\n"
+            "  pdf: paper.pdf\n"
+            "  extra-sources: [{file: fig/a.pdf, path: fig/a.pdf}]\n"
+            "  title: On $\\Phi^4_3$\n"
+            "  authors:\n"
+            "    - Doe, Jane|Example University\n"
+            "    - {name: 'Roe, Richard', affiliation: Elsewhere}\n"
+            "  abstract: |\n"
+            "    First paragraph with $x$.\n"
+            "\n"
+            "    Second paragraph.\n"
+            "  keywords: [one, two]\n"
+            "  rights: cc-by-4.0\n"
+            "  available: 2025-01-02\n"
+            "  related: ['IsIdenticalTo:arxiv:2611.14296']\n"
+            "- id: yaml-paper\n"
+            "  source: main.tex\n"
+            "  pdf: paper.pdf\n"
+            "  title: On $\\Phi^4_3$\n"
+            "  authors: ['Doe, Jane|Example University']\n"
+            "  available: 2025-02-03\n"
+            "  changes: Version 1.10 corrects typos.\n")
+        run("--root", str(root), "deposit", "--from", str(w / "paper.yaml"))
+        d = P.obj_dir(P.resolve("yaml-paper"))
+        inv = P.load_inventory(d)
+        dc1, dc2 = (P.read_json(d, inv, "datacite.json", v) for v in ("v1", "v2"))
+        assert dc1["relatedIdentifiers"][0]["relatedIdentifier"] == "arXiv:2611.14296"
+        assert {x["dateType"]: x["date"] for x in dc1["dates"]}["Available"] == "2025-01-02"
+        assert dc1["creators"][1]["affiliation"] == [{"name": "Elsewhere"}]
+        assert dc1["descriptions"][0]["description"] == "First paragraph with $x$.\n\nSecond paragraph."
+        assert P.read_json(d, inv, P.OBJ, "v2")["changes"]["text"] == "Version 1.10 corrects typos."
+        assert "fig/a.pdf" in {p for ps in inv["versions"]["v1"]["state"].values() for p in ps}
+        assert dc2["rightsList"][0]["rightsIdentifier"] == "cc-by-4.0"
+        # the command line overrides the file
+        (w / "one.yaml").write_text("id: other\nnew: yes\nsource: main.tex\npdf: paper.pdf\ntitle: From the file\n"
+                                    "author: Doe, Jane\n")
+        run("--root", str(root), "deposit", "--from", str(w / "one.yaml"), "--title", "From the command line")
+        other = P.obj_dir(P.resolve("other"))
+        assert P.read_json(other, P.load_inventory(other), "datacite.json")["titles"][0]["title"] == \
+            "From the command line"
+        # unknown keys are refused
+        (w / "bad.yaml").write_text("id: bad\ntitel: typo\n")
+        with pytest.raises(SystemExit):
+            run("--root", str(root), "deposit", "--from", str(w / "bad.yaml"))
+        run("--root", str(root), "collect")
         run("--root", str(root), "index")
         assert P.verify_errors() == []
+        # osheaf.yaml instead of osheaf.json
+        cfg = json.loads((root / "osheaf.json").read_text())
+        import yaml
+        (root / "osheaf.json").unlink()
+        (root / "osheaf.yaml").write_text(yaml.safe_dump(cfg, allow_unicode=True))
+        P.configure(P.find_root(root))
+        assert P.ARCHIVE["owner"] == cfg["owner"] and P.LABELS["yaml-paper"]
+        assert P.verify_errors() == []
+
+A value of the file applies unless the option was given on the command
+line, also for an option with a default of its own: the `type` of a
+deposit (by default `Preprint`) and the `relation` of `relate` (by
+default `IsIdenticalTo`) are taken from the files, while `--type` on the
+command line still overrides the file. The key `date` means `available`
+in a file for `deposit`, and the date of the agreement in a file for
+`relicense`, which has an option of that name.
+
+    # in test: deposits through osheaf:
+    def test_yaml_options_with_defaults(tmp_path):
+        root = tmp_path / "a"
+        make_archive(root)
+        (tmp_path / "p.tex").write_text("\\documentclass{article}")
+        (tmp_path / "p.pdf").write_bytes(b"%PDF-1.4 p")
+        r = ["--root", str(root)]
+        (tmp_path / "p.yaml").write_text("id: p\nnew: yes\nsource: p.tex\npdf: p.pdf\ntitle: P\nauthor: Doe, J\n"
+                                         "type: JournalArticle\ndate: 2025-01-02\n")
+        run(*r, "deposit", "--from", str(tmp_path / "p.yaml"))
+        (tmp_path / "q.yaml").write_text("id: q\nnew: yes\nsource: p.tex\npdf: p.pdf\ntitle: Q\nauthor: Doe, J\n"
+                                         "type: JournalArticle\n")
+        run(*r, "deposit", "--from", str(tmp_path / "q.yaml"), "--type", "Book")
+        (tmp_path / "relate.yaml").write_text("id: p\nto: doi:10.1000/xyz\nrelation: IsVersionOf\n")
+        run(*r, "relate", "--from", str(tmp_path / "relate.yaml"))
+        (tmp_path / "licence.yaml").write_text("id: p\nrights: cc-by-4.0\nmethod: by e-mail\ndate: 2025-05-05\n")
+        run(*r, "relicense", "--from", str(tmp_path / "licence.yaml"))
+        p, q = P.obj_dir(P.resolve("p")), P.obj_dir(P.resolve("q"))
+        pinv, qinv = P.load_inventory(p), P.load_inventory(q)
+        dc1 = P.read_json(p, pinv, "datacite.json", "v1")
+        assert dc1["types"]["resourceTypeGeneral"] == "JournalArticle"
+        assert P.date_of(dc1, "Available") == "2025-01-02"
+        assert P.read_json(q, qinv, "datacite.json")["types"]["resourceTypeGeneral"] == "Book"
+        rel = P.read_json(p, pinv, "datacite.json")["relatedIdentifiers"]
+        assert rel[-1]["relatedIdentifier"] == "10.1000/xyz" and rel[-1]["relationType"] == "IsVersionOf"
+        assert P.read_json(p, pinv, P.OBJ)["agreement"]["date"] == "2025-05-05"
+        run(*r, "collect")
+        run(*r, "index")
+        assert P.verify_errors() == []
+
+### Notices, withdrawal and completion
+
+This test goes through the later statements about a document. A paper is
+deposited without its sources (object version `v1`); a notice about its
+document version 1 is added, with a short text and a file in Markdown
+(`v2`); the sources are found and the version is completed (`v3`); a
+second document version follows (`v4`); and the paper is withdrawn
+(`v5`). The completed version keeps its number 1, names its main source
+and no longer has `sourcesMissing`; the head is withdrawn and still has
+the notice, whose file stays in the content under `notices/`. Finally, a
+withdrawn document gets no new versions (section 13.1): the last deposit
+is refused.
+
+    # in test: notices, withdrawal and completion through osheaf:
+    def test_notice_withdraw_complete(tmp_path):
+        root = tmp_path / "a"
+        make_archive(root)
+        pdf, src, note = tmp_path / "p.pdf", tmp_path / "p.tex", tmp_path / "erratum.md"
+        pdf.write_bytes(b"%PDF-1.4 p")
+        src.write_text("\\documentclass{article}")
+        note.write_text("Theorem 2 is wrong.")
+        r = ["--root", str(root)]
+        run(*r, "deposit", "lost", "--new", "--pdf", str(pdf), "--no-source", "lost", "--title", "T", "--author", "Doe, J")
+        run(*r, "notice", "lost", "--about", "1", "--text", "Theorem 2 is wrong.", "--file", str(note))
+        run(*r, "complete", "lost", "--version", "1", "--source", str(src))
+        pdf2 = tmp_path / "p2.pdf"
+        pdf2.write_bytes(b"%PDF-1.4 p2")
+        run(*r, "deposit", "lost", str(src), "--pdf", str(pdf2), "--title", "T", "--author", "Doe, J")
+        run(*r, "withdraw", "lost", "--reason", "an error")
+        run(*r, "collect")
+        run(*r, "index")
+        assert P.verify_errors() == []
+        d = P.obj_dir(P.resolve("lost"))
+        inv = P.load_inventory(d)
+        v3 = P.read_json(d, inv, P.OBJ, "v3")
+        assert v3["documentVersion"] == 1 and v3["mainSource"] == "p.tex" and "sourcesMissing" not in v3
+        head = P.read_json(d, inv, P.OBJ)
+        assert head["status"] == "withdrawn" and head["notices"][0]["documentVersion"] == 1
+        assert "notices/erratum.md" in {p for ps in inv["versions"][inv["head"]]["state"].values() for p in ps}
+        with pytest.raises(SystemExit):        # a withdrawn document gets no new versions
+            run(*r, "deposit", "lost", str(src), "--pdf", str(pdf2), "--title", "T", "--author", "Doe, J")
+
+The completion of an *earlier* version is the case where the head stops
+holding the current version without a history. A paper is deposited
+without sources (`v1`), then in a second version with them (`v2`), then
+withdrawn, with the reason in a file (`v3`); finally the sources of the
+first version are found and added (`v4`). The head `v4` holds document
+version 1, yet the current version is still document version 2, in its
+last object version `v3`. The completion keeps the withdrawal of the
+head: its status, its reason with the file, and the `Withdrawn` date of
+`datacite.json`.
+
+    # in test: notices, withdrawal and completion through osheaf:
+    def test_complete_an_earlier_version(tmp_path):
+        root = tmp_path / "a"
+        make_archive(root)
+        pdf, pdf2, src, why = tmp_path / "p.pdf", tmp_path / "p2.pdf", tmp_path / "p.tex", tmp_path / "why.md"
+        pdf.write_bytes(b"%PDF-1.4 p")
+        pdf2.write_bytes(b"%PDF-1.4 p2")
+        src.write_text("\\documentclass{article}")
+        why.write_text("The main result is wrong.")
+        r = ["--root", str(root)]
+        run(*r, "deposit", "early", "--new", "--pdf", str(pdf), "--no-source", "lost", "--title", "T", "--author", "Doe, J")
+        run(*r, "deposit", "early", str(src), "--pdf", str(pdf2), "--title", "T", "--author", "Doe, J")
+        run(*r, "withdraw", "early", "--reason", "wrong", "--file", str(why), "--date", "2026-03-04")
+        run(*r, "complete", "early", "--version", "1", "--source", str(src))
+        d = P.obj_dir(P.resolve("early"))
+        inv = P.load_inventory(d)
+        head = P.read_json(d, inv, P.OBJ)
+        assert inv["head"] == "v4" and head["documentVersion"] == 1 and "history" not in head
+        assert P.current_version(d, inv) == "v3"
+        assert head["status"] == "withdrawn" and head["withdrawal"] == P.read_json(d, inv, P.OBJ, "v3")["withdrawal"]
+        assert P.date_of(P.read_json(d, inv, "datacite.json"), "Withdrawn") == "2026-03-04"
+        assert "withdrawal/why.md" in {p for ps in inv["versions"]["v4"]["state"].values() for p in ps}
+        run(*r, "collect")
+        run(*r, "index")
+        assert P.verify_errors() == []
+
+### Corrections of the description
+
+`osheaf describe` corrects the title, the abstract, the keywords and the
+authors by a description-only version: the files and the document version
+stay, the fields given are replaced, and the others (a subject with a
+scheme, the licence) are kept. The message of the inventory names what
+was corrected. A correction that changes nothing is refused, and the
+command also reads its options from a file, here a corrected abstract
+from a file named relative to it.
+
+    # in test: notices, withdrawal and completion through osheaf:
+    def test_describe(tmp_path):
+        root = tmp_path / "a"
+        make_archive(root)
+        src, pdf = tmp_path / "p.tex", tmp_path / "p.pdf"
+        src.write_text("\\documentclass{article}")
+        pdf.write_bytes(b"%PDF-1.4 p")
+        r = ["--root", str(root)]
+        run(*r, "deposit", "p", str(src), "--pdf", str(pdf), "--title", "Tpyo", "--author", "Duch, P.",
+            "--abstract", "A \\emphdistribution.", "--keyword", "old", "--rights", "cc-by-4.0", "--new")
+        d = P.obj_dir(P.resolve("p"))
+        inv = P.load_inventory(d)
+        dc = P.read_json(d, inv, "datacite.json")
+        dc["subjects"].append({"subject": "math.PR", "subjectScheme": "arXiv"})
+        P.write_json(tmp_path / "dc.json", dc)
+        files = {lp: d / inv["manifest"][dg][0] for dg, lps in inv["versions"]["v1"]["state"].items() for lp in lps}
+        files["datacite.json"] = tmp_path / "dc.json"
+        obj = files.pop(P.OBJ) and P.read_json(d, inv, P.OBJ)
+        P.add_version(P.resolve("p"), files, obj, "a subject with a scheme")
+        run(*r, "describe", "p", "--title", "Typo", "--author", "Duch, Paweł|IMPAN", "--keyword", "new")
+        (tmp_path / "abstract.txt").write_text("A distribution.\n")
+        (tmp_path / "describe.yaml").write_text("id: p\nabstract-file: abstract.txt\n")
+        run(*r, "describe", "--from", str(tmp_path / "describe.yaml"))
+        with pytest.raises(SystemExit):
+            run(*r, "describe", "p", "--title", "Typo")
+        inv = P.load_inventory(d)
+        dc = P.read_json(d, inv, "datacite.json")
+        assert inv["head"] == "v4" and P.read_json(d, inv, P.OBJ)["documentVersion"] == 1
+        assert dc["titles"][0]["title"] == "Typo"
+        assert dc["creators"] == [{"name": "Duch, Paweł", "nameType": "Personal", "familyName": "Duch",
+                                   "givenName": "Paweł", "affiliation": [{"name": "IMPAN"}]}]
+        assert dc["descriptions"][0]["description"] == "A distribution."
+        assert dc["subjects"] == [{"subject": "new"}, {"subject": "math.PR", "subjectScheme": "arXiv"}]
+        assert dc["rightsList"][0]["rightsIdentifier"] == "cc-by-4.0"
+        assert inv["versions"]["v3"]["message"] == \
+            "Description corrected: title, keywords, authors (description-only version)"
+        assert inv["versions"]["v4"]["message"] == "Description corrected: abstract (description-only version)"
+        run(*r, "collect")
+        run(*r, "index")
+        assert P.verify_errors() == []
+
+
+Owners and keys
+---------------
+
+The life of an owner through the commands of
+[chapter 19](19-owner-commands.md). A paper is deposited, signed with the
+current key made by `init`. A new laptop makes its own key (`key new`),
+which signs nothing until the key log adds it: a version of the key log
+signed by two of the three rotation keys exported at `init` adds it and
+retires the first key, committing three new rotation keys, exported to
+another folder (section 6.2). The next version of the paper is signed with
+the new key. Then the new laptop is stolen: `owner expose` declares its key
+exposed, adds the key of a third device, and commits new rotation keys
+(section 6.3). The version signed with the exposed key is now contested
+(section 7.3), and a new deposit stops, showing it, unless `--i-know`; the
+version signed with the third key vouches for the past, and the contested
+version is signed again, since a later version signed with keys not
+exposed extends it. Last, the owner ends, naming a successor, and nothing more is
+signed for it (section 6.3). The archive verifies at every step, reporting
+the exposed key and the end as results.
+
+    # in test: owners and keys through osheaf:
+    def new_device_key(root):
+        P.configure(root)
+        return P.key_new(P.argparse_namespace(owner=None)).did
+
+
+    def test_rotate_expose_end(tmp_path, capsys):
+        root = tmp_path / "a"
+        make_archive(root)
+        r = ["--root", str(root)]
+        owner = P.ARCHIVE["owner"]
+        first = P.key_log(owner).latest().keys["keys"][0]
+        (tmp_path / "p.tex").write_text("\\documentclass{article}")
+        pdf = tmp_path / "p.pdf"
+        paper = ["p", str(tmp_path / "p.tex"), "--pdf", str(pdf), "--title", "P", "--author", "Doe, J"]
+        pdf.write_bytes(b"%PDF-1.4 one")
+        run(*r, "deposit", *paper, "--new")
+        laptop = new_device_key(root)
+        rk1 = rotation_files(tmp_path / "T-keys")
+        run(*r, "owner", "rotate", "--add", laptop, "--retire", first, "--rotation-key", rk1[0],
+            "--rotation-key", rk1[2], "--export", str(tmp_path / "keys-2"), "--no-passphrase", "--yes")
+        log = P.key_log(owner)
+        assert len(log.versions) == 2 and log.latest().keys["keys"] == [laptop] and log.check() == ([], [])
+        pdf.write_bytes(b"%PDF-1.4 two")
+        run(*r, "deposit", *paper)
+        d = P.obj_dir(P.resolve("p"))
+        j = P.line_statuses(d, P.load_inventory(d))[0][1][0]
+        assert j.status == sign.GOOD and j.key == laptop and j.key_log[0] == 2
+        assert P.verify_errors() == []
+        third = new_device_key(root)
+        rk2 = rotation_files(tmp_path / "keys-2")
+        run(*r, "owner", "expose", laptop, "--add", third, "--rotation-key", rk2[1], "--rotation-key", rk2[2],
+            "--export", str(tmp_path / "keys-3"), "--no-passphrase", "--yes")
+        assert P.key_log(owner).exposed_keys() == {laptop}
+        assert P.line_statuses(d, P.load_inventory(d))[1] == [sign.SIGNED, sign.CONTESTED]
+        found = P.verify_findings()
+        assert not [x for x in found if x["severity"] == "error"]
+        assert any(x["severity"] == "result" and x["message"] == f"exposed key {laptop}" for x in found)
+        assert any(x["severity"] == "result" and x["message"] == "contested (section 7.3)" for x in found)
+        pdf.write_bytes(b"%PDF-1.4 three")
+        with pytest.raises(SystemExit, match="v2: contested"):
+            run(*r, "deposit", *paper)
+        run(*r, "deposit", *paper, "--i-know")
+        inv = P.load_inventory(d)
+        assert P.line_statuses(d, inv)[1] == [sign.SIGNED, sign.SIGNED, sign.SIGNED]
+        assert P.line_statuses(d, inv)[0][2][0].key == third
+        run(*r, "collect")
+        assert P.verify_errors() == []
+        successor = names.name(names.genesis_record("owner", keys=[third], threshold=1,
+                                                    next_digests=[names.key_digest(laptop)], next_threshold=1))
+        rk3 = rotation_files(tmp_path / "keys-3")
+        run(*r, "owner", "end", "--successor", successor, "--rotation-key", rk3[0], "--rotation-key", rk3[1])
+        log = P.key_log(owner)
+        assert log.ended and log.successor == successor
+        with pytest.raises(SystemExit, match="has ended"):
+            run(*r, "deposit", *paper)
+        capsys.readouterr()
+        run(*r, "owner", "show")
+        assert "ended" in capsys.readouterr().out
+        assert P.verify_errors() == []
+
+The rotation keys sign only the version that follows the one committing
+them: those of `init`, once used, sign nothing more (section 6.2). A key of
+another owner, or a missing passphrase for an encrypted file, is refused.
+The export refuses a folder inside the archive (section 15.4).
+The passphrase comes from the environment, as in a script; the encryption
+is made fast for the test.
+
+    # in test: owners and keys through osheaf:
+    def test_rotation_keys_are_checked(tmp_path, monkeypatch):
+        root = tmp_path / "a"
+        make_archive(root)
+        r = ["--root", str(root)]
+        rk1 = rotation_files(tmp_path / "T-keys")
+        with pytest.raises(SystemExit, match="is not a rotation key|needs 2 rotation keys"):
+            run(*r, "owner", "rotate", "--rotation-key", rk1[0], "--export", str(tmp_path / "k2"),
+                "--no-passphrase", "--yes")
+        with pytest.raises(SystemExit, match="inside the archive"):
+            run(*r, "owner", "rotate", "--rotation-key", rk1[0], "--rotation-key", rk1[1],
+                "--export", str(root / "keys"), "--no-passphrase", "--yes")
+        assert not (root / "keys").exists() and len(P.key_log(P.ARCHIVE["owner"]).versions) == 1
+        monkeypatch.setenv(P.PASSPHRASE, "correct horse")
+        fast = dict(opslimit=keys.pwhash.argon2id.OPSLIMIT_MIN, memlimit=keys.pwhash.argon2id.MEMLIMIT_MIN)
+        monkeypatch.setattr(keys, "export_rotation_keys", functools.partial(keys.export_rotation_keys, **fast))
+        run(*r, "owner", "rotate", "--rotation-key", rk1[0], "--rotation-key", rk1[1],
+            "--export", str(tmp_path / "k2"), "--yes")
+        assert "encryption argon2id-secretbox" in Path(rotation_files(tmp_path / "k2")[0]).read_text()
+        with pytest.raises(SystemExit, match="not a rotation key"):
+            run(*r, "owner", "end", "--rotation-key", rk1[0], "--rotation-key", rk1[2])
+        rk2 = rotation_files(tmp_path / "k2")
+        monkeypatch.setenv(P.PASSPHRASE, "wrong horse")
+        with pytest.raises(SystemExit, match="wrong passphrase"):
+            run(*r, "owner", "end", "--rotation-key", rk2[0], "--rotation-key", rk2[1])
+        monkeypatch.setenv(P.PASSPHRASE, "correct horse")
+        run(*r, "owner", "end", "--rotation-key", rk2[0], "--rotation-key", rk2[1])
+        assert P.key_log(P.ARCHIVE["owner"]).ended
+
+The minimal setup, one rotation key with a `nextThreshold` of 1, is made on
+request only, and its risk is stated (section 6.2). The export is
+confirmed by typing back the check of each key: a wrong check writes
+nothing.
+
+    # in test: owners and keys through osheaf:
+    def test_single_rotation_key_and_confirmation(tmp_path, monkeypatch, capsys):
+        root = tmp_path / "s"
+        make_archive(root, "S", "--single-rotation-key")
+        assert owners.SINGLE_ROTATION_RISK in capsys.readouterr().out
+        log = P.key_log(P.ARCHIVE["owner"])
+        assert json.loads(log.versions[0].files["keys.json"])["nextThreshold"] == 1
+        monkeypatch.setattr("builtins.input", lambda prompt: "XXXX")
+        with pytest.raises(SystemExit, match="not confirmed"):
+            run("--root", str(root), "owner", "rotate", "--rotation-key", rotation_files(tmp_path / "S-keys")[0],
+                "--export", str(tmp_path / "s2"), "--no-passphrase")
+        assert len(P.key_log(P.ARCHIVE["owner"]).versions) == 1
+
+Verifying broken archives
+-------------------------
+
+Verification reports what is wrong with an archive (section 14), and the
+severity section 14 gives each finding. These archives are broken on
+purpose, after the fact.
+
+A version whose `previous` is not the digest of the inventory before it
+breaks the inventory chain (section 4.3), an error. It is made by having
+`add_version` read a wrong digest in the checksum file of `v1`, the only
+place it reads it.
+
+    # in test: verifying broken archives:
+    def test_wrong_previous_is_an_error(archive, monkeypatch):
+        put("paper-a", 1, FILES1)
+        d, _ = head_of("paper-a")
+        target = (d / "v1" / "inventory.json.sha512").read_bytes()
+        real = owners.sidecar_digest
+        monkeypatch.setattr(owners, "sidecar_digest", lambda data: "0" * 128 if data == target else real(data))
+        put("paper-a", 2, FILES2)
+        monkeypatch.setattr(owners, "sidecar_digest", real)
+        assert "paper-a v2: previous is not the digest of the inventory of v1 (section 4.3)" in finish()
+
+A version without signature files is not a version of its line (sections
+7.3 and 7.5): a warning, since a host cannot repair it; its pin in the main
+catalogue, made when it was signed, is then an error, since a collection
+pins only signed versions (section 8.5). A signature file whose signature
+does not verify is invalid, a warning, and so is the version it alone
+signed.
+
+    # in test: verifying broken archives:
+    def test_unsigned_and_invalid_versions(archive):
+        put("paper-a", 1, FILES1)
+        put("paper-a", 2, FILES2)
+        put("paper-b", 1, FILES3)
+        assert finish() == []
+        d, _ = head_of("paper-a")
+        for f in (d / sign.WITNESSES / "v2").iterdir():
+            f.unlink()
+        found = P.verify_findings()
+        warnings = [f"{x['place']}: {x['message']}" for x in found if x["severity"] == "warning"]
+        assert "paper-a v2: not a version of the line: unsigned (sections 7.3 and 7.5)" in warnings
+        assert any("v2: not a version: a collection pins only signed versions" in e for e in P.verify_errors())
+        b, _ = head_of("paper-b")
+        sig = next((b / sign.WITNESSES / "v1").iterdir())
+        data = json.loads(sig.read_text())
+        data["signature"] = ("A" if data["signature"][0] != "A" else "B") + data["signature"][1:]
+        sig.write_text(json.dumps(data, indent=2) + "\n")
+        found = P.verify_findings()
+        warnings = [f"{x['place']}: {x['message']}" for x in found if x["severity"] == "warning"]
+        assert f"paper-b v1: {sig.name}: invalid: the signature does not verify" in warnings
+        assert "paper-b v1: not a version of the line: invalid (sections 7.3 and 7.5)" in warnings
+
+A discovery document left behind after a change of the storage root is
+stale, an error (section 14.6): here a version added by hand, without the
+command, which would have rewritten it.
+
+    # in test: verifying broken archives:
+    def test_stale_discovery_document(archive):
+        put("paper-a", 1, FILES1)
+        assert finish() == []
+        put("paper-a", 2, FILES2)
+        assert any(e.startswith("opensheaf.json: the entry of paper-a is stale: head v1 instead of v2")
+                   for e in P.verify_errors())
+        P.write_discovery()
+        assert P.verify_errors() == []
+
+A private key copied into the archive by mistake is reported, a warning
+(section 15.4): here an exported rotation key put in the archive folder.
+
+    # in test: verifying broken archives:
+    def test_keys_in_the_archive_are_reported(archive, tmp_path):
+        shutil.copy(rotation_files(tmp_path / "keys")[0], archive / "backup.txt")
+        found = P.verify_findings()
+        assert {"severity": "warning", "place": "backup.txt",
+                "message": "looks like a private key: keys are never kept in an archive (section 15.4)"} in found
+        assert P.verify_errors() == []
+
+An archive of specification 0.1 is not read: verification reports one
+error, that it must be rebuilt (section 16.1), and every other command
+stops with that message. `verify --json` gives the findings to programs,
+and the exit status counts the errors.
+
+    # in test: verifying broken archives:
+    def test_specification_0_1_is_rebuilt(tmp_path, capsys):
+        old = tmp_path / "old"
+        old.mkdir()
+        (old / "osheaf.json").write_text(json.dumps({"archiveId": "tag:example.org,2026:old", "name": "Old"}))
+        (old / "opensheaf.json").write_text(json.dumps({"format": "opensheaf-archive/0.1", "specification": "0.1"}))
+        capsys.readouterr()
+        with pytest.raises(SystemExit) as e:
+            run("--root", str(old), "verify", "--json")
+        assert e.value.code == 1
+        assert json.loads(capsys.readouterr().out) == [
+            {"severity": "error", "place": "archive", "message": "specification 0.1: rebuild (section 16.1)"}]
+        with pytest.raises(SystemExit, match="rebuild it"):
+            run("--root", str(old), "collect")
+
+The commands not yet ported to specification 0.2 say so.
+
+    # in test: verifying broken archives:
+    def test_commands_not_yet_available(archive):
+        for argv in (["mirror", "https://example.org/", "x"], ["collection", "update"], ["zenodo", "x"],
+                     ["arxiv", "import", "downloads"], ["accept", "https://example.org/", "x", "--version", "v1"]):
+            with pytest.raises(SystemExit, match="not yet available for specification 0.2"):
+                run("--root", str(archive), *argv)
+
+The website, not yet ported
+---------------------------
+
+The tests of the website wait for phase c of the port, skipped.
 
 The website finds the PDF of a version among the renditions of its
 `object.json`, whatever its name. A document written by hand has its PDF
@@ -744,7 +1434,8 @@ may; the website, written by `html.render` from the members of the main
 collection, links that file from the landing page, its tag for Google
 Scholar and the home page.
 
-    # in test: deposits through osheaf:
+    # in test: the website, not yet ported:
+    @pytest.mark.skip(reason="phase b/c: not yet ported to specification 0.2")
     def test_pdf_found_from_renditions(archive):
         put("paper-a", 1, {"main.tex": b"\\documentclass{article}", "article.pdf": b"%PDF article"},
             extra_obj={"renditions": [{"path": "article.pdf", "mediaType": "application/pdf"}]})
@@ -771,7 +1462,8 @@ arXiv identifier is shown and linked without its version, even when the
 relation was recorded with one; and a change note says what it is
 (`changes: ...`, or `arXiv comments: ...` for a version from arXiv).
 
-    # in test: deposits through osheaf:
+    # in test: the website, not yet ported:
+    @pytest.mark.skip(reason="phase b/c: not yet ported to specification 0.2")
     def test_texmacs_index_with_landing_pages(tmp_path):
         """A TeXmacs index: index.tm with uniform entries, and the landing pages,
         from the archive's own template, and the sitemap of the website."""
@@ -820,266 +1512,10 @@ relation was recorded with one; and a change note says what it is
 
 ### Files of options
 
-The next test checks the files of options of the command line. The
-archive is created from `archive.yaml`. The paper lives in a folder of
-its own with a figure in a sub-folder, and `paper.yaml` holds two entries,
-two versions of the same paper, deposited in order with one command. The
-first entry uses every convenience: plural keys, an extra source and an
-author written as mappings, an abstract of two paragraphs, a relation.
-Its values are those a converting YAML reader would spoil: the arXiv
-identifier `2611.14296`, the date `2025-01-02`, the version `1.10` in the
-change note. The test checks that they arrive as written, that the paths
-were read relative to the file, and that the second version inherits the
-licence.
-
-Then three more things: a title given on the command line overrides the
-one of the file; a file with an unknown key (`titel`) is refused; and an
-archive whose configuration is `osheaf.yaml` instead of `osheaf.json` is
-found, read and verified like any other.
-
-    # in test: deposits through osheaf:
-    def test_yaml_inputs(tmp_path):
-        """init and deposits from YAML: values stay text, paths are relative to
-        the file, a list deposits in order, the command line overrides, unknown
-        keys are refused, and osheaf.yaml works as configuration."""
-        (tmp_path / "archive.yaml").write_text(
-            "archive-id: tag:example.org,2026:y\n"
-            "name: Papers of Jane Doe\n"
-            "base-url: https://example.org/papers/\n"
-            "curator: Doe, Jane\n")
-        root = tmp_path / "archive"
-        run("init", str(root), "--from", str(tmp_path / "archive.yaml"))
-        w = tmp_path / "work"
-        (w / "fig").mkdir(parents=True)
-        (w / "main.tex").write_text("\\documentclass{article}")
-        (w / "fig" / "a.pdf").write_bytes(b"%PDF fig")
-        (w / "paper.pdf").write_bytes(b"%PDF-1.4 paper")
-        (w / "paper.yaml").write_text(
-            "- id: yaml-paper\n"
-            "  source: main.tex\n"
-            "  pdf: paper.pdf\n"
-            "  extra-sources: [{file: fig/a.pdf, path: fig/a.pdf}]\n"
-            "  title: On $\\Phi^4_3$\n"
-            "  authors:\n"
-            "    - Doe, Jane|Example University\n"
-            "    - {name: 'Roe, Richard', affiliation: Elsewhere}\n"
-            "  abstract: |\n"
-            "    First paragraph with $x$.\n"
-            "\n"
-            "    Second paragraph.\n"
-            "  keywords: [one, two]\n"
-            "  rights: cc-by-4.0\n"
-            "  available: 2025-01-02\n"
-            "  related: ['IsIdenticalTo:arxiv:2611.14296']\n"
-            "- id: yaml-paper\n"
-            "  source: main.tex\n"
-            "  pdf: paper.pdf\n"
-            "  title: On $\\Phi^4_3$\n"
-            "  authors: ['Doe, Jane|Example University']\n"
-            "  available: 2025-02-03\n"
-            "  changes: Version 1.10 corrects typos.\n")
-        run("--root", str(root), "deposit", "--from", str(w / "paper.yaml"))
-        d = root / "ocfl" / "yaml-paper"
-        inv = P.load_inventory(d)
-        dc1, dc2 = (P.read_json(d, inv, "datacite.json", v) for v in ("v1", "v2"))
-        assert dc1["relatedIdentifiers"][0]["relatedIdentifier"] == "arXiv:2611.14296"
-        assert {x["dateType"]: x["date"] for x in dc1["dates"]}["Available"] == "2025-01-02"
-        assert dc1["creators"][1]["affiliation"] == [{"name": "Elsewhere"}]
-        assert dc1["descriptions"][0]["description"] == "First paragraph with $x$.\n\nSecond paragraph."
-        assert P.read_json(d, inv, P.OBJ, "v2")["changes"]["text"] == "Version 1.10 corrects typos."
-        assert "fig/a.pdf" in {p for ps in inv["versions"]["v1"]["state"].values() for p in ps}
-        assert dc2["rightsList"][0]["rightsIdentifier"] == "cc-by-4.0"
-        # the command line overrides the file
-        (w / "one.yaml").write_text("id: other\nsource: main.tex\npdf: paper.pdf\ntitle: From the file\n"
-                                    "author: Doe, Jane\n")
-        run("--root", str(root), "deposit", "--from", str(w / "one.yaml"), "--title", "From the command line")
-        oinv = P.load_inventory(root / "ocfl" / "other")
-        assert P.read_json(root / "ocfl" / "other", oinv, "datacite.json")["titles"][0]["title"] == \
-            "From the command line"
-        # unknown keys are refused
-        (w / "bad.yaml").write_text("id: bad\ntitel: typo\n")
-        with pytest.raises(SystemExit):
-            run("--root", str(root), "deposit", "--from", str(w / "bad.yaml"))
-        run("--root", str(root), "collect")
-        run("--root", str(root), "index")
-        assert P.verify_errors() == []
-        # osheaf.yaml instead of osheaf.json
-        cfg = json.loads((root / "osheaf.json").read_text())
-        import yaml
-        (root / "osheaf.json").unlink()
-        (root / "osheaf.yaml").write_text(yaml.safe_dump(cfg, allow_unicode=True))
-        P.configure(P.find_root(root))
-        assert P.ARCHIVE["archiveId"] == "tag:example.org,2026:y"
-        assert P.verify_errors() == []
-
-A value of the file applies unless the option was given on the command
-line, also for an option with a default of its own: the `type` of a
-deposit (by default `Preprint`) and the `relation` of `relate` (by
-default `IsIdenticalTo`) are taken from the files, while `--type` on the
-command line still overrides the file. The key `date` means `available`
-in a file for `deposit`, and the date of the agreement in a file for
-`relicense`, which has an option of that name.
-
-    # in test: deposits through osheaf:
-    def test_yaml_options_with_defaults(tmp_path):
-        root = tmp_path / "a"
-        make_archive(root)
-        (tmp_path / "p.tex").write_text("\\documentclass{article}")
-        (tmp_path / "p.pdf").write_bytes(b"%PDF-1.4 p")
-        r = ["--root", str(root)]
-        (tmp_path / "p.yaml").write_text("id: p\nsource: p.tex\npdf: p.pdf\ntitle: P\nauthor: Doe, J\n"
-                                         "type: JournalArticle\ndate: 2025-01-02\n")
-        run(*r, "deposit", "--from", str(tmp_path / "p.yaml"))
-        (tmp_path / "q.yaml").write_text("id: q\nsource: p.tex\npdf: p.pdf\ntitle: Q\nauthor: Doe, J\n"
-                                         "type: JournalArticle\n")
-        run(*r, "deposit", "--from", str(tmp_path / "q.yaml"), "--type", "Book")
-        (tmp_path / "relate.yaml").write_text("id: p\nto: doi:10.1000/xyz\nrelation: IsVersionOf\n")
-        run(*r, "relate", "--from", str(tmp_path / "relate.yaml"))
-        (tmp_path / "licence.yaml").write_text("id: p\nrights: cc-by-4.0\nmethod: by e-mail\ndate: 2025-05-05\n")
-        run(*r, "relicense", "--from", str(tmp_path / "licence.yaml"))
-        p, q = root / "ocfl" / "p", root / "ocfl" / "q"
-        pinv, qinv = P.load_inventory(p), P.load_inventory(q)
-        dc1 = P.read_json(p, pinv, "datacite.json", "v1")
-        assert dc1["types"]["resourceTypeGeneral"] == "JournalArticle"
-        assert P.date_of(dc1, "Available") == "2025-01-02"
-        assert P.read_json(q, qinv, "datacite.json")["types"]["resourceTypeGeneral"] == "Book"
-        rel = P.read_json(p, pinv, "datacite.json")["relatedIdentifiers"]
-        assert rel[-1]["relatedIdentifier"] == "10.1000/xyz" and rel[-1]["relationType"] == "IsVersionOf"
-        assert P.read_json(p, pinv, P.OBJ)["agreement"]["date"] == "2025-05-05"
-        run(*r, "collect")
-        run(*r, "index")
-        assert P.verify_errors() == []
-
-### Notices, withdrawal and completion
-
-This test goes through the later statements about a document. A paper is
-deposited without its sources (object version `v1`); a notice about its
-document version 1 is added, with a short text and a file in Markdown
-(`v2`); the sources are found and the version is completed (`v3`); a
-second document version follows (`v4`); and the paper is withdrawn
-(`v5`). The completed version keeps its number 1, names its main source
-and no longer has `sourcesMissing`; the head is withdrawn and still has
-the notice, whose file stays in the content under `notices/`. Finally, a
-withdrawn document gets no new versions (section 11.1): the last deposit
-is refused.
-
-    # in test: notices, withdrawal and completion through osheaf:
-    def test_notice_withdraw_complete(tmp_path):
-        root = tmp_path / "a"
-        make_archive(root)
-        pdf, src, note = tmp_path / "p.pdf", tmp_path / "p.tex", tmp_path / "erratum.md"
-        pdf.write_bytes(b"%PDF-1.4 p")
-        src.write_text("\\documentclass{article}")
-        note.write_text("Theorem 2 is wrong.")
-        r = ["--root", str(root)]
-        run(*r, "deposit", "lost", "--pdf", str(pdf), "--no-source", "lost", "--title", "T", "--author", "Doe, J")
-        run(*r, "notice", "lost", "--about", "1", "--text", "Theorem 2 is wrong.", "--file", str(note))
-        run(*r, "complete", "lost", "--version", "1", "--source", str(src))
-        pdf2 = tmp_path / "p2.pdf"
-        pdf2.write_bytes(b"%PDF-1.4 p2")
-        run(*r, "deposit", "lost", str(src), "--pdf", str(pdf2), "--title", "T", "--author", "Doe, J")
-        run(*r, "withdraw", "lost", "--reason", "an error")
-        run(*r, "collect")
-        run(*r, "index")
-        assert P.verify_errors() == []
-        d = root / "ocfl" / "lost"
-        inv = P.load_inventory(d)
-        v3 = P.read_json(d, inv, P.OBJ, "v3")
-        assert v3["documentVersion"] == 1 and v3["mainSource"] == "p.tex" and "sourcesMissing" not in v3
-        head = P.read_json(d, inv, P.OBJ)
-        assert head["status"] == "withdrawn" and head["notices"][0]["documentVersion"] == 1
-        assert "notices/erratum.md" in {p for ps in inv["versions"][inv["head"]]["state"].values() for p in ps}
-        with pytest.raises(SystemExit):        # a withdrawn document gets no new versions
-            run(*r, "deposit", "lost", str(src), "--pdf", str(pdf2), "--title", "T", "--author", "Doe, J")
-
-The completion of an *earlier* version is the case where the head stops
-holding the current version without a history. A paper is deposited
-without sources (`v1`), then in a second version with them (`v2`), then
-withdrawn, with the reason in a file (`v3`); finally the sources of the
-first version are found and added (`v4`). The head `v4` holds document
-version 1, yet the current version is still document version 2, in its
-last object version `v3`. The completion keeps the withdrawal of the
-head: its status, its reason with the file, and the `Withdrawn` date of
-`datacite.json`.
-
-    # in test: notices, withdrawal and completion through osheaf:
-    def test_complete_an_earlier_version(tmp_path):
-        root = tmp_path / "a"
-        make_archive(root)
-        pdf, pdf2, src, why = tmp_path / "p.pdf", tmp_path / "p2.pdf", tmp_path / "p.tex", tmp_path / "why.md"
-        pdf.write_bytes(b"%PDF-1.4 p")
-        pdf2.write_bytes(b"%PDF-1.4 p2")
-        src.write_text("\\documentclass{article}")
-        why.write_text("The main result is wrong.")
-        r = ["--root", str(root)]
-        run(*r, "deposit", "early", "--pdf", str(pdf), "--no-source", "lost", "--title", "T", "--author", "Doe, J")
-        run(*r, "deposit", "early", str(src), "--pdf", str(pdf2), "--title", "T", "--author", "Doe, J")
-        run(*r, "withdraw", "early", "--reason", "wrong", "--file", str(why), "--date", "2026-03-04")
-        run(*r, "complete", "early", "--version", "1", "--source", str(src))
-        d = root / "ocfl" / "early"
-        inv = P.load_inventory(d)
-        head = P.read_json(d, inv, P.OBJ)
-        assert inv["head"] == "v4" and head["documentVersion"] == 1 and "history" not in head
-        assert P.current_version(d, inv) == "v3"
-        assert head["status"] == "withdrawn" and head["withdrawal"] == P.read_json(d, inv, P.OBJ, "v3")["withdrawal"]
-        assert P.date_of(P.read_json(d, inv, "datacite.json"), "Withdrawn") == "2026-03-04"
-        assert "withdrawal/why.md" in {p for ps in inv["versions"]["v4"]["state"].values() for p in ps}
-        run(*r, "collect")
-        run(*r, "index")
-        assert P.verify_errors() == []
-
-### Corrections of the description
-
-`osheaf describe` corrects the title, the abstract, the keywords and the
-authors by a description-only version: the files and the document version
-stay, the fields given are replaced, and the others (a subject with a
-scheme, the licence) are kept. The message of the inventory names what
-was corrected. A correction that changes nothing is refused, and the
-command also reads its options from a file, here a corrected abstract
-from a file named relative to it.
-
-    # in test: notices, withdrawal and completion through osheaf:
-    def test_describe(tmp_path):
-        root = tmp_path / "a"
-        make_archive(root)
-        src, pdf = tmp_path / "p.tex", tmp_path / "p.pdf"
-        src.write_text("\\documentclass{article}")
-        pdf.write_bytes(b"%PDF-1.4 p")
-        r = ["--root", str(root)]
-        run(*r, "deposit", "p", str(src), "--pdf", str(pdf), "--title", "Tpyo", "--author", "Duch, P.",
-            "--abstract", "A \\emphdistribution.", "--keyword", "old", "--rights", "cc-by-4.0")
-        d = root / "ocfl" / "p"
-        inv = P.load_inventory(d)
-        dc = P.read_json(d, inv, "datacite.json")
-        dc["subjects"].append({"subject": "math.PR", "subjectScheme": "arXiv"})
-        P.write_json(tmp_path / "dc.json", dc)
-        files = {lp: d / inv["manifest"][dg][0] for dg, lps in inv["versions"]["v1"]["state"].items() for lp in lps}
-        files["datacite.json"] = tmp_path / "dc.json"
-        P.add_version("p", files, "a subject with a scheme")
-        run(*r, "describe", "p", "--title", "Typo", "--author", "Duch, Paweł|IMPAN", "--keyword", "new")
-        (tmp_path / "abstract.txt").write_text("A distribution.\n")
-        (tmp_path / "describe.yaml").write_text("id: p\nabstract-file: abstract.txt\n")
-        run(*r, "describe", "--from", str(tmp_path / "describe.yaml"))
-        with pytest.raises(SystemExit):
-            run(*r, "describe", "p", "--title", "Typo")
-        inv = P.load_inventory(d)
-        dc = P.read_json(d, inv, "datacite.json")
-        assert inv["head"] == "v4" and P.read_json(d, inv, P.OBJ)["documentVersion"] == 1
-        assert dc["titles"][0]["title"] == "Typo"
-        assert dc["creators"] == [{"name": "Duch, Paweł", "nameType": "Personal", "familyName": "Duch",
-                                   "givenName": "Paweł", "affiliation": [{"name": "IMPAN"}]}]
-        assert dc["descriptions"][0]["description"] == "A distribution."
-        assert dc["subjects"] == [{"subject": "new"}, {"subject": "math.PR", "subjectScheme": "arXiv"}]
-        assert dc["rightsList"][0]["rightsIdentifier"] == "cc-by-4.0"
-        assert inv["versions"]["v3"]["message"] == \
-            "Description corrected: title, keywords, authors (description-only version)"
-        assert inv["versions"]["v4"]["message"] == "Description corrected: abstract (description-only version)"
-        run(*r, "collect")
-        run(*r, "index")
-        assert P.verify_errors() == []
-
 Across archives
 ---------------
+
+The tests across archives wait for phase b of the port, skipped.
 
 The last tests use archives in neighbouring folders: one of authors, and
 others that collect, select, mirror or accept their documents. A local folder stands for the address of an archive, so no
@@ -1102,6 +1538,7 @@ withdrawn: a catalogue follows the head whatever it holds
 shows it.
 
     # in test: collections, mirrors and accepted copies:
+    @pytest.mark.skip(reason="phase b/c: not yet ported to specification 0.2")
     def test_curated_collection_across_archives(tmp_path, capsys):
         a, c = tmp_path / "a", tmp_path / "c"
         make_archive(a, "papers")
@@ -1159,6 +1596,7 @@ is satisfied. A setting that names something other than a collection of
 the archive stops `osheaf index`.
 
     # in test: collections, mirrors and accepted copies:
+    @pytest.mark.skip(reason="phase b/c: not yet ported to specification 0.2")
     def test_featured_collection_on_the_home_page(tmp_path):
         a, p = tmp_path / "a", tmp_path / "p"
         make_archive(p, "papers")
@@ -1238,6 +1676,7 @@ selection (section 10.2: tools never change revision sets on their own);
 revisions keep their pins.
 
     # in test: collections, mirrors and accepted copies:
+    @pytest.mark.skip(reason="phase b/c: not yet ported to specification 0.2")
     def test_selection_pins_revisions(tmp_path, capsys):
         from opensheaf import collections
         a, s = tmp_path / "a", tmp_path / "s"
@@ -1300,6 +1739,7 @@ disappears (its folder is moved away), the remote check finds `closed` no
 longer, but still confirms `open` on the copy.
 
     # in test: collections, mirrors and accepted copies:
+    @pytest.mark.skip(reason="phase b/c: not yet ported to specification 0.2")
     def test_mirror(tmp_path):
         """Open objects are mirrored (every version, checked), closed ones refused;
         a collection checks a mirrored member on the copy when its archive is gone."""
@@ -1352,6 +1792,7 @@ references `open` without mirrors. When the object is lost from the
 authors' storage root, the pin is confirmed on the library's copy.
 
     # in test: collections, mirrors and accepted copies:
+    @pytest.mark.skip(reason="phase b/c: not yet ported to specification 0.2")
     def test_check_remote_tries_the_archive_mirrors(tmp_path):
         from opensheaf import collections
         a, lib, c = tmp_path / "a", tmp_path / "lib", tmp_path / "c"
@@ -1397,6 +1838,7 @@ licence of `v2`.) The journal's issue is a selection of its own document
 it, the correction; the remote check compares the copy with its source.
 
     # in test: collections, mirrors and accepted copies:
+    @pytest.mark.skip(reason="phase b/c: not yet ported to specification 0.2")
     def test_accept_vetted_version(tmp_path):
         """A journal accepts one version (byte for byte, with its source and pin);
         the authors' later versions change nothing; a correction is the journal's
@@ -1457,6 +1899,7 @@ file, and the authors' archive keeps its storage root in `store/`
 instead of `ocfl/`.
 
     # in test: collections, mirrors and accepted copies:
+    @pytest.mark.skip(reason="phase b/c: not yet ported to specification 0.2")
     def test_accept_keeps_notice_files_and_storage_root(tmp_path):
         from opensheaf import collections
         a, j = tmp_path / "a", tmp_path / "j"
@@ -1495,6 +1938,7 @@ Here the copy is written directly, with a source in a folder whose
 inventory matches the pin but records only `v1`.
 
     # in test: collections, mirrors and accepted copies:
+    @pytest.mark.skip(reason="phase b/c: not yet ported to specification 0.2")
     def test_accepted_copy_of_a_version_the_source_lacks(archive, tmp_path):
         from opensheaf import collections
         src = tmp_path / "authors" / "ocfl" / "paper" / "v2"
