@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # Generated from literate/40-arxiv.md by opensheaf-literate: edit the document, not this file.
-"""Import papers downloaded from arXiv into the archive, one OCFL version per
+"""Import papers downloaded from arXiv into the archive (specification 0.2): one
+line per paper, sealed at its first import, and one signed object version per
 arXiv version.
 
     osheaf arxiv fetch DOWNLOADS --author AUTHOR-ID | ARXIV-ID ...
@@ -11,19 +12,23 @@ paper (the arXiv identifier, with / replaced by _) holding record.xml
 (OAI-PMH arXivRaw), vN.pdf and vN-source.{tar.gz,gz,pdf}; download.json (what
 was fetched, with SHA-256); version-licences.json (the licence and comments of
 each version, from its abstract page); identifiers.json (arXiv identifier ->
-object identifier, written by the depositor).
+label of the line in the archive, written by the depositor).
 
-Each version of an object holds, byte for byte as served by arXiv:
+Each object version holds, byte for byte as served by arXiv:
 
     paper.pdf          the PDF of that arXiv version
     source/...         the source files, unpacked from arXiv's e-print
                        (absent when arXiv has only a PDF)
     datacite.json      from the arXiv record; IsIdenticalTo the arXiv version
-    object.json        with `external` (role source) naming the arXiv version and the
-                       SHA-512 of the files received from arXiv
+    object.json        the line (name, owner), previous, and `external` (role
+                       source) naming the arXiv version and the SHA-512 of the
+                       files received from arXiv
+    genesis.json       the genesis record of the line, sealed at its first import
 
-Papers already in the archive (an arXiv relation in their datacite.json) are
-skipped. Nothing is typeset: the PDF is arXiv's.
+and is signed by the owner of the archive. Papers already in the archive (by
+their label, an arXiv relation in their datacite.json or an arXiv record in
+external) are skipped, or get their new versions with --update. Nothing is
+typeset: the PDF is arXiv's.
 """
 
 import argparse
@@ -167,10 +172,10 @@ def balanced(s, i):
 
 
 def clean_text(s, macros=None):
-    """Plain text with mathematics in $...$ (section 8): TeX accents and quotes
+    """Plain text with mathematics in $...$ (section 4.4): TeX accents and quotes
     outside mathematics become Unicode; inside mathematics, the authors'
     macros without arguments are replaced by their definitions when known."""
-    # mathematics is written between single dollar signs only (section 8)
+    # mathematics is written between single dollar signs only (section 4.4)
     s = re.sub(r"\$\$(.+?)\$\$", r"$\1$", s, flags=re.S)
     s = re.sub(r"\\\[(.+?)\\\]", lambda m: "$" + m.group(1).strip() + "$", s, flags=re.S)
     s = re.sub(r"\\\((.+?)\\\)", lambda m: "$" + m.group(1).strip() + "$", s, flags=re.S)
@@ -319,15 +324,21 @@ def main_tex(files):
 
 
 def already_archived():
-    """arXiv identifier -> object, from the arXiv identifiers and arXiv DOIs
-    (10.48550/arXiv.ID) related to any version of a document."""
-    out = {}
+    """arXiv identifier -> line, from the arXiv identifiers and arXiv DOIs related to any
+    version of a document of the archive's owners, and its arXiv records (external)."""
+    out, mine = {}, set(P.archive_owners())
     for obj_id, d, inv in P.objects():
+        if not obj_id or inv is None or obj_id.startswith("sheaf:draft:") or obj_id.split(":")[2] not in mine:
+            continue
         for ver in inv["versions"]:
-            dc = P.read_logical(d, inv, "datacite.json", ver)
-            if not dc:
-                continue
-            for r in json.loads(dc.read_text()).get("relatedIdentifiers", []):
+            obj = P.read_json(d, inv, P.OBJ, ver) or {}
+            if obj.get("kind") != "document":
+                break
+            for e in obj.get("external", []):
+                if e.get("service") == "arXiv" and "/abs/" in e.get("record", ""):
+                    out[re.sub(r"v\d+$", "", e["record"].rsplit("/abs/", 1)[1])] = obj_id
+            dc = P.read_json(d, inv, "datacite.json", ver) or {}
+            for r in dc.get("relatedIdentifiers", []):
                 v = r["relatedIdentifier"]
                 if r["relatedIdentifierType"] == "arXiv":
                     out[re.sub(r"v\d+$", "", v.split(":", 1)[1])] = obj_id
@@ -373,14 +384,14 @@ def rights_of(uri):
 
 
 def archived_versions(obj_id):
-    """The arXiv versions (e.g. 2303.18112v4) already in object OBJ_ID."""
-    d = P.OCFL / obj_id
+    """The arXiv versions (e.g. 2303.18112v4) already in the line OBJ_ID."""
+    d = P.obj_dir(obj_id)
     inv = P.load_inventory(d)
     out = set()
     for ver, info in inv["versions"].items():
         obj = P.read_json(d, inv, P.OBJ, ver)
         for e in obj.get("external", []):
-            if e.get("service") == "arXiv":
+            if e.get("service") == "arXiv" and "/abs/" in e.get("record", ""):
                 out.add(e["record"].rsplit("/abs/", 1)[1])
     return out
 
@@ -388,30 +399,35 @@ def archived_versions(obj_id):
 def import_paper(folder, taken, report, dry, texmacs=None, licences=None, existing=None, only=None, ids=None,
                  agreement=None):
     """Import the arXiv versions of a paper; with EXISTING (an object id), only
-    the versions not yet in that object are added, as new object versions."""
+    the versions not yet in that line are added, as new object versions."""
     texmacs = texmacs or {}
     licences = licences or {}
     rec = record(folder)
     aid = rec["id"]
+    genesis = None
     if existing:
         obj_id, present = existing, archived_versions(existing)
+        label = P.label_of(obj_id) or obj_id.split(":")[1]
     else:
         if aid not in (ids or {}):
-            sys.exit(f"{aid}: no identifier in identifiers.json (proposal: \"{aid}\": \"{slug(rec['title'], taken)}\");"
-                     " identifiers are chosen by the depositor (section 6.3)")
-        obj_id, present = ids[aid], set()
-        if obj_id in taken:
-            sys.exit(f"{aid}: identifier {obj_id} is taken")
-        taken.add(obj_id)
+            sys.exit(f"{aid}: no label in identifiers.json (proposal: \"{aid}\": \"{slug(rec['title'], taken)}\");"
+                     " labels are chosen by the depositor (section 3.1)")
+        obj_id, present, label = None, set(), ids[aid]
+        if not P.LABEL_RE.match(label) or len(label) > 64:
+            sys.exit(f"{aid}: {label} is not a label: ^[a-z0-9]+(-[a-z0-9]+)*$, at most 64 characters (section 3.1)")
+        if label in taken:
+            sys.exit(f"{aid}: label {label} is taken")
+        taken.add(label)
     # the record gives only the current licence; each version's own licence
     # comes from its abstract page (version-licences.json, written by osheaf arxiv fetch)
-    info = {"arxiv": aid, "id": obj_id, "versions": [], "license": rights_of(rec["license"])["rights"]}
+    info = {"arxiv": aid, "label": label, "id": obj_id, "versions": [],
+            "license": rights_of(rec["license"])["rights"]}
     first_date = rec["versions"][0]["date"][:10]
     # document versions are consecutive in the order of deposit; they need not
     # match arXiv's numbers (missing arXiv versions, versions deposited by hand)
     docn = 0
     if existing:
-        d = P.OCFL / existing
+        d = P.obj_dir(existing)
         dinv = P.load_inventory(d)
         docn = max(P.doc_version_of(d, dinv, v) for v in dinv["versions"])
     for n, v in enumerate(rec["versions"], 1):
@@ -501,7 +517,7 @@ def import_paper(folder, taken, report, dry, texmacs=None, licences=None, existi
             "publicationYear": int(first_date[:4]),
             "types": {"resourceTypeGeneral": "Preprint"},
             "version": str(docn),
-            "url": P.landing_url(obj_id),
+            "url": P.landing_url(label),
             "dates": [{"date": first_date, "dateType": "Issued"},
                       {"date": v["date"][:10], "dateType": "Available"}],
             "language": "en",
@@ -514,9 +530,10 @@ def import_paper(folder, taken, report, dry, texmacs=None, licences=None, existi
         if rec["journal"]:
             datacite["descriptions"].append({"description": f"Journal reference: {rec['journal']}",
                                              "descriptionType": "SeriesInformation"})
+        owner = obj_id.split(":")[2] if obj_id else P.ARCHIVE["owner"]
         obj = {
             "format": P.OBJ_FORMAT, "specification": P.SPEC, "kind": "document",
-            "archiveId": P.ARCHIVE["archiveId"], "objectId": obj_id, "documentVersion": docn,
+            "name": obj_id.split(":")[1] if obj_id else None, "owner": owner, "documentVersion": docn,
         }
         if main:
             obj.update(mainSource=main, sourceFormat=fmt)
@@ -537,15 +554,19 @@ def import_paper(folder, taken, report, dry, texmacs=None, licences=None, existi
             obj["agreement"] = {"by": agreement.get("by") or [c["name"] for c in datacite["creators"]],
                                 "date": P.TODAY, "method": agreement["method"]}
         if not dry:
-            d = P.OCFL / obj_id
+            if obj_id is None:
+                genesis, obj_id = P.seal("document", owner)
+                obj["name"] = obj_id.split(":")[1]
+                P.LABELS[label] = obj_id
+            d = P.obj_dir(obj_id)
             inv0 = P.load_inventory(d)
+            if inv0 is not None:
+                genesis = P.read_logical(d, inv0, P.GENESIS).read_bytes()
+            content[P.GENESIS] = genesis
             P.carry_forward(P.read_json(d, inv0, P.OBJ) if inv0 else None, obj, inv0, P.next_object_version(inv0))
             for lp, f in P.carried_files(obj_id, inv0).items():
                 content.setdefault(lp, f)
-            P.write_json(tmp / "datacite.json", datacite)
-            P.write_json(tmp / P.OBJ, obj)
-            content["datacite.json"] = tmp / "datacite.json"
-            content[P.OBJ] = tmp / P.OBJ
+            content["datacite.json"] = P.json_bytes(datacite)
             msg = f"Imported from arXiv: {aid}{vid} of {v['date'][:10]}"
             if tm_spec and alongside:
                 msg += ("; with the TeXmacs original, from the authors' files, in texmacs/ (arXiv's"
@@ -555,19 +576,21 @@ def import_paper(folder, taken, report, dry, texmacs=None, licences=None, existi
                         " has as source (the PDF is arXiv's)")
             if tm_spec and tm_spec.get("adjusted"):
                 msg += "; the TeXmacs file was adjusted to match the submission: " + tm_spec["adjusted"]
-            inv = P.add_version(obj_id, content, msg)
+            inv = P.add_version(obj_id, content, obj, msg)
+            P.write_discovery()
             vinfo["object_version"] = inv["head"]
             if tm_spec and n == len(rec["versions"]):
                 # the HTML version of the head, as for the archive's TeXmacs deposits
-                P.typeset(Path(tm_spec["tm"]), obj_id, tmp / "check.pdf", P.SITE / obj_id)
+                P.typeset(Path(tm_spec["tm"]), label, tmp / "check.pdf", P.SITE / label)
                 vinfo["html"] = True
-            elif n == len(rec["versions"]) and (P.SITE / obj_id).exists():
+            elif n == len(rec["versions"]) and (P.SITE / label).exists():
                 # the head has no TeXmacs source: no HTML version of it
-                shutil.rmtree(P.SITE / obj_id)
+                shutil.rmtree(P.SITE / label)
         shutil.rmtree(tmp, ignore_errors=True)
+    info["id"] = obj_id
     report.append(info)
     kinds = ",".join(x.get("kind", "?") for x in info["versions"])
-    print(f"{aid:>18}  {obj_id}  [{kinds}]", flush=True)
+    print(f"{aid:>18}  {label}  {obj_id or '(a new line)'}  [{kinds}]", flush=True)
 
 
 def main(argv=None):
@@ -582,10 +605,10 @@ def main(argv=None):
                     " always appended in arXiv's order; deposit other versions in between by hand)")
     ap.add_argument("--update", action="store_true",
                     help="for papers already archived, add their new arXiv versions")
-    ap.add_argument("--identifiers", help="JSON: arXiv id -> object identifier, chosen by the depositor"
+    ap.add_argument("--identifiers", help="JSON: arXiv id -> label of its line, chosen by the depositor"
                     " (default: DOWNLOADS/identifiers.json)")
     ap.add_argument("--rebuild", action="store_true",
-                    help="delete the objects of the given papers first (only before publication)")
+                    help="delete the lines of the given papers first (only before publication: no tombstone)")
     ap.add_argument("--agreement", metavar="METHOD",
                     help="record in each imported version on what grounds it is deposited (object.json"
                          " agreement), e.g. 'deposited by an author'")
@@ -609,10 +632,23 @@ def main(argv=None):
         for i in a.ids:
             obj = done.pop(i, None)
             if obj:
-                shutil.rmtree(P.OCFL / obj)
-                shutil.rmtree(P.SITE / obj, ignore_errors=True)
+                label = P.label_of(obj)
+                shutil.rmtree(P.obj_dir(obj))
+                if label:
+                    del P.LABELS[label]
+                    shutil.rmtree(P.SITE / label, ignore_errors=True)
                 print(f"{i:>18}  removed {obj}")
-    taken = {o[0] for o in P.objects()}
+        P.write_discovery()
+    for aid, label in sorted(ids.items()):
+        if label in P.LABELS and done.get(aid) not in (None, P.LABELS[label]):
+            sys.exit(f"{aid}: identifiers.json gives the label {label}, but the paper is in the archive as "
+                     f"{P.label_of(done[aid]) or done[aid]}")
+        if label in P.LABELS and aid not in done:
+            if a.ids and aid not in a.ids:
+                continue
+            sys.exit(f"{aid}: the label {label} is that of a line not related to this arXiv paper; "
+                     "choose another label in identifiers.json")
+    taken = set(P.LABELS)
     folders = sorted((dl / "papers").iterdir()) if not a.ids else [dl / "papers" / i.replace("/", "_") for i in a.ids]
     recs = []
     for f in folders:
@@ -622,7 +658,8 @@ def main(argv=None):
                 if a.update:
                     recs.append((r["versions"][0]["date"], f, done[r["id"]]))
                 else:
-                    print(f"{r['id']:>18}  skipped: already archived as {done[r['id']]} (--update adds new versions)")
+                    print(f"{r['id']:>18}  skipped: already archived as "
+                          f"{P.label_of(done[r['id']]) or done[r['id']]} (--update adds new versions)")
                 continue
             recs.append((r["versions"][0]["date"], f, None))
     report = []
