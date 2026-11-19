@@ -19,9 +19,10 @@ chain of section 4.3, and the signatures of section 7. The second kind runs
 archive and its owner, the deposits, files of options, the changes of keys.
 A few tests in between check small functions on their own.
 
-The tests of the website, not yet ported to specification 0.2, are kept,
-skipped, for phase c of the port. The work across archives (resolution,
-collections, mirrors, branches, drafts, takedowns, indexes) has its
+Then come the tests of the website, of the import from arXiv, and of the
+Zenodo binding, which runs against a test double: no test reaches the
+network. The work across archives (resolution, collections, mirrors,
+branches, drafts, takedowns, indexes, a featured collection) has its
 [own tests](72-tests-across.md).
 
 All the tests are in one file, `tests/test_core.py`, in this order.
@@ -71,7 +72,13 @@ All the tests are in one file, `tests/test_core.py`, in this order.
     <<test: verifying broken archives>>
 
 
-    <<test: the website, not yet ported>>
+    <<test: the website>>
+
+
+    <<test: importing from arXiv>>
+
+
+    <<test: Zenodo, against a test double>>
 
 
 The tests use the core under the short name `P`, as the other modules of
@@ -197,13 +204,15 @@ hold the same files.
     FILES3 = {"main.tex": b"\\documentclass{article}three", "paper.pdf": b"%PDF three"}
 
 `finish` does what the commands do after deposits: a new version of the
-main catalogue, the discovery document; then it returns the errors of
-verification. A test that expects none compares them with the empty list.
+main catalogue, the discovery document and the website, which the archive
+of `osheaf init` has (the profile website, appendix A.3); then it returns
+the errors of verification. A test that expects none compares them with the
+empty list.
 
     # in test: closing and verifying an archive:
     def finish():
         P.collect(None)
-        P.write_discovery()
+        P.index(P.argparse_namespace(no_html=True))
         return P.verify_errors()
 
 ### The rules of document versions
@@ -1415,47 +1424,139 @@ and the exit status counts the errors.
         with pytest.raises(SystemExit, match="rebuild it"):
             run("--root", str(old), "collect")
 
-The commands not yet ported to specification 0.2 say so.
+The website
+-----------
 
-    # in test: verifying broken archives:
-    def test_commands_not_yet_available(archive):
-        for argv in (["zenodo", "x"], ["arxiv", "import", "downloads"]):
-            with pytest.raises(SystemExit, match="not yet available for specification 0.2"):
-                run("--root", str(archive), *argv)
-
-The website, not yet ported
----------------------------
-
-The tests of the website wait for phase c of the port, skipped.
+The website (appendix A.3) is written by `osheaf index`, and again after
+every command that changes the archive. These tests read the pages it
+writes.
 
 The website finds the PDF of a version among the renditions of its
 `object.json`, whatever its name. A document written by hand has its PDF
 as `article.pdf`, as an accepted copy of a document of another archive
-may; the website, written by `html.render` from the members of the main
-collection, links that file from the landing page, its tag for Google
-Scholar and the home page.
+may; the website links that file from the landing page, its tag for Google
+Scholar and the home page, at the path of the line in the owner-name
+layout, `ocfl/<owner>/<name>/`.
 
-    # in test: the website, not yet ported:
-    @pytest.mark.skip(reason="phase c: the website is not yet ported to specification 0.2")
+    # in test: the website:
     def test_pdf_found_from_renditions(archive):
         put("paper-a", 1, {"main.tex": b"\\documentclass{article}", "article.pdf": b"%PDF article"},
             extra_obj={"renditions": [{"path": "article.pdf", "mediaType": "application/pdf"}]})
         assert finish() == []
-        from opensheaf import html
-        coll = P.OCFL / CONFIG["mainCollection"]
-        html.render(P.read_json(coll, P.load_inventory(coll), "members.json")["members"])
+        at = P.path_of(P.LABELS["paper-a"])
         page = (archive / "paper" / "paper-a" / "index.html").read_text()
-        assert 'name="citation_pdf_url" content="https://example.org/archive/ocfl/paper-a/v1/content/article.pdf"' in page
-        assert 'href="../../ocfl/paper-a/v1/content/article.pdf"' in page
-        assert 'href="ocfl/paper-a/v1/content/article.pdf"' in (archive / "index.html").read_text()
+        assert f'name="citation_pdf_url" content="https://example.org/archive/ocfl/{at}/v1/content/article.pdf"' in page
+        assert f'href="../../ocfl/{at}/v1/content/article.pdf"' in page
+        assert f'href="ocfl/{at}/v1/content/article.pdf"' in (archive / "index.html").read_text()
 
-An archive whose home page is a TeXmacs index gets the landing pages and
-the sitemap of the website too. The test needs no TeXmacs: `--no-html`
-writes `index.tm` and stops before the export. The archive's own
+An archive that declares the profile website promises a home page showing
+the pin of every member of its main catalogue, and a landing page giving
+the full `sheaf:` URI of each line held (appendix A.3): a home page made
+by other tools, without the pins, is an error, and so is a missing landing
+page. An archive that does not declare the profile is told the same as a
+warning.
+
+    # in test: the website:
+    def test_index_pins_required_by_the_profile_website(archive, monkeypatch):
+        put("paper-a", 1, FILES1)
+        assert finish() == []
+        nm = P.LABELS["paper-a"].split(":")[1]
+        (archive / "index.html").write_text("<p>an index made by other tools</p>")
+        shutil.rmtree(archive / "paper" / "paper-a")
+        errors = P.verify_errors()
+        assert f"index.html: does not show the pin of {nm}" in errors
+        assert any(e.startswith("paper/paper-a/index.html: no landing page giving the sheaf: URI") for e in errors)
+        monkeypatch.setitem(P.ARCHIVE, "profiles", [])
+        P.write_discovery()
+        found = P.verify_findings()
+        assert [x for x in found if x["severity"] == "error"] == []
+        assert {"severity": "warning", "place": "index.html", "message": f"does not show the pin of {nm} "
+                "(the archive does not declare the profile website)"} in found
+
+A landing page (appendix A.3) gives the full `sheaf:` URI of its line,
+with a short form, and its owner, linked to the owner's page, which
+summarises the key log; each signed document version, in the order of the
+history, with its notices and its pin, the `sheaf:` URI of the object
+version that holds it with the digest of its inventory. A withdrawal is
+shown on the landing page and the home page (section 13.1). When the
+owner exposes the key that signed the versions (section 6.3), they are
+contested: the owner signs its main catalogue again, and the page of the
+paper, whose versions are still contested, says so, and so does its owner
+block.
+
+    # in test: the website:
+    def test_landing_page_of_a_line(tmp_path):
+        root = tmp_path / "a"
+        make_archive(root)
+        src, pdf = tmp_path / "p.tex", tmp_path / "p.pdf"
+        src.write_text("\\documentclass{article}")
+        pdf.write_bytes(b"%PDF-1.4 p")
+        r = ["--root", str(root)]
+        paper = [str(src), "--pdf", str(pdf), "--title", "On $x$", "--author", "Doe, Jane"]
+        run(*r, "deposit", "p", *paper, "--new", "--available", "2025-01-02")
+        run(*r, "deposit", "p", *paper, "--changes", "Typos.", "--available", "2025-02-03")
+        run(*r, "notice", "p", "--about", "1", "--text", "Lemma 2 is wrong as stated.")
+        run(*r, "collect")
+        obj_id = P.LABELS["p"]
+        _, nm, owner = obj_id.split(":")
+        d = P.obj_dir(obj_id)
+        page = (root / "paper" / "p" / "index.html").read_text()
+        assert f"<code>{obj_id}</code>" in page and f"sheaf:{nm[:16]}:{owner[:16]}" in page
+        assert f'href="../../owner/{owner}/"' in page
+        assert "Version 2" in page and "Version 1" in page and "Lemma 2 is wrong as stated." in page
+        assert f"{obj_id}/v2?sha512={P.digest(d / 'v3' / 'inventory.json')}" in page
+        assert f"{obj_id}/v1?sha512={P.digest(d / 'v1' / 'inventory.json')}" in page
+        assert "contested" not in page and "Withdrawn" not in page
+        owner_page = (root / "owner" / owner / "index.html").read_text()
+        assert "Current keys (1 of 1 sign)" in owner_page and "Rotation keys committed to: 3" in owner_page
+        assert 'href="../../paper/p/"' in owner_page
+        assert f"https://example.org/T/owner/{owner}/" in (root / "sitemap.xml").read_text()
+        assert P.verify_errors() == []
+        run(*r, "withdraw", "p", "--reason", "The main result is wrong.")
+        page = (root / "paper" / "p" / "index.html").read_text()
+        assert "<strong>Withdrawn" in page and "The main result is wrong." in page
+        assert '<li class="paper withdrawn">' in (root / "index.html").read_text()
+        first = P.key_log(owner).latest().keys["keys"][0]
+        third = P.key_new(P.argparse_namespace(owner=None)).did
+        rk = rotation_files(tmp_path / "T-keys")
+        run(*r, "owner", "expose", first, "--add", third, "--rotation-key", rk[0], "--rotation-key", rk[1],
+            "--export", str(tmp_path / "T-keys-2"), "--no-passphrase", "--yes")
+        main = P.LABELS["main"]
+        run(*r, "sign", "main", "--version", P.load_inventory(P.obj_dir(main))["head"], "--yes")
+        page = (root / "paper" / "p" / "index.html").read_text()
+        assert '<div class="contested"><strong>Contested:</strong>' in page
+        assert '<span class="contested">contested</span>' in page and "1 key exposed" in page
+        assert "Exposed keys" in (root / "owner" / owner / "index.html").read_text()
+
+A takedown deletes the line from the presentation files (section 13.2): its
+landing page goes, the sitemap and the home page no longer name it, and the
+archive still verifies, its main catalogue pinning a version now removed.
+
+    # in test: the website:
+    def test_takedown_removes_the_pages(archive):
+        put("paper-a", 1, FILES1)
+        put("paper-b", 1, FILES2)
+        assert finish() == []
+        gone = P.LABELS["paper-a"]
+        pin = P.digest(P.obj_dir(gone) / "v1" / "inventory.json")
+        assert pin[:32] in (archive / "index.html").read_text()
+        run("--root", str(archive), "takedown", "paper-a", "--reason", "At the request of the holder of the rights.",
+            "--yes")
+        sitemap = (archive / "sitemap.xml").read_text()
+        assert "paper/paper-a/" not in sitemap and "paper/paper-b/" in sitemap
+        assert not (archive / "paper" / "paper-a").exists()
+        assert pin[:32] not in (archive / "index.html").read_text()
+        assert P.verify_errors() == []
+
+An archive whose home page is a TeXmacs index gets the landing pages, the
+owner pages and the sitemap of the website too. The test needs no TeXmacs:
+`--no-html` writes `index.tm` and stops before the export. The archive's own
 template of the landing page, in its `templates` folder, is used without
 any setting, and, since it does not use the default style sheet, no
 `style.css` is written. A document with an HTML version in
-`site/<id>/` gets a link to it, and an entry in the sitemap.
+`site/<label>/` gets a link to it, and an entry in the sitemap. The
+archive declares the TeXmacs profile instead of the website's, whose home
+page, exported by TeXmacs, the test does not write.
 
 The entries of the index follow the rules shared with the website: the
 title links the landing page; the authors are written `A, B and C.`; the
@@ -1463,15 +1564,14 @@ arXiv identifier is shown and linked without its version, even when the
 relation was recorded with one; and a change note says what it is
 (`changes: ...`, or `arXiv comments: ...` for a version from arXiv).
 
-    # in test: the website, not yet ported:
-    @pytest.mark.skip(reason="phase c: the website is not yet ported to specification 0.2")
+    # in test: the website:
     def test_texmacs_index_with_landing_pages(tmp_path):
         """A TeXmacs index: index.tm with uniform entries, and the landing pages,
         from the archive's own template, and the sitemap of the website."""
         root = tmp_path / "a"
         make_archive(root)
         cfg = json.loads((root / "osheaf.json").read_text())
-        cfg["index"] = {"template": "index-template.tm"}
+        cfg["index"], cfg["profiles"] = {"template": "index-template.tm"}, ["texmacs"]
         (root / "osheaf.json").write_text(json.dumps(cfg))
         for f in ("index.html", "style.css", "sitemap.xml"):    # written by init, for the website
             (root / f).unlink()
@@ -1479,14 +1579,15 @@ relation was recorded with one; and a change note says what it is
         (root / "templates").mkdir()
         (root / "templates" / "paper.html").write_text(
             "<html><head>{{head}}<link rel=stylesheet href='{{root}}resources/notes-base.css'></head>"
-            "<body class=house>{{title}} by {{authors}}{{html_link}}<ol>{{versions}}</ol></body></html>")
+            "<body class=house>{{title}} by {{authors}}{{html_link}} {{sheaf_uri}}<ol>{{versions}}</ol></body></html>")
         (root / "index-template.tm").write_text("<TeXmacs|2.1.5>\n\n<\\body>\n  <paper-index>\n</body>\n")
         src, pdf = tmp_path / "p.tex", tmp_path / "p.pdf"
         src.write_text("\\documentclass{article}")
         pdf.write_bytes(b"%PDF-1.4 p")
         r = ["--root", str(root)]
         run(*r, "deposit", "p", str(src), "--pdf", str(pdf), "--title", "On $x$", "--author", "Doe, Jane",
-            "--author", "Roe, Richard", "--author", "Poe, Ann", "--changes", "Typos.", "--available", "2025-01-02")
+            "--author", "Roe, Richard", "--author", "Poe, Ann", "--changes", "Typos.", "--available", "2025-01-02",
+            "--new")
         run(*r, "relate", "p", "--to", "arxiv:2607.08385v1")
         (root / "site" / "p").mkdir(parents=True)
         (root / "site" / "p" / "p.html").write_text("<html>the paper</html>")
@@ -1499,93 +1600,249 @@ relation was recorded with one; and a change note says what it is
         assert "changes: Typos." in tm
         page = (root / "paper" / "p" / "index.html").read_text()
         assert "class=house" in page and "Jane Doe, Richard Roe and Ann Poe" in page
+        assert P.LABELS["p"] in page
         assert 'name="citation_author" content="Roe, Richard"' in page
         assert 'href="../../site/p/p.html">HTML</a>' in page
         assert '>arXiv:2607.08385</a>' in page and "changes: Typos." in page
         sitemap = (root / "sitemap.xml").read_text()
         assert "https://example.org/T/paper/p/" in sitemap and "https://example.org/T/site/p/p.html" in sitemap
         assert not (root / "index.html").exists() and not (root / "style.css").exists()
-        assert P.read_json(root / "ocfl" / "p", P.load_inventory(root / "ocfl" / "p"),
-                           "datacite.json")["url"] == "https://example.org/T/paper/p/"
+        d = P.obj_dir(P.LABELS["p"])
+        assert P.read_json(d, P.load_inventory(d), "datacite.json")["url"] == "https://example.org/T/paper/p/"
         assert P.changes_note({"changes": {"text": "61 pages"},
                                "external": [{"role": "source", "service": "arXiv"}]}) == "arXiv comments: 61 pages"
         assert P.verify_errors() == []
 
-A featured collection, on the home page of the website, also waits for
-phase c.
+A featured collection, on the home page of the website, is a collection
+across archives, and is tested with the [tests across
+archives](72-tests-across.md).
 
-#### A featured collection
+Importing from arXiv
+--------------------
 
-An author's archive `a` holds a paper of its own and a reading list, a
-selection with a paper of another archive and the author's own paper. The
-main collection lists the archive's own documents (the reading list is an
-object of the archive, not a member of the main collection); with
-`index.html.featured` naming the reading list, the home page lists it
-first, under its title and with its description as the
-lead paragraph, then the main collection, under its own heading. Both
-show their pins, and the verifier, which checks the main collection's,
-is satisfied. A setting that names something other than a collection of
-the archive stops `osheaf index`.
+The import reads a downloads folder as `osheaf arxiv fetch` writes it; the
+test writes one by hand, for a paper with two versions: the first with a
+LaTeX source, a single gzipped file, the second a PDF alone, its source
+withheld. The import seals a line labelled as `identifiers.json` says, and
+adds the two versions, each signed by the owner of the archive, the second
+recording the digest of the inventory of the first (`previous`, section
+4.3), with arXiv's labels, the files received, the agreement given and the
+landing page as `url`. Run again, it finds the paper in the archive and
+skips it; `--update` adds nothing new. A label of `identifiers.json` that
+names another line stops the import.
 
-    # in test: the website, not yet ported:
-    @pytest.mark.skip(reason="phase c: the website is not yet ported to specification 0.2")
-    def test_featured_collection_on_the_home_page(tmp_path):
-        a, p = tmp_path / "a", tmp_path / "p"
-        make_archive(p, "papers")
-        make_archive(a, "author")
+    # in test: importing from arXiv:
+    def arxiv_downloads(folder, aid="2611.00001", label="first-paper"):
+        import gzip
+        paper = folder / "papers" / aid
+        paper.mkdir(parents=True)
+        (paper / "record.xml").write_text(f"""<?xml version="1.0"?>
+    <OAI-PMH xmlns="http://www.openarchives.org/OAI/2.0/"><GetRecord><record><metadata>
+    <arXivRaw xmlns="http://arxiv.org/OAI/arXivRaw/"><id>{aid}</id>
+    <version version="v1"><date>Mon, 2 Nov 2026 10:00:00 GMT</date></version>
+    <version version="v2"><date>Tue, 10 Nov 2026 10:00:00 GMT</date></version>
+    <title>On the $\\Phi^4_3$ model</title><authors>Jane Doe and Richard Roe</authors>
+    <categories>math-ph math.PR</categories><license>http://creativecommons.org/licenses/by/4.0/</license>
+    <abstract>We prove $x&lt;y$.</abstract></arXivRaw></metadata></record></GetRecord></OAI-PMH>
+    """)
+        (paper / "v1.pdf").write_bytes(b"%PDF-1.4 one")
+        (paper / "v1-source.gz").write_bytes(gzip.compress(b"\\documentclass{article}\\begin{document}x\\end{document}"))
+        (paper / "v2.pdf").write_bytes(b"%PDF-1.4 two")
+        cc = "http://creativecommons.org/licenses/by/4.0/"
+        (folder / "version-licences.json").write_text(json.dumps({
+            f"{aid}v1": {"licence": cc, "comments": "10 pages"}, f"{aid}v2": {"licence": cc, "comments": "11 pages"}}))
+        (folder / "identifiers.json").write_text(json.dumps({aid: label}))
+
+
+    def test_arxiv_import_of_two_versions(tmp_path):
+        root = tmp_path / "a"
+        make_archive(root)
+        dl = tmp_path / "downloads"
+        arxiv_downloads(dl)
+        r = ["--root", str(root)]
+        run(*r, "arxiv", "import", str(dl), "--agreement", "deposited by an author")
+        P.configure(root)
+        obj_id = P.LABELS["first-paper"]
+        d = P.obj_dir(obj_id)
+        inv = P.load_inventory(d)
+        assert inv["head"] == "v2" and P.line_statuses(d, inv)[1] == [sign.SIGNED, sign.SIGNED]
+        v1, v2 = (P.read_json(d, inv, P.OBJ, v) for v in ("v1", "v2"))
+        assert (v1["name"], v1["owner"]) == tuple(obj_id.split(":")[1:]) and "previous" not in v1
+        assert v2["previous"] == P.digest(d / "v1" / "inventory.json")
+        assert v1["mainSource"] == "source/2611.00001.tex" and "sourcesMissing" in v2
+        assert [o["external"][0]["label"] for o in (v1, v2)] == ["v1", "v2"]
+        assert v1["external"][0]["record"] == "https://arxiv.org/abs/2611.00001v1"
+        assert v2["agreement"]["method"] == "deposited by an author"
+        assert v2["agreement"]["by"] == ["Doe, Jane", "Roe, Richard"]
+        dc = P.read_json(d, inv, "datacite.json", "v2")
+        assert dc["url"] == "https://example.org/T/paper/first-paper/" and dc["version"] == "2"
+        assert P.read_logical(d, inv, P.GENESIS).read_bytes() == P.read_logical(d, inv, P.GENESIS, "v1").read_bytes()
+        run(*r, "arxiv", "import", str(dl))
+        run(*r, "arxiv", "import", str(dl), "--update")
+        assert P.load_inventory(d)["head"] == "v2"
+        run(*r, "collect")
+        run(*r, "index")
+        assert "Version 2 (arXiv v2)" in (root / "paper" / "first-paper" / "index.html").read_text()
+        assert P.verify_errors() == []
+        other = tmp_path / "other"
+        arxiv_downloads(other, "2611.00002", "first-paper")
+        with pytest.raises(SystemExit, match="not related to this arXiv paper"):
+            run(*r, "arxiv", "import", str(other))
+
+Zenodo, against a test double
+-----------------------------
+
+The Zenodo binding is tested without Zenodo: the class `Zenodo` of the
+module is replaced by a test double that answers as the deposit API does
+(drafts, new versions, uploads with their MD5, publication), and every
+request over the network fails, so that no test can reach Zenodo, its
+sandbox, or anything else. The double keeps what it was sent.
+
+    # in test: Zenodo, against a test double:
+    class FakeZenodo:
+        """Zenodo's deposit API, as far as the binding uses it, in memory."""
+
+        def __init__(self, production=True):
+            from opensheaf import zenodo
+            self.production = production
+            self.s = zenodo.SERVICES[production]
+            self.records, self.uploads, self.calls, self.next = {}, {}, [], 100
+
+        def doi(self, recid):
+            return f"{self.s['prefix']}/zenodo.{recid}"
+
+        def _record(self, concept):
+            self.next += 1
+            rec = {"id": self.next, "conceptrecid": concept or self.next + 1000,
+                   "links": {"bucket": f"https://zenodo.invalid/bucket/{self.next}",
+                             "latest_draft": f"https://zenodo.invalid/api/deposit/depositions/{self.next}"},
+                   "files": [{"id": "inherited"}] if concept else []}
+            self.records[rec["id"]] = rec
+            return rec
+
+        def call(self, method, url, data=None, raw=None):
+            import hashlib
+            self.calls.append((method, url))
+            if method == "POST" and url == "/deposit/depositions":
+                return self._record(None)
+            if url.endswith("/actions/newversion"):
+                rec = self._record(self.records[int(url.split("/")[-3])]["conceptrecid"])
+                return {"links": {"latest_draft": rec["links"]["latest_draft"]}}
+            if url.endswith("/actions/publish"):
+                rec = self.records[int(url.split("/")[-3])]
+                return {"doi": self.doi(rec["id"]), "conceptdoi": self.doi(rec["conceptrecid"])}
+            if method == "GET":
+                return self.records[int(url.rsplit("/", 1)[1])]
+            if method == "PUT" and "/bucket/" in url:
+                self.uploads[url.rsplit("/", 1)[1]] = raw
+                return {"checksum": "md5:" + hashlib.md5(raw).hexdigest()}
+            return {}
+
+
+    @pytest.fixture
+    def fake_zenodo(monkeypatch):
+        import urllib.request
+        from opensheaf import zenodo
+
+        def no_network(*a, **k):
+            raise AssertionError("a test reached for the network")
+        monkeypatch.setattr(urllib.request, "urlopen", no_network)
+        fakes = {True: FakeZenodo(True), False: FakeZenodo(False)}
+        monkeypatch.setattr(zenodo, "Zenodo", lambda production: fakes[production])
+        return fakes
+
+A paper is deposited first on the sandbox, which works on a copy of the
+line and of its owner's key log: the archive does not change, and no test
+DOI enters it. Then on Zenodo itself: the object version added holds the
+DOI in `datacite.json` and the deposit in `external`, records `previous`,
+and is signed, like the version before it; the files uploaded are those of
+the version, its `object.json` byte for byte the one added, and each
+upload was compared with the MD5 of the inventory. The same version is not
+deposited twice. A second document version becomes a new version of the
+record, linked to the first by `IsNewVersionOf`, and the archive verifies.
+
+    # in test: Zenodo, against a test double:
+    def test_zenodo_deposit(tmp_path, fake_zenodo):
+        root = tmp_path / "a"
+        make_archive(root)
+        src, pdf = tmp_path / "p.tex", tmp_path / "p.pdf"
+        src.write_text("\\documentclass{article}")
+        pdf.write_bytes(b"%PDF-1.4 p")
+        r = ["--root", str(root)]
+        paper = [str(src), "--pdf", str(pdf), "--title", "On $x$", "--author", "Doe, Jane", "--rights", "cc-by-4.0"]
+        run(*r, "deposit", "p", *paper, "--new")
+        run(*r, "zenodo", "p")
+        P.configure(root)
+        d = P.obj_dir(P.LABELS["p"])
+        assert P.load_inventory(d)["head"] == "v1" and not (root / "zenodo-staging").exists()
+        assert fake_zenodo[False].uploads and "10.5072" not in (d / "v1" / "inventory.json").read_text()
+        run(*r, "zenodo", "p", "--production")
+        inv = P.load_inventory(d)
+        assert inv["head"] == "v2" and P.line_statuses(d, inv)[1] == [sign.SIGNED, sign.SIGNED]
+        obj, dc = P.read_json(d, inv, P.OBJ), P.read_json(d, inv, "datacite.json")
+        entry = obj["external"][0]
+        assert entry["role"] == "deposit" and entry["service"] == "Zenodo" and entry["doi"] == dc["doi"]
+        assert dc["doi"].startswith("10.5281/zenodo.") and entry["record"].startswith("https://zenodo.org/records/")
+        assert obj["previous"] == P.digest(d / "v1" / "inventory.json") and obj["documentVersion"] == 1
+        assert dc["url"] == "https://example.org/T/paper/p/"
+        assert sorted(fake_zenodo[True].uploads) == ["datacite.json", "genesis.json", "object.json", "p.tex", "paper.pdf"]
+        assert fake_zenodo[True].uploads["object.json"] == P.read_logical(d, inv, P.OBJ).read_bytes()
+        with pytest.raises(SystemExit, match="already on Zenodo"):
+            run(*r, "zenodo", "p", "--production")
+        run(*r, "deposit", "p", *paper, "--changes", "Typos.")
+        run(*r, "zenodo", "p", "--production")
+        inv = P.load_inventory(d)
+        dc2 = P.read_json(d, inv, "datacite.json")
+        assert {"relatedIdentifier": dc["doi"], "relatedIdentifierType": "DOI",
+                "relationType": "IsNewVersionOf"} in dc2["relatedIdentifiers"]
+        assert any(u.endswith("/actions/newversion") for _, u in fake_zenodo[True].calls)
+        assert set(P.line_statuses(d, inv)[1]) == {sign.SIGNED}
+        run(*r, "collect")
+        assert P.verify_errors() == []
+
+A deposit interrupted after publication (appendix A.1) keeps its staging
+folder, with the version built and signed, and locks the line: a deposit
+is refused until the next run of `osheaf zenodo` adds the version. If the
+key that signed it is exposed meanwhile, the version would be contested,
+as the first version of the line is; the run signs it again, with a current
+key not exposed, and it is signed, and the first version with it (section
+7.3: a version signed directly is contested only while no later version is
+signed with keys not exposed).
+
+    # in test: Zenodo, against a test double:
+    def test_zenodo_completes_and_signs_again(tmp_path, fake_zenodo, monkeypatch):
+        root = tmp_path / "a"
+        make_archive(root)
         pdf = tmp_path / "p.pdf"
         pdf.write_bytes(b"%PDF-1.4 p")
-        run("--root", str(p), "deposit", "one", "--pdf", str(pdf), "--no-source", "x", "--title", "One",
-            "--author", "Doe, J")
-        run("--root", str(p), "collect")
-        run("--root", str(p), "index")
-        run("--root", str(a), "deposit", "mine", "--pdf", str(pdf), "--no-source", "x", "--title", "Mine",
-            "--author", "Roe, R")
-        (tmp_path / "reading.yaml").write_text(
-            "title: A reading list\ndescription: Papers to read first.\ntype: selection\n"
-            f"members:\n  - {{archive: {p}, id: one}}\n  - {{archive: {a}, id: mine}}\n")
-        run("--root", str(a), "collection", "sync", "reading-list", "--from", str(tmp_path / "reading.yaml"))
-        run("--root", str(a), "collect")
-        main = P.read_json(a / "ocfl" / "collection-main", P.load_inventory(a / "ocfl" / "collection-main"),
-                           "members.json")["members"]
-        assert [m["id"] for m in main] == ["mine"]
-        cfg = json.loads((a / "osheaf.json").read_text())
-        cfg["index"] = {"html": {"templates": "templates", "featured": "reading-list"}}
-        (a / "osheaf.json").write_text(json.dumps(cfg))
-        run("--root", str(a), "index")
-        home = (a / "index.html").read_text()
-        assert home.index("<h2>A reading list</h2>") < home.index("<h2>In this archive</h2>")
-        assert "Papers to read first." in home
-        reading = P.read_json(a / "ocfl" / "reading-list", P.load_inventory(a / "ocfl" / "reading-list"),
-                              "members.json")["members"]
-        for m in reading + main:
-            assert P.member_pins(m)[-1][1][:32] in home
-        assert P.verify_errors() == []
-        # a collection of the archive inside the featured one gets a landing page, which stays;
-        # it lists its members, linked, and a collection inside it gets a landing page too
-        (tmp_path / "sub2.yaml").write_text("title: Part two\ntype: catalogue\nmembers: []\n")
-        run("--root", str(a), "collection", "sync", "part-two", "--from", str(tmp_path / "sub2.yaml"))
-        (tmp_path / "sub.yaml").write_text(
-            "title: Part one\ndescription: The first part.\ntype: catalogue\n"
-            f"members:\n  - {{archive: {a}, id: mine}}\n  - {{archive: {p}, id: one}}\n"
-            f"  - {{archive: {a}, id: part-two}}\n")
-        run("--root", str(a), "collection", "sync", "part-one", "--from", str(tmp_path / "sub.yaml"))
-        (tmp_path / "reading.yaml").write_text(
-            "title: A reading list\ndescription: Papers to read first.\ntype: selection\n"
-            f"members:\n  - {{archive: {p}, id: one}}\n  - {{archive: {a}, id: mine}}\n"
-            f"  - {{archive: {a}, id: part-one}}\n")
-        run("--root", str(a), "collection", "sync", "reading-list", "--from", str(tmp_path / "reading.yaml"))
-        run("--root", str(a), "index")
-        run("--root", str(a), "index")
-        assert (a / "paper" / "part-one" / "index.html").exists()
-        assert (a / "paper" / "mine" / "index.html").exists()
-        part = (a / "paper" / "part-one" / "index.html").read_text()
-        assert "A catalogue curated by" in part and "3 members" in part and "The first part." in part
-        assert 'href="../../paper/mine/"' in part and 'href="../../paper/part-two/"' in part
-        assert ">One</a>" in part and "PDF</a>" not in part.split("<h2>Members</h2>")[0]
-        assert (a / "paper" / "part-two" / "index.html").exists()
-        assert P.verify_errors() == []
-        cfg["index"]["html"]["featured"] = "mine"
-        (a / "osheaf.json").write_text(json.dumps(cfg))
-        with pytest.raises(SystemExit):
-            run("--root", str(a), "index")
+        r = ["--root", str(root)]
+        paper = ["--pdf", str(pdf), "--no-source", "lost", "--title", "P", "--author", "Doe, Jane"]
+        run(*r, "deposit", "p", *paper, "--new")
+        install = P.install_version
+
+        def crash(*a, **k):
+            raise RuntimeError("the disk is full")
+        monkeypatch.setattr(P, "install_version", crash)
+        with pytest.raises(RuntimeError, match="the disk is full"):
+            run(*r, "zenodo", "p", "--production")
+        monkeypatch.setattr(P, "install_version", install)
+        obj_id = P.LABELS["p"]
+        assert json.loads((root / "zenodo-staging" / P.path_of(obj_id) / "state.json").read_text())["phase"] == "published"
+        with pytest.raises(SystemExit, match="completes it first"):
+            run(*r, "deposit", "p", *paper, "--changes", "x")
+        owner = obj_id.split(":")[2]
+        first = P.key_log(owner).latest().keys["keys"][0]
+        third = P.key_new(P.argparse_namespace(owner=None)).did
+        rk = rotation_files(tmp_path / "T-keys")
+        run(*r, "owner", "expose", first, "--add", third, "--rotation-key", rk[0], "--rotation-key", rk[1],
+            "--export", str(tmp_path / "T-keys-2"), "--no-passphrase", "--yes")
+        P.configure(root)
+        d = P.obj_dir(obj_id)
+        assert P.line_statuses(d, P.load_inventory(d))[1] == [sign.CONTESTED]
+        run(*r, "zenodo", "p", "--production")
+        P.configure(root)
+        inv = P.load_inventory(d)
+        assert inv["head"] == "v2" and P.line_statuses(d, inv)[1] == [sign.SIGNED, sign.SIGNED]
+        assert len(P.witnesses_of(d, "v2")) == 2
+        assert not (root / "zenodo-staging").exists()
+        assert P.read_json(d, inv, "datacite.json")["doi"].startswith("10.5281/zenodo.")

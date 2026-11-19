@@ -242,6 +242,53 @@ def test_selection_pins_revisions(tmp_path, capsys):
         run("--root", str(s), "collection", "add", "digest", uri(a, "paper"), "--revision", "9")
 
 
+def test_featured_collection_on_the_home_page(tmp_path):
+    p, a = make(tmp_path, "papers"), make(tmp_path, "author")
+    deposit(p, "one", "one", new=True)
+    deposit(a, "mine", "mine", new=True)
+    run("--root", str(a), "collect")
+    (tmp_path / "reading.yaml").write_text(
+        "title: A reading list\ndescription: Papers to read first.\ntype: selection\n"
+        f"members:\n  - '{uri(p, 'one')}'\n  - {{label: mine}}\n")
+    run("--root", str(a), "collection", "sync", "reading-list", "--from", str(tmp_path / "reading.yaml"))
+    main = members(a, "main")["members"]
+    assert [m["name"] for m in main] == [line(a, "mine").split(":")[1]]
+    cfg = json.loads((a / "osheaf.json").read_text())
+    cfg["index"] = {"html": {"templates": "templates", "featured": "reading-list"}}
+    (a / "osheaf.json").write_text(json.dumps(cfg))
+    run("--root", str(a), "index")
+    home = (a / "index.html").read_text()
+    assert home.index("<h2>A reading list</h2>") < home.index("<h2>In this archive</h2>")
+    assert "Papers to read first." in home
+    assert '<a class="paper-title" href="https://example.org/papers/paper/one/">One</a>' in home
+    assert "in <a href=\"https://example.org/papers/\">Papers</a>" in home
+    for m in members(a, "reading-list")["members"] + main:
+        assert P.member_pins(m)[-1][1][:32] in home
+    assert errors(a) == []
+    (tmp_path / "sub2.yaml").write_text("title: Part two\ntype: catalogue\nmembers: []\n")
+    run("--root", str(a), "collection", "sync", "part-two", "--from", str(tmp_path / "sub2.yaml"))
+    (tmp_path / "sub.yaml").write_text(
+        "title: Part one\ndescription: The first part.\ntype: catalogue\n"
+        f"members:\n  - {{label: mine}}\n  - '{uri(p, 'one')}'\n  - {{label: part-two}}\n")
+    run("--root", str(a), "collection", "sync", "part-one", "--from", str(tmp_path / "sub.yaml"))
+    (tmp_path / "reading.yaml").write_text(
+        "title: A reading list\ndescription: Papers to read first.\ntype: selection\n"
+        f"members:\n  - '{uri(p, 'one')}'\n  - {{label: mine}}\n  - {{label: part-one}}\n")
+    run("--root", str(a), "collection", "sync", "reading-list", "--from", str(tmp_path / "reading.yaml"))
+    run("--root", str(a), "index")
+    part = (a / "paper" / "part-one" / "index.html").read_text()
+    assert "A catalogue curated by" in part and "3 members" in part and "The first part." in part
+    assert 'href="../../paper/mine/"' in part and 'href="../../paper/part-two/"' in part
+    assert ">One</a>" in part and "PDF</a>" not in part.split("<h2>Members</h2>")[0]
+    assert line(a, "part-one") in part
+    assert (a / "paper" / "part-two" / "index.html").exists() and (a / "paper" / "mine" / "index.html").exists()
+    assert errors(a) == []
+    cfg["index"]["html"]["featured"] = "mine"
+    (a / "osheaf.json").write_text(json.dumps(cfg))
+    with pytest.raises(SystemExit, match="not a collection"):
+        run("--root", str(a), "index")
+
+
 def test_mirror(tmp_path):
     a, lib = make(tmp_path, "authors"), make(tmp_path, "library")
     deposit(a, "open", "one", new=True)
