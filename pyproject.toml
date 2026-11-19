@@ -21,6 +21,7 @@ dependencies = ["pyyaml>=6", "pynacl>=1.5"]
 
 [project.optional-dependencies]
 validate = ["jsonschema>=4", "rfc3986-validator>=0.1", "ocfl-py>=2.0"]
+keys = ["keyring>=24"]
 zenodo = ["keyring>=24"]
 test = ["pytest", "jsonschema>=4", "rfc3986-validator>=0.1", "ocfl-py>=2.0"]
 
@@ -31,7 +32,7 @@ opensheaf = "opensheaf.cli:main"
 [project.urls]
 Homepage = "https://opensheaf.org"
 Source = "https://github.com/opensheaf/opensheaf-py"
-Specification = "https://opensheaf.org/opensheaf-specification-0.1.html"
+Specification = "https://opensheaf.org/opensheaf-specification-0.2.html"
 
 [tool.setuptools.package-data]
 opensheaf = ["schemas/*.json", "templates/*"]
