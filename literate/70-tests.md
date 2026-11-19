@@ -19,9 +19,10 @@ chain of section 4.3, and the signatures of section 7. The second kind runs
 archive and its owner, the deposits, files of options, the changes of keys.
 A few tests in between check small functions on their own.
 
-The tests of the commands not yet ported to specification 0.2 (the
-website, and the work across archives: collections, mirrors, accepted
-copies) are kept, skipped, for phases b and c of the port.
+The tests of the website, not yet ported to specification 0.2, are kept,
+skipped, for phase c of the port. The work across archives (resolution,
+collections, mirrors, branches, drafts, takedowns, indexes) has its
+[own tests](72-tests-across.md).
 
 All the tests are in one file, `tests/test_core.py`, in this order.
 
@@ -72,8 +73,6 @@ All the tests are in one file, `tests/test_core.py`, in this order.
 
     <<test: the website, not yet ported>>
 
-
-    <<test: collections, mirrors and accepted copies>>
 
 The tests use the core under the short name `P`, as the other modules of
 the package do, the arXiv module for its text functions, and the modules
@@ -442,9 +441,12 @@ catalogue, is reported as removed, a result, not as a missing object.
         (archive / "opensheaf.json").write_text(json.dumps(disc))
         shutil.rmtree(d)
         P.configure(archive)
+        P.write_indexes()          # the entries of paper-a stay, with the status removed
         found = P.verify_findings()
         assert [x for x in found if x["severity"] == "error"] == []
         assert any(x["severity"] == "result" and "removed: a tombstone" in x["message"] for x in found)
+        removed = [e for e in P.read_index("sha512") if e["id"] == obj_id]
+        assert removed and all(e["status"] == "removed" for e in removed)
 
 Formats are checked as assertions (section 14.2): a contact that is not a
 URI is an error. Without `jsonschema`, the schemas are not checked, and a
@@ -1417,8 +1419,7 @@ The commands not yet ported to specification 0.2 say so.
 
     # in test: verifying broken archives:
     def test_commands_not_yet_available(archive):
-        for argv in (["mirror", "https://example.org/", "x"], ["collection", "update"], ["zenodo", "x"],
-                     ["arxiv", "import", "downloads"], ["accept", "https://example.org/", "x", "--version", "v1"]):
+        for argv in (["zenodo", "x"], ["arxiv", "import", "downloads"]):
             with pytest.raises(SystemExit, match="not yet available for specification 0.2"):
                 run("--root", str(archive), *argv)
 
@@ -1435,7 +1436,7 @@ collection, links that file from the landing page, its tag for Google
 Scholar and the home page.
 
     # in test: the website, not yet ported:
-    @pytest.mark.skip(reason="phase b/c: not yet ported to specification 0.2")
+    @pytest.mark.skip(reason="phase c: the website is not yet ported to specification 0.2")
     def test_pdf_found_from_renditions(archive):
         put("paper-a", 1, {"main.tex": b"\\documentclass{article}", "article.pdf": b"%PDF article"},
             extra_obj={"renditions": [{"path": "article.pdf", "mediaType": "application/pdf"}]})
@@ -1463,7 +1464,7 @@ relation was recorded with one; and a change note says what it is
 (`changes: ...`, or `arXiv comments: ...` for a version from arXiv).
 
     # in test: the website, not yet ported:
-    @pytest.mark.skip(reason="phase b/c: not yet ported to specification 0.2")
+    @pytest.mark.skip(reason="phase c: the website is not yet ported to specification 0.2")
     def test_texmacs_index_with_landing_pages(tmp_path):
         """A TeXmacs index: index.tm with uniform entries, and the landing pages,
         from the archive's own template, and the sitemap of the website."""
@@ -1510,79 +1511,10 @@ relation was recorded with one; and a change note says what it is
                                "external": [{"role": "source", "service": "arXiv"}]}) == "arXiv comments: 61 pages"
         assert P.verify_errors() == []
 
-### Files of options
+A featured collection, on the home page of the website, also waits for
+phase c.
 
-Across archives
----------------
-
-The tests across archives wait for phase b of the port, skipped.
-
-The last tests use archives in neighbouring folders: one of authors, and
-others that collect, select, mirror or accept their documents. A local folder stands for the address of an archive, so no
-network is needed.
-
-### A curated collection
-
-Archive `papers` has two documents. Archive `reading` is created with a
-curated main collection and synchronised from a `collection.yaml` that
-lists `two` before `one`, the second with `follow: no`. The file has no
-`type`, as files written before the specification had kinds: the
-collection is a catalogue, and the tool says so. The members
-keep the curator's order (`manual`, section 10.2), record the identifier
-of their archive, and their pins are confirmed by `check_remote`, which
-reads the other archive as a verifier would (section 14). Then `two` gets
-a new version in its archive; `collection update` moves `two` to it and
-leaves `one`, which does not follow, at its version. Finally `two` is
-withdrawn: a catalogue follows the head whatever it holds
-(section 10.2), so `update` pins the withdrawal too, and the home page
-shows it.
-
-    # in test: collections, mirrors and accepted copies:
-    @pytest.mark.skip(reason="phase b/c: not yet ported to specification 0.2")
-    def test_curated_collection_across_archives(tmp_path, capsys):
-        a, c = tmp_path / "a", tmp_path / "c"
-        make_archive(a, "papers")
-        pdf = tmp_path / "p.pdf"
-        pdf.write_bytes(b"%PDF-1.4 p")
-        for i in ("one", "two"):
-            run("--root", str(a), "deposit", i, "--pdf", str(pdf), "--no-source", "x", "--title", i.title(),
-                "--author", "Doe, J", "--issued", "2020-01-01")
-        run("--root", str(a), "collect")
-        run("--root", str(a), "index")
-        make_archive(c, "reading", curated=True)
-        (tmp_path / "collection.yaml").write_text(
-            f"title: Reading\nmembers:\n  - {{archive: {a}, id: two}}\n  - {{archive: {a}, id: one, follow: no}}\n")
-        run("--root", str(c), "collection", "sync", "--from", str(tmp_path / "collection.yaml"))
-        assert "no type: a catalogue" in capsys.readouterr().out
-        members = P.read_json(c / "ocfl" / "collection-main", P.load_inventory(c / "ocfl" / "collection-main"),
-                              "members.json")
-        assert members["type"] == "catalogue"
-        assert [m["id"] for m in members["members"]] == ["two", "one"] and members["order"] == "manual"
-        assert members["members"][0]["archive"] == "tag:example.org,2026:papers"
-        run("--root", str(c), "index")
-        assert P.verify_errors() == []
-        from opensheaf import collections
-        assert collections.check_remote(members["members"]) == []
-        # a new version in the member archive: update follows "two" only
-        run("--root", str(a), "deposit", "two", "--pdf", str(pdf), "--no-source", "x", "--title", "Two",
-            "--author", "Doe, J", "--changes", "again")
-        run("--root", str(c), "collection", "update")
-        new = P.read_json(c / "ocfl" / "collection-main", P.load_inventory(c / "ocfl" / "collection-main"),
-                          "members.json")["members"]
-        assert new[0]["version"] == "v2" and new[1]["version"] == "v1"
-        assert collections.check_remote(new) == []
-        # a withdrawal is a new head, which the catalogue follows
-        run("--root", str(a), "withdraw", "two", "--reason", "a mistake")
-        run("--root", str(c), "collection", "update")
-        new = P.read_json(c / "ocfl" / "collection-main", P.load_inventory(c / "ocfl" / "collection-main"),
-                          "members.json")["members"]
-        assert new[0]["version"] == "v3"
-        assert new[0]["inventorySha512"] == P.digest(a / "ocfl" / "two" / "v3" / "inventory.json")
-        run("--root", str(c), "index")
-        assert P.verify_errors() == []
-        assert "Withdrawn in its archive" in (c / "index.html").read_text()
-
-### A featured collection
+#### A featured collection
 
 An author's archive `a` holds a paper of its own and a reading list, a
 selection with a paper of another archive and the author's own paper. The
@@ -1595,8 +1527,8 @@ show their pins, and the verifier, which checks the main collection's,
 is satisfied. A setting that names something other than a collection of
 the archive stops `osheaf index`.
 
-    # in test: collections, mirrors and accepted copies:
-    @pytest.mark.skip(reason="phase b/c: not yet ported to specification 0.2")
+    # in test: the website, not yet ported:
+    @pytest.mark.skip(reason="phase c: the website is not yet ported to specification 0.2")
     def test_featured_collection_on_the_home_page(tmp_path):
         a, p = tmp_path / "a", tmp_path / "p"
         make_archive(p, "papers")
@@ -1657,295 +1589,3 @@ the archive stops `osheaf index`.
         (a / "osheaf.json").write_text(json.dumps(cfg))
         with pytest.raises(SystemExit):
             run("--root", str(a), "index")
-
-### A selection
-
-A selection pins the revisions its curator vetted (section 10.2). Archive
-`papers` has a document in three versions, each with its own title, so
-that the version shown can be told. The selection, the main collection of
-archive `digest`, vets versions 1 and 2, given in the wrong order: the
-revisions are pinned in the order of the history, each by the object
-version holding it, and the version presented is the last, version 2,
-which the home page shows with the versions vetted and the pin of that
-revision. Then the authors add a notice about version 2 (a
-description-only version `v4`, which holds the current version 3) and a
-fourth version. Neither `sync` with the same file nor `update` changes the
-selection (section 10.2: tools never change revision sets on their own);
-`update` reports the versions not vetted. When the curator adds version
-3, it is pinned by the entry of the history, `v4`, and the earlier
-revisions keep their pins.
-
-    # in test: collections, mirrors and accepted copies:
-    @pytest.mark.skip(reason="phase b/c: not yet ported to specification 0.2")
-    def test_selection_pins_revisions(tmp_path, capsys):
-        from opensheaf import collections
-        a, s = tmp_path / "a", tmp_path / "s"
-        make_archive(a, "papers")
-        pdf = tmp_path / "p.pdf"
-        r = ["--root", str(a)]
-        for k in (1, 2, 3):
-            pdf.write_bytes(b"%PDF-1.4 version " + str(k).encode())
-            run(*r, "deposit", "paper", "--pdf", str(pdf), "--no-source", "x", "--title", f"Title {k}",
-                "--author", "Doe, J", "--issued", "2020-01-01")
-        run(*r, "collect")
-        run(*r, "index")
-        make_archive(s, "digest", curated=True)
-        spec = tmp_path / "digest.yaml"
-        spec.write_text(f"type: selection\ntitle: Digest\nmembers:\n  - {{archive: {a}, id: paper, revisions: [2, 1]}}\n")
-        run("--root", str(s), "collection", "sync", "--from", str(spec))
-        cdir = s / "ocfl" / "collection-main"
-        doc = P.read_json(cdir, P.load_inventory(cdir), "members.json")
-        m = doc["members"][0]
-        assert doc["type"] == "selection" and "version" not in m and "follow" not in m
-        pins = [(x["documentVersion"], x["version"], x["inventorySha512"]) for x in m["revisions"]]
-        assert pins == [(n, f"v{n}", P.digest(a / "ocfl" / "paper" / f"v{n}" / "inventory.json")) for n in (1, 2)]
-        run("--root", str(s), "index")
-        assert P.verify_errors() == []
-        home = (s / "index.html").read_text()
-        assert "Title 2" in home and "Title 3" not in home and "vetted: versions 1, 2" in home
-        assert m["revisions"][-1]["inventorySha512"][:32] in home
-        assert collections.check_remote(doc["members"]) == []
-        run(*r, "notice", "paper", "--about", "2", "--text", "A remark.")
-        pdf.write_bytes(b"%PDF-1.4 version 4")
-        run(*r, "deposit", "paper", "--pdf", str(pdf), "--no-source", "x", "--title", "Title 4", "--author", "Doe, J")
-        head = P.load_inventory(cdir)["head"]
-        run("--root", str(s), "collection", "sync", "--from", str(spec))
-        run("--root", str(s), "collection", "update")
-        assert "document version(s) 3, 4 not vetted" in capsys.readouterr().out
-        assert P.load_inventory(cdir)["head"] == head          # the selection is unchanged
-        # vetting version 3 is the curator's act: a new version of the selection
-        spec.write_text(f"type: selection\ntitle: Digest\nmembers:\n  - {{archive: {a}, id: paper, revisions: [1, 2, 3]}}\n")
-        run("--root", str(s), "collection", "sync", "--from", str(spec))
-        new = P.read_json(cdir, P.load_inventory(cdir), "members.json")["members"][0]["revisions"]
-        assert new[:2] == m["revisions"] and (new[2]["documentVersion"], new[2]["version"]) == (3, "v4")
-        with pytest.raises(SystemExit):        # a selection's member has no version
-            spec.write_text(f"type: selection\nmembers:\n  - {{archive: {a}, id: paper, version: v1}}\n")
-            run("--root", str(s), "collection", "sync", "--from", str(spec))
-
-### Mirrors
-
-Mirroring copies a whole object and is allowed only if every version may
-be redistributed (section 10.4). The authors' archive has `open`, two
-versions under CC BY (the second inherits the licence), and `closed`,
-with all rights reserved. A curated archive `journal` cannot mirror
-`closed`. Its collection lists both, `open` with `mirror: yes`: `open` is
-copied with every version and listed with the journal as a mirror, while
-`closed` is only referenced; the discovery document lists the copy with
-`mirrorOf`, the authors' archive (section 6.1). The authors then deposit
-a third version of `open`: `collection update` brings the mirror up to
-date before following the new head, so that the copy still holds the
-pinned version and the website reads it. When the authors' archive
-disappears (its folder is moved away), the remote check finds `closed` no
-longer, but still confirms `open` on the copy.
-
-    # in test: collections, mirrors and accepted copies:
-    @pytest.mark.skip(reason="phase b/c: not yet ported to specification 0.2")
-    def test_mirror(tmp_path):
-        """Open objects are mirrored (every version, checked), closed ones refused;
-        a collection checks a mirrored member on the copy when its archive is gone."""
-        a, j = tmp_path / "a", tmp_path / "j"
-        make_archive(a, "authors")
-        pdf = tmp_path / "p.pdf"
-        pdf.write_bytes(b"%PDF-1.4 p")
-        r = ["--root", str(a)]
-        run(*r, "deposit", "open", "--pdf", str(pdf), "--no-source", "x", "--title", "Open", "--author", "Doe, J",
-            "--rights", "cc-by-4.0")
-        run(*r, "deposit", "open", "--pdf", str(pdf), "--no-source", "x", "--title", "Open", "--author", "Doe, J",
-            "--changes", "v2")
-        run(*r, "deposit", "closed", "--pdf", str(pdf), "--no-source", "x", "--title", "Closed", "--author", "Doe, J")
-        run(*r, "collect")
-        run(*r, "index")
-        make_archive(j, "journal", curated=True)
-        with pytest.raises(SystemExit):
-            run("--root", str(j), "mirror", str(a), "closed")
-        (tmp_path / "issue.yaml").write_text(
-            f"title: Issue\nmembers:\n  - {{archive: {a}, id: open, mirror: yes}}\n  - {{archive: {a}, id: closed}}\n")
-        run("--root", str(j), "collection", "sync", "--from", str(tmp_path / "issue.yaml"))
-        run("--root", str(j), "index")
-        assert P.verify_errors() == []
-        assert (j / "ocfl" / "open" / "v2").exists() and not (j / "ocfl" / "closed").exists()
-        members = P.read_json(j / "ocfl" / "collection-main", P.load_inventory(j / "ocfl" / "collection-main"),
-                              "members.json")["members"]
-        assert members[0]["mirrors"] == ["https://example.org/journal/"] and "mirrors" not in members[1]
-        listed = {o["id"]: o for o in json.loads((j / "opensheaf.json").read_text())["objects"]}
-        assert listed["open"]["mirrorOf"] == "tag:example.org,2026:authors" and "mirrorOf" not in listed["collection-main"]
-        run(*r, "deposit", "open", "--pdf", str(pdf), "--no-source", "x", "--title", "Open", "--author", "Doe, J",
-            "--changes", "v3")
-        run("--root", str(j), "collection", "update")
-        run("--root", str(j), "index")
-        assert P.verify_errors() == []
-        assert (j / "ocfl" / "open" / "v3").exists()
-        members = P.read_json(j / "ocfl" / "collection-main", P.load_inventory(j / "ocfl" / "collection-main"),
-                              "members.json")["members"]
-        assert members[0]["version"] == "v3" and members[0]["mirrors"] == ["https://example.org/journal/"]
-        assert "PDF (mirrored here)" in (j / "index.html").read_text()
-        from opensheaf import collections
-        shutil.move(str(a), str(tmp_path / "gone"))
-        errors = collections.check_remote(members)
-        assert len(errors) == 1 and "closed" in errors[0]          # the mirrored member is checked on the copy
-
-A pin is also resolved at the mirrors that the discovery document of the
-member's archive lists (section 6.4), when the archive is reachable but
-the object is not. Archive `library` mirrors `open` of the authors, who
-list the library among their mirrors; a reading list in a third archive
-references `open` without mirrors. When the object is lost from the
-authors' storage root, the pin is confirmed on the library's copy.
-
-    # in test: collections, mirrors and accepted copies:
-    @pytest.mark.skip(reason="phase b/c: not yet ported to specification 0.2")
-    def test_check_remote_tries_the_archive_mirrors(tmp_path):
-        from opensheaf import collections
-        a, lib, c = tmp_path / "a", tmp_path / "lib", tmp_path / "c"
-        make_archive(a, "authors")
-        pdf = tmp_path / "p.pdf"
-        pdf.write_bytes(b"%PDF-1.4 p")
-        run("--root", str(a), "deposit", "open", "--pdf", str(pdf), "--no-source", "x", "--title", "Open",
-            "--author", "Doe, J", "--rights", "cc-by-4.0")
-        run("--root", str(a), "collect")
-        run("--root", str(a), "index")
-        make_archive(lib, "library")
-        run("--root", str(lib), "mirror", str(a), "open")
-        run("--root", str(lib), "index")
-        disc = json.loads((a / "opensheaf.json").read_text())
-        disc["mirrors"] = [collections.norm_url(str(lib))]
-        (a / "opensheaf.json").write_text(json.dumps(disc))
-        make_archive(c, "reading", curated=True)
-        (tmp_path / "c.yaml").write_text(f"type: catalogue\nmembers:\n  - {{archive: {a}, id: open}}\n")
-        run("--root", str(c), "collection", "sync", "--from", str(tmp_path / "c.yaml"))
-        members = P.read_json(c / "ocfl" / "collection-main", P.load_inventory(c / "ocfl" / "collection-main"),
-                              "members.json")["members"]
-        assert "mirrors" not in members[0]
-        shutil.move(str(a / "ocfl" / "open"), str(tmp_path / "lost"))
-        assert collections.check_remote(members) == []
-        shutil.move(str(lib), str(tmp_path / "lib-gone"))
-        assert len(collections.check_remote(members)) == 1
-
-### Accepted copies
-
-A journal accepts one version of a paper (section 10.5). The authors
-deposit the paper twice, the first time with all rights reserved and the
-second under CC BY. Accepting the first is refused, since only an open
-licence allows the copy; accepting the second, as version of record with
-the journal's terms as agreement, makes the journal's document. When the
-authors deposit a third version, the journal's copy does not change: it
-has still one object version, whose PDF is byte for byte the accepted
-one, and whose `object.json` records its source as `paper v2`, pinned by
-the SHA-512 of that version's inventory. A correction is the journal's
-decision: accepting the authors' `v3` makes the journal's document version
-2. (`--licence-checked` is given there, though `v3` has inherited the open
-licence of `v2`.) The journal's issue is a selection of its own document
-(section 10.5), vetting the accepted version 1 and, once the editors add
-it, the correction; the remote check compares the copy with its source.
-
-    # in test: collections, mirrors and accepted copies:
-    @pytest.mark.skip(reason="phase b/c: not yet ported to specification 0.2")
-    def test_accept_vetted_version(tmp_path):
-        """A journal accepts one version (byte for byte, with its source and pin);
-        the authors' later versions change nothing; a correction is the journal's
-        new document version."""
-        a, j = tmp_path / "a", tmp_path / "j"
-        make_archive(a, "authors")
-        pdfs = []
-        for k in range(3):
-            f = tmp_path / f"p{k}.pdf"
-            f.write_bytes(b"%PDF-1.4 version " + str(k).encode())
-            pdfs.append(f)
-        src = tmp_path / "p.tex"
-        src.write_text("\\documentclass{article}")
-        r = ["--root", str(a)]
-        run(*r, "deposit", "paper", str(src), "--pdf", str(pdfs[0]), "--title", "P", "--author", "Doe, J")
-        run(*r, "deposit", "paper", str(src), "--pdf", str(pdfs[1]), "--title", "P", "--author", "Doe, J",
-            "--rights", "cc-by-4.0")
-        make_archive(j, "journal")
-        with pytest.raises(SystemExit):                       # v1 is not openly licensed
-            run("--root", str(j), "accept", str(a), "paper", "--version", "v1")
-        run("--root", str(j), "accept", str(a), "paper", "--version", "v2", "--stage", "VoR",
-            "--agreement", "the journal's terms")
-        run(*r, "deposit", "paper", str(src), "--pdf", str(pdfs[2]), "--title", "P", "--author", "Doe, J")
-        d = j / "ocfl" / "paper"
-        inv = P.load_inventory(d)
-        assert list(inv["versions"]) == ["v1"]                # the authors' v3 changes nothing here
-        pdf_here = (d / P.content_path(inv, "v1", "paper.pdf")).read_bytes()
-        assert pdf_here == pdfs[1].read_bytes()
-        obj = P.read_json(d, inv, P.OBJ)
-        ext = obj["external"][0]
-        assert ext["role"] == "source" and ext["label"] == "paper v2"
-        assert ext["files"][0]["sha512"] == P.digest(a / "ocfl" / "paper" / "v2" / "inventory.json")
-        issue = tmp_path / "issue.yaml"
-        issue.write_text("id: issue-1\ntype: selection\ntitle: Issue 1\nmembers:\n  - {archive: ., id: paper}\n")
-        run("--root", str(j), "collection", "sync", "--from", str(issue))
-        run("--root", str(j), "accept", str(a), "paper", "--version", "v3", "--licence-checked",
-            "--changes", "Corrected by the editors.")
-        inv = P.load_inventory(d)
-        assert P.read_json(d, inv, P.OBJ)["documentVersion"] == 2
-        issue.write_text("id: issue-1\ntype: selection\ntitle: Issue 1\nmembers:\n"
-                         "  - {archive: ., id: paper, revisions: [1, 2]}\n")
-        run("--root", str(j), "collection", "sync", "--from", str(issue))
-        idir = j / "ocfl" / "issue-1"
-        revs = P.read_json(idir, P.load_inventory(idir), "members.json")["members"][0]["revisions"]
-        assert [(x["documentVersion"], x["version"]) for x in revs] == [(1, "v1"), (2, "v2")]
-        assert revs[0]["inventorySha512"] == P.digest(d / "v1" / "inventory.json")
-        run("--root", str(j), "collect")
-        run("--root", str(j), "index")
-        assert P.verify_errors() == []
-        from opensheaf import collections
-        assert collections.check_accepted_copies() == []
-
-An accepted copy holds exactly the files of the vetted version
-(section 10.5), the files of its notices included, and names the source
-at the storage root that the source's discovery document states. Here
-the vetted version `v2` is a description-only version with a notice in a
-file, and the authors' archive keeps its storage root in `store/`
-instead of `ocfl/`.
-
-    # in test: collections, mirrors and accepted copies:
-    @pytest.mark.skip(reason="phase b/c: not yet ported to specification 0.2")
-    def test_accept_keeps_notice_files_and_storage_root(tmp_path):
-        from opensheaf import collections
-        a, j = tmp_path / "a", tmp_path / "j"
-        make_archive(a, "authors")
-        pdf, src, note = tmp_path / "p.pdf", tmp_path / "p.tex", tmp_path / "erratum.md"
-        pdf.write_bytes(b"%PDF-1.4 p")
-        src.write_text("\\documentclass{article}")
-        note.write_text("Theorem 2 is wrong.")
-        r = ["--root", str(a)]
-        run(*r, "deposit", "paper", str(src), "--pdf", str(pdf), "--title", "P", "--author", "Doe, J",
-            "--rights", "cc-by-4.0")
-        run(*r, "notice", "paper", "--about", "1", "--text", "Theorem 2 is wrong.", "--file", str(note))
-        run(*r, "collect")
-        run(*r, "index")
-        (a / "ocfl").rename(a / "store")
-        disc = json.loads((a / "opensheaf.json").read_text())
-        disc["storageRoot"] = "store/"
-        (a / "opensheaf.json").write_text(json.dumps(disc))
-        make_archive(j, "journal")
-        run("--root", str(j), "accept", str(a), "paper", "--version", "v2")
-        d = j / "ocfl" / "paper"
-        inv = P.load_inventory(d)
-        assert "notices/erratum.md" in {p for ps in inv["versions"]["v1"]["state"].values() for p in ps}
-        source = collections.norm_url(str(a)) + "store/paper/v2/"
-        assert P.read_json(d, inv, P.OBJ)["external"][0]["record"] == source
-        rel = P.read_json(d, inv, "datacite.json")["relatedIdentifiers"]
-        assert {"relatedIdentifier": source, "relatedIdentifierType": "URL", "relationType": "IsIdenticalTo"} in rel
-        run("--root", str(j), "collect")
-        run("--root", str(j), "index")
-        assert P.verify_errors() == []
-
-The record of an accepted copy names the source version, and the
-inventory it pins may lack that version (a record written by hand, or one
-that names the wrong version). That is reported as an error of the copy.
-Here the copy is written directly, with a source in a folder whose
-inventory matches the pin but records only `v1`.
-
-    # in test: collections, mirrors and accepted copies:
-    @pytest.mark.skip(reason="phase b/c: not yet ported to specification 0.2")
-    def test_accepted_copy_of_a_version_the_source_lacks(archive, tmp_path):
-        from opensheaf import collections
-        src = tmp_path / "authors" / "ocfl" / "paper" / "v2"
-        src.mkdir(parents=True)
-        (src / "inventory.json").write_text(json.dumps({"id": "paper", "head": "v1",
-                                                        "versions": {"v1": {"state": {}}}}))
-        ext = {"role": "source", "service": "OpenSheaf", "label": "paper v2", "record": src.as_uri() + "/",
-               "files": [{"name": "inventory.json", "sha512": P.digest(src / "inventory.json")}]}
-        put("paper", 1, FILES1, extra_obj={"external": [ext]})
-        assert collections.check_accepted_copies() == ["paper: accepted copy: the source paper v2 has no version v2"]
