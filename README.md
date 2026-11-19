@@ -23,15 +23,11 @@ DataCite metadata), checkable by anyone and combinable into collections. This
 is the reference implementation of the
 [specification](https://github.com/opensheaf/opensheaf.github.io), version 0.2 (draft).
 
-On this branch the tools are being ported to version 0.2 (owners, key logs,
-signatures, names from genesis records, the owner-name layout). Done: `init`
-(with a new or an existing owner), `owner` and `key`, `deposit` (`--new`
-seals a new work), the description-only versions, `collect`, the discovery
-document with the indexes, `verify`; and the work across archives:
-`resolve`, `collection`, `mirror`, `branch` and `accept`, `owner pull`,
-`sign`, `draft` and `seal`, `takedown`. Not yet: the website, arXiv import
-and Zenodo, which stop with a message saying so; the sections on them still
-describe version 0.1.
+The tools follow version 0.2: works are *lines* named by `sheaf:` URIs,
+digests of genesis records; every version of a line is signed by its
+*owner*, a keyed identity with a key log of current and rotation keys; the
+storage root is in the owner-name layout (`<owner>/<name>/`). Archives of
+version 0.1 are not read: `osheaf verify` says "specification 0.1: rebuild".
 
 The package is `opensheaf`; its command is `osheaf` (also installed as
 `opensheaf`).
@@ -49,6 +45,86 @@ their formats, URIs included) and the storage root with an independent OCFL
 validator; without the first two, it says which schema checks it skipped.
 Depositing TeXmacs documents needs [GNU TeXmacs](https://www.texmacs.org) (`TEXMACS_BIN`, by default the macOS
 application).
+
+## A walk through
+
+An archive, from its creation to a DOI. The owner is made with the archive:
+a current key for this device, kept in the system's credential store, and
+three rotation keys (two of which sign a change of keys), exported once,
+encrypted under a passphrase, to a folder outside the archive (here a USB
+stick), with a printed sheet (section 6.2). Keep them apart from the
+device.
+
+```
+osheaf init my-papers --name "Papers of Jane Doe" --base-url https://example.org/papers/ \
+  --curator "Doe, Jane" --new-owner --export /Volumes/USB/opensheaf-keys --print
+cd my-papers
+```
+
+A new work is sealed by `--new` with a label of your choice, which names its
+line in this archive and its landing page, `paper/<label>/`; its permanent
+name is its `sheaf:` URI, printed by the deposit. Each version is signed
+with the current key, and records the digest of the version before.
+
+```
+osheaf deposit kpz-uniqueness paper.tex --pdf paper.pdf --new \
+  --title "Energy solutions of KPZ are unique" --author "Doe, Jane|Example University" \
+  --abstract-file abstract.txt --rights cc-by-4.0 --available 2015-08-31
+osheaf deposit kpz-uniqueness paper.tex --pdf paper.pdf --changes "Typos corrected." \
+  --title "Energy solutions of KPZ are unique" --author "Doe, Jane|Example University"
+osheaf notice kpz-uniqueness --about 1 --text "Lemma 2 is wrong as stated; see version 2."
+osheaf collect          # a new version of the main catalogue, pinning the latest signed versions
+osheaf index            # opensheaf.json, the indexes, the website
+osheaf verify
+```
+
+The website (appendix A.3) is written again after every command that
+changes the archive; `osheaf index` writes everything. Collections gather
+lines of any archive, pinned, by their `sheaf:` URIs:
+
+```
+osheaf collection new reading --type selection --title "Reading list"
+osheaf collection add reading "sheaf:<name>:<owner>/v2?at=https%3A%2F%2Fother.example%2F" --revision 2
+osheaf collection update            # followed members of catalogues move to their latest signed version
+```
+
+Feature it on the home page with `"index": {"html": {"templates":
+"templates", "featured": "reading"}}` in `osheaf.json`. Papers already on
+arXiv are imported, one signed line per paper, labelled as
+`identifiers.json` says:
+
+```
+osheaf arxiv fetch downloads --author doe_j_1
+echo '{"1508.07764": "kpz-uniqueness"}' > downloads/identifiers.json
+osheaf arxiv import downloads --agreement "deposited by an author"
+```
+
+A DOI for the current version comes from Zenodo (appendix A.1): first on the
+sandbox, which works on a copy and leaves the archive unchanged, then for
+real; the version recording the DOI is built and signed before the upload,
+and added once Zenodo has published it.
+
+```
+osheaf zenodo kpz-uniqueness                 # the sandbox
+osheaf zenodo kpz-uniqueness --production
+```
+
+When a device is lost, or a key may have leaked, the owner exposes it and
+adds a new one, signed by two rotation keys; what the exposed key alone
+signed is contested, and the owner signs it again (section 6.3):
+
+```
+osheaf key new                                         # on the new device: prints its did:key
+osheaf owner expose did:key:OLD --add did:key:NEW \
+  --rotation-key /Volumes/USB/opensheaf-keys/rotation-...-1.txt \
+  --rotation-key /Volumes/USB/opensheaf-keys/rotation-...-2.txt --export /Volumes/USB/new-keys
+osheaf sign kpz-uniqueness --version v3
+```
+
+In continuous integration (the archive template on GitHub), a dedicated
+current key of the owner, added with `osheaf owner rotate --add`, is given
+in the secret `OPENSHEAF_SIGNING_KEY` (the base64 seed), and the commands
+sign with it.
 
 ## An archive
 
@@ -73,30 +149,39 @@ or from `--root`. They maintain:
 - `opensheaf.json`: the discovery document, with the labels of the lines,
   the drafts and the tombstones of objects taken down;
 - `names/`, `owners/`, `sha512/`: the indexes (section 12.5);
-- the website (appendix C): `index.html`, a landing page `paper/<id>/` per
-  document (current version, every version in the order of the history,
-  notices, files, DOI, the `citation_*` tags read by Google Scholar, JSON-LD,
-  Signposting links) and `sitemap.xml`, from the templates in `templates/`
-  (`{{name}}` placeholders; MathJax renders `$...$`);
-- or, with the TeXmacs profile, `site/<id>/` (HTML versions of TeXmacs
+- the website (the profile `website`, appendix A.3): `index.html`, presenting
+  the latest signed version of the main catalogue with the pin of every
+  member (and a featured collection first, if one is set); a landing page
+  `paper/<label>/` per line held (its full `sheaf:` URI and a short form, its
+  owner, the current version, every signed document version in the order of
+  the history with its status, contested ones marked, notices, files, pins,
+  DOI, the withdrawal if any, the `citation_*` tags read by Google Scholar,
+  JSON-LD, Signposting links); a page `owner/<owner>/` per owner, summarising
+  its key log (current keys, rotations, exposed keys, an end, a successor,
+  the keeper); and `sitemap.xml`; from the templates in `templates/`
+  (`{{name}}` placeholders; MathJax renders `$...$`), copied there by `init`;
+- or, with a TeXmacs index, `site/<label>/` (HTML versions of TeXmacs
   documents) and an index made from a TeXmacs template, with the same
-  landing pages `paper/<id>/` and `sitemap.xml` as the website (from the
+  landing pages, owner pages and `sitemap.xml` as the website (from the
   archive's own `templates/paper.html`, if it has one).
 
 ## Commands
 
 ```
 osheaf init FOLDER --name NAME --base-url URL --curator "Family, Given" --new-owner --export DIR
-osheaf deposit ID SOURCE --pdf PAPER.pdf --title T --author "Family, Given|Affiliation" ...
-osheaf deposit ID SOURCE.tm --title T --author ...           (TeXmacs: typeset by the archive)
-osheaf deposit ID --pdf PAPER.pdf --no-source REASON ...
+osheaf init FOLDER ... --owner OWNER --key-log DIR             (an existing owner)
+osheaf owner init|rotate|expose|end|show ; owner pull URL|PATH ; key new
+osheaf deposit LABEL SOURCE --pdf PAPER.pdf --title T --author "Family, Given|Affiliation" --new ...
+osheaf deposit LABEL SOURCE --pdf PAPER.pdf ...               (a new version of the line LABEL)
+osheaf deposit LABEL SOURCE.tm --title T --author ...         (TeXmacs: typeset by the archive)
+osheaf deposit LABEL --pdf PAPER.pdf --no-source REASON ...
 osheaf deposit ... --stage VoR --agreement "the journal's publication terms"
-osheaf notice ID --about N --text "..." [--file erratum.pdf]
-osheaf withdraw ID --reason "..."
-osheaf complete ID --version N --source paper.tex [--extra-source ...]
-osheaf relicense ID --rights cc-by-4.0 --method "..."
-osheaf relate ID --to arxiv:ID|doi:DOI [--relation IsIdenticalTo]
-osheaf describe ID [--title T] [--abstract TEXT | --abstract-file F] [--keyword K ...] [--author A ...]
+osheaf notice LABEL --about N --text "..." [--file erratum.pdf]
+osheaf withdraw LABEL --reason "..."
+osheaf complete LABEL --version N --source paper.tex [--extra-source ...]
+osheaf relicense LABEL --rights cc-by-4.0 --method "..."
+osheaf relate LABEL --to arxiv:ID|doi:DOI [--relation IsIdenticalTo]
+osheaf describe LABEL [--title T] [--abstract TEXT | --abstract-file F] [--keyword K ...] [--author A ...]
 osheaf collect
 osheaf resolve URI [--at URL]... [--json]
 osheaf collection new LABEL --type catalogue|selection --title T [--description D] [--order manual]
@@ -113,9 +198,9 @@ osheaf seal ID --label L [--delete-draft]
 osheaf takedown LABEL --reason TEXT [--by-law | --keeper]
 osheaf index
 osheaf verify [--remote]
-osheaf zenodo ID [--production]
+osheaf zenodo LABEL [--production]
 osheaf arxiv fetch DOWNLOADS --author AUTHOR-ID | ARXIV-ID ...
-osheaf arxiv import DOWNLOADS [ARXIV-ID ...] [--update] [--versions v1,v3]
+osheaf arxiv import DOWNLOADS [ARXIV-ID ...] [--update] [--versions v1,v3] [--agreement METHOD]
 ```
 
 - **deposit** a document, or a new document version of it: any source (LaTeX,
@@ -152,7 +237,8 @@ osheaf arxiv import DOWNLOADS [ARXIV-ID ...] [--update] [--versions v1,v3]
   ```
 - **notice**, **withdraw**: later statements about a version (an erratum, by
   a description-only version; notices stay in every later version) and the
-  withdrawal of a document (the content stays; no new versions).
+  withdrawal of a line (the content stays; no new versions; every page
+  showing it shows the withdrawal, section 13.1).
 - **complete**: adds the sources of a version deposited without them
   (`--no-source`); its number stays.
 - **resolve**: finds and checks what a `sheaf:` URI names (section 12.3):
@@ -245,30 +331,43 @@ osheaf arxiv import DOWNLOADS [ARXIV-ID ...] [--update] [--versions v1,v3]
   `issued-desc`, pin the latest signed version of their line and follow it.
 - **index**: the discovery document, the indexes `names/`, `owners/` and
   `sha512/` (also written by every command that changes an object), and
-  the readable index (not yet for 0.2): the website, or
-  the TeXmacs index (`index.tm`, exported to `index.html`) with the landing
-  pages and the sitemap of the website. No `robots.txt` is written: an archive
-  in a folder of a larger site adds `Sitemap: <baseUrl>sitemap.xml` to the
-  site's own.
+  the readable index: the website, or the TeXmacs index (`index.tm`,
+  exported to `index.html`) with the landing pages, owner pages and sitemap
+  of the website. The website is also written again after every command that
+  changes the archive (with a TeXmacs index, all but `index.tm`). No
+  `robots.txt` is written: an archive in a folder of a larger site adds
+  `Sitemap: <baseUrl>sitemap.xml` to the site's own.
 - **verify**: the checks of section 14 of the specification (the layout,
   inventories and digests, key logs, names and signatures, `object.json`
   and `datacite.json`, numbering of document versions, history and notices,
   branch points, collections and their pins, the discovery document,
-  tombstones and indexes; with `--remote`, the members of collections held
-  in other archives, resolved, with their statuses).
-- **zenodo**: the Zenodo binding (appendix A): deposits the current document
-  version (on the sandbox, on a copy of the object, unless `--production`).
-  Tokens are read from `ZENODO_TOKEN` / `ZENODO_SANDBOX_TOKEN`, or from the
-  system's credential store under `zenodo-token` / `zenodo-sandbox-token`
-  (through keyring, `pip install 'opensheaf[zenodo]'`; on macOS also the
-  keychain directly).
+  tombstones and indexes, and, under the profile website, that the home page
+  shows the pin of every member of the main catalogue and each landing page
+  the `sheaf:` URI of its line; with `--remote`, the members of collections
+  held in other archives, resolved, with their statuses).
+- **zenodo**: the Zenodo binding (appendix A.1): deposits the current
+  document version of a line, signed (on the sandbox, on a copy of the line
+  and of its owner's key log, unless `--production`). The version recording
+  the DOI (in `datacite.json`, and in `external` of `object.json`) is built
+  and signed in `zenodo-staging/<owner>/<name>/` before the upload, the
+  uploads are compared with the MD5 of its inventory, and it is added once
+  Zenodo has published; an interrupted deposit locks the line until the
+  next run adds the version, signing it again if a key that signed it was
+  exposed meanwhile. Branches are not deposited yet. Tokens are read from
+  `ZENODO_TOKEN` / `ZENODO_SANDBOX_TOKEN`, or from the system's credential
+  store under `zenodo-token` / `zenodo-sandbox-token` (through keyring,
+  `pip install 'opensheaf[zenodo]'`; on macOS also the keychain directly).
 - **arxiv fetch / import**: download papers from arXiv (every version, with
   each version's licence and comments; one request every 3 seconds) and
-  import them, one document version per arXiv version, with arXiv's files
-  byte for byte. Object identifiers come from `identifiers.json` in the
-  downloads folder, chosen by the depositor. The tools only append versions:
-  a version that is not on arXiv is placed by importing up to the arXiv
-  version before it, depositing it, and continuing with `--update`.
+  import them: one line of the archive's owner per paper, sealed at its
+  first import, one signed object version per arXiv version, with arXiv's
+  files byte for byte. Labels come from `identifiers.json` in the downloads
+  folder (arXiv identifier to label), chosen by the depositor; a paper is
+  found in the archive by its label or by an arXiv relation or record.
+  `--agreement` and `--agreed-by` record on what grounds it is deposited.
+  The tools only append versions: a version that is not on arXiv is placed
+  by importing up to the arXiv version before it, depositing it, and
+  continuing with `--update`.
 
 ## A literate program
 

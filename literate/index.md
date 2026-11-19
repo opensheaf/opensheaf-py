@@ -95,8 +95,10 @@ Across archives
 The website
 -----------
 
-21. [The website](30-website.md): the home page, and the landing pages
-    and sitemap, also written beside a TeXmacs index.
+21. [The website](30-website.md): the home page, the landing pages of
+    the lines, with their `sheaf:` URIs, owners and signed versions, the
+    pages of the owners and the sitemap, also written beside a TeXmacs
+    index.
 22. [The templates of the website](31-templates.md).
 
 Services
@@ -104,8 +106,9 @@ Services
 
 23. [Importing from arXiv: fetching](40-arxiv.md).
 24. [Importing from arXiv: the metadata](41-arxiv-metadata.md).
-25. [Importing from arXiv: the object versions](42-arxiv-import.md).
-26. [Zenodo: DOIs for document versions](50-zenodo.md).
+25. [Importing from arXiv: the signed versions](42-arxiv-import.md).
+26. [Zenodo: DOIs for document versions](50-zenodo.md), built and signed
+    before the upload.
 
 The command line and the tests
 ------------------------------
