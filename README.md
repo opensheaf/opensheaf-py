@@ -7,7 +7,7 @@
 [![licence: GPL v3+](https://img.shields.io/badge/licence-GPL--3.0--or--later-blue)](LICENSE)
 
 > [!WARNING]
-> **Draft.** OpenSheaf 0.1 is a draft specification. Until version 1.0, any
+> **Draft.** OpenSheaf 0.2 is a draft specification. Until version 1.0, any
 > revision may change the format in incompatible ways. Archives and collections made now
 > may have to be rebuilt or migrated, and the tools follow the latest draft.
 > Do not rely on it yet for anything you cannot redo.
@@ -21,7 +21,15 @@ Python tools for [OpenSheaf](https://opensheaf.org) archives: archives of
 scholarly documents kept as plain files (an OCFL 1.1 storage root with
 DataCite metadata), checkable by anyone and combinable into collections. This
 is the reference implementation of the
-[specification](https://github.com/opensheaf/opensheaf.github.io), version 0.1 (draft).
+[specification](https://github.com/opensheaf/opensheaf.github.io), version 0.2 (draft).
+
+On this branch the tools are being ported to version 0.2 (owners, key logs,
+signatures, names from genesis records, the owner-name layout). Done: `init`
+(with a new or an existing owner), `owner` and `key`, `deposit` (`--new`
+seals a new work), the description-only versions, `collect`, the discovery
+document and `verify`. Not yet: the website, collections across archives,
+mirrors, accepted copies, arXiv import and Zenodo, which stop with a message
+saying so. The sections below still describe version 0.1 in part.
 
 The package is `opensheaf`; its command is `osheaf` (also installed as
 `opensheaf`).
@@ -47,8 +55,8 @@ The quickest start is the template
 a ready website, published with GitHub Pages. Or create one anywhere:
 
 ```
-osheaf init my-papers --archive-id tag:example.org,2026:my-papers \
-  --name "Papers of Jane Doe" --base-url https://example.org/papers/ --curator "Doe, Jane"
+osheaf init my-papers --name "Papers of Jane Doe" --base-url https://example.org/papers/ \
+  --curator "Doe, Jane" --new-owner --export /Volumes/USB/opensheaf-keys --print
 ```
 
 An archive is a folder with a configuration file `osheaf.json` (identifier,
@@ -72,7 +80,7 @@ or from `--root`. They maintain:
 ## Commands
 
 ```
-osheaf init FOLDER --archive-id URI --name NAME --base-url URL --curator "Family, Given"
+osheaf init FOLDER --name NAME --base-url URL --curator "Family, Given" --new-owner --export DIR
 osheaf deposit ID SOURCE --pdf PAPER.pdf --title T --author "Family, Given|Affiliation" ...
 osheaf deposit ID SOURCE.tm --title T --author ...           (TeXmacs: typeset by the archive)
 osheaf deposit ID --pdf PAPER.pdf --no-source REASON ...
