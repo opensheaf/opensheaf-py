@@ -1134,6 +1134,12 @@ def test_texmacs_index_with_landing_pages(tmp_path):
     assert P.changes_note({"changes": {"text": "61 pages"},
                            "external": [{"role": "source", "service": "arXiv"}]}) == "arXiv comments: 61 pages"
     assert P.verify_errors() == []
+    assert not [x for x in P.verify_findings() if x["place"].startswith(("paper/", "index.html"))]
+    (root / "paper" / "p" / "index.html").write_text(page.replace(P.LABELS["p"], "a line"))
+    found = P.verify_findings()
+    assert [x for x in found if x["severity"] == "error"] == []
+    assert {"severity": "warning", "place": "paper/p/index.html", "message": f"no landing page giving the "
+            f"sheaf: URI of p (appendix A.3) (the archive does not declare the profile website)"} in found
 
 
 def arxiv_downloads(folder, aid="2611.00001", label="first-paper"):

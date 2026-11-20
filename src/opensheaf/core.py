@@ -2564,24 +2564,27 @@ def check_archive(f, found, statuses, disc):
 def check_presentation(f, disc):
     """Appendix A.3: the home page shows the pin of every member of the latest signed
     version of the main catalogue, and each member held here has a landing page giving the
-    full sheaf: URI of its line."""
-    website = "website" in (disc.get("profiles") or [])
+    full sheaf: URI of its line; errors under the profile website, warnings for an archive
+    that presents pages without declaring it."""
+    profiles = disc.get("profiles") or []
+    website = "website" in profiles
     home = ROOT / "index.html"
-    if not website and not home.exists():
+    landing_pages = ("texmacs" in profiles or bool(INDEX.get("html") or INDEX.get("template"))
+                     or (ROOT / "paper").is_dir())
+    if not (website or home.exists() or landing_pages):
         return
     report = f.error if website else f.warning
     note = "" if website else " (the archive does not declare the profile website)"
     members = main_members() or []
-    if not home.exists():
-        report("index.html", "the home page is missing (appendix A.3)" + note)
-        return
-    page = home.read_text(encoding="utf-8", errors="replace")
+    page = home.read_text(encoding="utf-8", errors="replace") if home.exists() else None
+    if page is None and website:
+        report("index.html", "the home page is missing (appendix A.3)")
     gone = {t.get("id") for t in TOMBSTONES}
     for m in members:
         if f"sheaf:{m.get('name')}:{m.get('owner')}" in gone:
             continue
         pin = (member_pins(m)[-1][1] or "")
-        if pin[:32] not in page:
+        if page is not None and pin[:32] not in page:
             report("index.html", f"does not show the pin of {m.get('name')}" + note)
         try:
             obj_id = names.object_id(m.get("name"), m.get("owner"))
