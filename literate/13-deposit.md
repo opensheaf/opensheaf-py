@@ -296,7 +296,8 @@ not listed among the labels.
         if not LABEL_RE.match(label) or len(label) > 64:
             sys.exit("a label must match ^[a-z0-9]+(-[a-z0-9]+)*$ and have at most 64 characters")
         if len(label) > 32:
-            print(f"warning: {label} is longer than 32 characters (it appears in every URL of the website)")
+            print(f"warning: {label} is longer than 32 characters (it appears in every URL of the website)",
+                  file=sys.stderr)
         owner = getattr(args, "owner", None) or ARCHIVE["owner"]
         if owner not in archive_owners():
             sys.exit(f"{owner} is not an owner this archive hosts")

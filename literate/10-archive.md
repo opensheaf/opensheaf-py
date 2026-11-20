@@ -1004,4 +1004,5 @@ know what they are.
         if not acknowledged:
             sys.exit(f"{obj_id}: the new version would extend versions that are not signed, or are "
                      f"contested (section 7.3):\n{lines}\nlook at them; give --i-know to extend them anyway")
-        print(f"warning: {obj_id}: extending versions that are not signed, or are contested:\n{lines}")
+        print(f"warning: {obj_id}: extending versions that are not signed, or are contested:\n{lines}",
+              file=sys.stderr)

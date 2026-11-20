@@ -324,7 +324,8 @@ version (its owner's keys all exposed since) presents nothing, and says so.
             return None
         ver = latest_signed(d, inv)
         if ver is None:
-            print(f"warning: the main catalogue has no signed version (section 7.3): nothing is presented")
+            print(f"warning: the main catalogue has no signed version (section 7.3): nothing is presented",
+                  file=sys.stderr)
             return None
         return read_json(d, inv, "members.json", ver)["members"]
 
@@ -367,7 +368,7 @@ out of `index.tm`, with a warning.
         here = [m for m in members if html.held(m)]
         if len(here) < len(members):
             print(f"warning: {len(members) - len(here)} member(s) held in other archives are left out of index.tm "
-                  "(the website shows them)")
+                  "(the website shows them)", file=sys.stderr)
         entries = "\n\n".join(index_entry(m) for m in here)
         with open(ROOT / "index.tm", "w", encoding="latin-1", newline="") as f:
             f.write(template.replace(line, entries + "\n"))
@@ -404,7 +405,7 @@ reported, and `osheaf index` writes the pages again.
             else:
                 html.render(members, home=False)
         except (Exception, SystemExit) as e:  # noqa: BLE001 - the change is made; index writes the pages again
-            print(f"warning: the website was not regenerated ({e}); run osheaf index")
+            print(f"warning: the website was not regenerated ({e}); run osheaf index", file=sys.stderr)
 
 ### Text in TeXmacs
 

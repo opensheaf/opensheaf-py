@@ -125,7 +125,7 @@ current key is kept in the system's credential store, under the owner name.
             if not obj_dir(log.id).exists():
                 break
         if next_threshold == 1:
-            print("warning: " + owners.SINGLE_ROTATION_RISK)
+            print("warning: " + owners.SINGLE_ROTATION_RISK, file=sys.stderr)
         export_and_confirm(rotation, log.owner, 1, args)
         try:
             store = keys.store_current_key(log.owner, current)
@@ -134,7 +134,7 @@ current key is kept in the system's credential store, under the owner name.
         owners.write_key_log(obj_dir(log.id), log)
         print(f"owner {log.owner}")
         print(f"current key of this device {current.did} (kept in {store})")
-        print("warning: " + owners.ROTATION_KEYS_WARNING)
+        print("warning: " + owners.ROTATION_KEYS_WARNING, file=sys.stderr)
         return log
 
 `osheaf owner init` makes an owner in an existing archive, which then hosts
@@ -284,7 +284,7 @@ rotation keys are exported and confirmed, and only then is it written.
         except owners.OwnerError as e:
             sys.exit(str(e))
         if next_threshold == 1:
-            print("warning: " + owners.SINGLE_ROTATION_RISK)
+            print("warning: " + owners.SINGLE_ROTATION_RISK, file=sys.stderr)
         export_and_confirm(new, owner, v.number, args)
         owners.write_key_log(obj_dir(log.id), log)
         write_discovery()
@@ -339,7 +339,7 @@ says which of its current keys this device holds.
             try:
                 here = keys.current_keys(owner, latest.keys["keys"])
             except keys.KeyStoreError as e:
-                print(f"warning: {e}")
+                print(f"warning: {e}", file=sys.stderr)
                 here = []
             for k in here:
                 print(f"on this device {k.did}")

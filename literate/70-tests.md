@@ -1317,7 +1317,7 @@ nothing.
     def test_single_rotation_key_and_confirmation(tmp_path, monkeypatch, capsys):
         root = tmp_path / "s"
         make_archive(root, "S", "--single-rotation-key")
-        assert owners.SINGLE_ROTATION_RISK in capsys.readouterr().out
+        assert owners.SINGLE_ROTATION_RISK in capsys.readouterr().err
         log = P.key_log(P.ARCHIVE["owner"])
         assert json.loads(log.versions[0].files["keys.json"])["nextThreshold"] == 1
         monkeypatch.setattr("builtins.input", lambda prompt: "XXXX")
@@ -1423,6 +1423,24 @@ and the exit status counts the errors.
             {"severity": "error", "place": "archive", "message": "specification 0.1: rebuild (section 16.1)"}]
         with pytest.raises(SystemExit, match="rebuild it"):
             run("--root", str(old), "collect")
+
+The standard output of `verify --json` is JSON alone, whatever the archive:
+a main catalogue left without a signed version (its signature files lost)
+makes the presentation check warn that nothing is presented, and that
+warning goes to the standard error.
+
+    # in test: verifying broken archives:
+    def test_verify_json_is_json_alone(archive, capsys):
+        put("paper-a", 1, FILES1)
+        assert finish() == []
+        d, _ = head_of("main")
+        shutil.rmtree(d / sign.WITNESSES)
+        capsys.readouterr()
+        with pytest.raises(SystemExit):
+            run("--root", str(archive), "verify", "--json")
+        out, err = capsys.readouterr()
+        assert any(x["place"] == "main v1" for x in json.loads(out))
+        assert "the main catalogue has no signed version" in err
 
 The website
 -----------

@@ -48,7 +48,7 @@ def record_key_log(r, owner):
         from . import takedown
         if not takedown.may_return(oid, lambda n, d: first.lookup(n, d) is not None):
             print(f"warning: the key log of {owner} was taken down here, and the copy at {w} does not "
-                  "hold the version its tombstone pins (section 13.2): not copied")
+                  "hold the version its tombstone pins (section 13.2): not copied", file=sys.stderr)
             return None
         local = owners.KeyLog(first.genesis, [copy.deepcopy(v) for v in first.versions
                                               if v.is_version])
@@ -58,7 +58,7 @@ def record_key_log(r, owner):
         try:
             what, n = local.pull(log, user=P.depositor())
         except owners.OwnerError as e:
-            print(f"warning: the key log of {owner} at {w}: {e}")
+            print(f"warning: the key log of {owner} at {w}: {e}", file=sys.stderr)
             continue
         if what == "extended":
             print(f"key log of {owner}: {n} version(s) added from the copy at {w}")
@@ -144,7 +144,7 @@ def mirror_line(nm, owner, where, *, licence_checked=False, label=None):
                             added += 1
                         elif (w_old / f.name).read_bytes() != f.read_bytes():
                             print(f"warning: {obj_id} v{n}: {f.name} at {source.where} differs from the one "
-                                  "held here, which is kept (section 11.1)")
+                                  "held here, which is kept (section 11.1)", file=sys.stderr)
                 if target > held:
                     for name in ("inventory.json", "inventory.json.sha512"):
                         os.replace(new / name, d / name)

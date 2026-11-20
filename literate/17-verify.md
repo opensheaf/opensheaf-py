@@ -1260,6 +1260,11 @@ programs. Its exit status counts the errors only, so that it can run in
 continuous integration: an archive with warnings passes (section 14.1).
 With `--remote`, the members of collections held in other archives are
 resolved from their locations and given their statuses (section 14.5).
+The standard output of `--json` is the JSON list alone: what the checks
+say on the way (a main catalogue without a signed version, met while the
+presentation files are checked) goes to the standard error, as every
+warning of these tools does, so that a program can parse the output
+whatever the state of the archive.
 
     # in the verify command:
     def verify(args):

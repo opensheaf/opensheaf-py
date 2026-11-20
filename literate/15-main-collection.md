@@ -68,7 +68,8 @@ a warning: nothing relies on a version that is not signed (section 7.3).
                 continue
             signed = latest_signed(d, inv)
             if signed is None:
-                print(f"warning: {label_of(obj_id) or obj_id} has no signed version (section 7.3): left out")
+                print(f"warning: {label_of(obj_id) or obj_id} has no signed version (section 7.3): left out",
+                      file=sys.stderr)
                 continue
             cur = current_version(d, inv, signed)
             out.append((obj_id, d, inv, signed, cur, read_json(d, inv, OBJ, cur),

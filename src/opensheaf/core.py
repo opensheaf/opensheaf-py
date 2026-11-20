@@ -593,7 +593,8 @@ def check_before_extending(obj_id, d, inv, acknowledged=False):
     if not acknowledged:
         sys.exit(f"{obj_id}: the new version would extend versions that are not signed, or are "
                  f"contested (section 7.3):\n{lines}\nlook at them; give --i-know to extend them anyway")
-    print(f"warning: {obj_id}: extending versions that are not signed, or are contested:\n{lines}")
+    print(f"warning: {obj_id}: extending versions that are not signed, or are contested:\n{lines}",
+          file=sys.stderr)
 
 
 def run_texmacs(calls):
@@ -914,7 +915,8 @@ def deposit(args):
         if not LABEL_RE.match(label) or len(label) > 64:
             sys.exit("a label must match ^[a-z0-9]+(-[a-z0-9]+)*$ and have at most 64 characters")
         if len(label) > 32:
-            print(f"warning: {label} is longer than 32 characters (it appears in every URL of the website)")
+            print(f"warning: {label} is longer than 32 characters (it appears in every URL of the website)",
+                  file=sys.stderr)
         owner = getattr(args, "owner", None) or ARCHIVE["owner"]
         if owner not in archive_owners():
             sys.exit(f"{owner} is not an owner this archive hosts")
@@ -1090,7 +1092,8 @@ def documents():
             continue
         signed = latest_signed(d, inv)
         if signed is None:
-            print(f"warning: {label_of(obj_id) or obj_id} has no signed version (section 7.3): left out")
+            print(f"warning: {label_of(obj_id) or obj_id} has no signed version (section 7.3): left out",
+                  file=sys.stderr)
             continue
         cur = current_version(d, inv, signed)
         out.append((obj_id, d, inv, signed, cur, read_json(d, inv, OBJ, cur),
@@ -1780,7 +1783,8 @@ def main_members():
         return None
     ver = latest_signed(d, inv)
     if ver is None:
-        print(f"warning: the main catalogue has no signed version (section 7.3): nothing is presented")
+        print(f"warning: the main catalogue has no signed version (section 7.3): nothing is presented",
+              file=sys.stderr)
         return None
     return read_json(d, inv, "members.json", ver)["members"]
 
@@ -1813,7 +1817,7 @@ def readable_index(args):
     here = [m for m in members if html.held(m)]
     if len(here) < len(members):
         print(f"warning: {len(members) - len(here)} member(s) held in other archives are left out of index.tm "
-              "(the website shows them)")
+              "(the website shows them)", file=sys.stderr)
     entries = "\n\n".join(index_entry(m) for m in here)
     with open(ROOT / "index.tm", "w", encoding="latin-1", newline="") as f:
         f.write(template.replace(line, entries + "\n"))
@@ -1841,7 +1845,7 @@ def present():
         else:
             html.render(members, home=False)
     except (Exception, SystemExit) as e:  # noqa: BLE001 - the change is made; index writes the pages again
-        print(f"warning: the website was not regenerated ({e}); run osheaf index")
+        print(f"warning: the website was not regenerated ({e}); run osheaf index", file=sys.stderr)
 
 
 class Findings(list):
@@ -2847,7 +2851,7 @@ def owner_init(args):
         if not obj_dir(log.id).exists():
             break
     if next_threshold == 1:
-        print("warning: " + owners.SINGLE_ROTATION_RISK)
+        print("warning: " + owners.SINGLE_ROTATION_RISK, file=sys.stderr)
     export_and_confirm(rotation, log.owner, 1, args)
     try:
         store = keys.store_current_key(log.owner, current)
@@ -2856,7 +2860,7 @@ def owner_init(args):
     owners.write_key_log(obj_dir(log.id), log)
     print(f"owner {log.owner}")
     print(f"current key of this device {current.did} (kept in {store})")
-    print("warning: " + owners.ROTATION_KEYS_WARNING)
+    print("warning: " + owners.ROTATION_KEYS_WARNING, file=sys.stderr)
     return log
 
 
@@ -2899,7 +2903,7 @@ def owner_rotate(args, exposed=()):
     except owners.OwnerError as e:
         sys.exit(str(e))
     if next_threshold == 1:
-        print("warning: " + owners.SINGLE_ROTATION_RISK)
+        print("warning: " + owners.SINGLE_ROTATION_RISK, file=sys.stderr)
     export_and_confirm(new, owner, v.number, args)
     owners.write_key_log(obj_dir(log.id), log)
     write_discovery()
@@ -2938,7 +2942,7 @@ def owner_show(args):
         try:
             here = keys.current_keys(owner, latest.keys["keys"])
         except keys.KeyStoreError as e:
-            print(f"warning: {e}")
+            print(f"warning: {e}", file=sys.stderr)
             here = []
         for k in here:
             print(f"on this device {k.did}")

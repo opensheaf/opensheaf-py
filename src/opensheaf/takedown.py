@@ -72,7 +72,7 @@ def main(args):
                      "--by-law or --keeper")
         if users:
             print(f"warning: the signatures of {owner} in {len(users)} object(s) become unchecked here, and "
-                  "the tombstone stands in for its key log (sections 6.5 and 13.2)")
+                  "the tombstone stands in for its key log (sections 6.5 and 13.2)", file=sys.stderr)
     if not args.reason or not args.reason.strip():
         sys.exit("a takedown needs --reason, a plain text (section 13.3)")
     if not getattr(args, "yes", False):
