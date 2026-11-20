@@ -586,7 +586,7 @@ string of hexadecimal digits, and may be broken anywhere.
             overflow-wrap: anywhere; }
     code { font-family: var(--os-mono); font-size: 0.75em; word-break: break-all;
            font-variant-ligatures: none; }
-    code.copy { border-bottom: 1px dotted transparent; }
+    code.copy { cursor: pointer; border-bottom: 1px dotted transparent; }
     a:has(> code:only-child):not(:hover):not(:focus-visible) { text-decoration-color: transparent; }
     code.copy:hover { border-bottom-color: var(--os-ink); }
     code.copy.copied::after { content: " copied"; font-family: var(--os-sans); color: var(--os-ok); }
