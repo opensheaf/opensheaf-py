@@ -414,7 +414,10 @@ archive's owner or another it hosts; its label names it in the archive.
 `add` adds members, or, in a selection, revisions to a member already
 there; `remove` removes members, or only some revisions; `follow` sets or
 clears `follow` on members of a catalogue. Each makes one new version, with
-a message saying what was decided (section 8.4).
+a message saying what was decided (section 8.4). With `--revision`, `remove`
+removes those revisions of a selection's member and keeps the member with
+the others, or removes it with its last one; it stops when nothing it names
+is there to remove.
 
     # in collections: the commands:
     def add(args):
@@ -461,15 +464,18 @@ a message saying what was decided (section 8.4).
 
     def remove(args):
         coll_id, d, inv, mem = held(args.collection)
-        out = []
+        out, changed = [], False
         for m in mem["members"]:
             if not any(matches(m, t) for t in args.uri):
                 out.append(m)
             elif args.revision and m.get("revisions"):
-                m["revisions"] = [x for x in m["revisions"] if x["documentVersion"] not in args.revision]
-                if m["revisions"]:
-                    out.append(m)
-        if out == mem["members"] and len(out) == len(mem["members"]):
+                kept = [x for x in m["revisions"] if x["documentVersion"] not in args.revision]
+                changed = changed or len(kept) < len(m["revisions"])
+                if kept:
+                    out.append(dict(m, revisions=kept))
+            else:
+                changed = True
+        if not changed:
             sys.exit("no member matches")
         mem["members"] = out
         write(coll_id, mem, message=args.message or f"Removed: {', '.join(args.uri)}")

@@ -262,15 +262,18 @@ def matches(m, text):
 
 def remove(args):
     coll_id, d, inv, mem = held(args.collection)
-    out = []
+    out, changed = [], False
     for m in mem["members"]:
         if not any(matches(m, t) for t in args.uri):
             out.append(m)
         elif args.revision and m.get("revisions"):
-            m["revisions"] = [x for x in m["revisions"] if x["documentVersion"] not in args.revision]
-            if m["revisions"]:
-                out.append(m)
-    if out == mem["members"] and len(out) == len(mem["members"]):
+            kept = [x for x in m["revisions"] if x["documentVersion"] not in args.revision]
+            changed = changed or len(kept) < len(m["revisions"])
+            if kept:
+                out.append(dict(m, revisions=kept))
+        else:
+            changed = True
+    if not changed:
         sys.exit("no member matches")
     mem["members"] = out
     write(coll_id, mem, message=args.message or f"Removed: {', '.join(args.uri)}")
