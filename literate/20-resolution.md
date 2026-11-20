@@ -461,7 +461,7 @@ and the archive's own storage root when there is one.
             self.places = list(places)
             self.here = here and P.OCFL is not None
             self.cache = Path(tempfile.mkdtemp(prefix="osheaf-resolve-"))
-            self.sources, self.fetched, self.logs, self.notes = {}, {}, {}, []
+            self.sources, self.fetched, self.logs, self.notes, self.bases = {}, {}, {}, [], {}
 
         def __enter__(self):
             return self
@@ -536,6 +536,47 @@ a copy fetched over HTTP, once per run.
                     self.note("warning", str(e))
                 self.fetched[key] = None
         return self.fetched[key]
+
+A branch records where its parent version is, `parent.url`, the URL of
+the object version (section 9.1), not the base URL of the archive holding
+it, which the resolver needs to read that archive's discovery document.
+The base is the prefix of the URL below which the archive's storage root,
+`storageRoot` of its discovery document, holds the object; the storage root
+may have any name, or be elsewhere (section 3.1). `archive_of` therefore
+tries the prefixes of the URL that end with `/`, the conventional
+`.../ocfl/` cut first, so that the common case reads one discovery document,
+then from the longest to the shortest, and takes the first whose discovery
+document has a storage root that the URL is below. A prefix that is not an
+archive is not noted: it was only a guess. The answer is kept, and so is
+the archive found, which the resolution that follows reads.
+
+    # in resolution: the archives and the objects the resolver reads:
+    def archive_of(self, url):
+        """The base URL of the archive holding the object version at URL (a parent.url,
+        section 9.1), as a list of one, found through its discovery document; [] if none is."""
+        if url not in self.bases:
+            self.bases[url] = []
+            u = urllib.parse.urlsplit(url)
+            if u.scheme in ("https", "http") and u.netloc:
+                origin = f"{u.scheme}://{u.netloc}"
+                cuts = [k + 1 for k in range(len(u.path) - 2, -1, -1) if u.path[k] == "/"]
+                guess = u.path.find("/ocfl/")
+                if guess >= 0:
+                    cuts.insert(0, guess + 1)
+                for k in dict.fromkeys(cuts):
+                    base = origin + u.path[:k]
+                    src = self.sources.get(base) or Source(base)
+                    try:
+                        root = urllib.parse.urljoin(base, src.discovery().get("storageRoot", "ocfl/"))
+                    except Unavailable:
+                        continue
+                    if not root.endswith("/"):
+                        root += "/"
+                    if (origin + u.path).startswith(root) and len(origin + u.path) > len(root):
+                        self.sources[base] = src
+                        self.bases[url] = [base]
+                        break
+        return self.bases[url]
 
 ### Key logs
 

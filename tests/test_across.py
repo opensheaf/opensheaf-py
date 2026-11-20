@@ -511,6 +511,44 @@ def test_inconsistent_branch_point(tmp_path):
     assert branch.verdict(level, obj, genesis, lambda o: None)[0] == branch.UNCHECKED
 
 
+def test_the_history_of_a_branch(tmp_path):
+    a, j = make(tmp_path, "authors"), make(tmp_path, "journal")
+    deposit(a, "paper", "one", new=True)
+    deposit(a, "paper", "two")
+    run("--root", str(j), "branch", uri(a, "paper", 2), "--label", "continued")
+    deposit(j, "continued", "three")
+    deposit(j, "continued", "earlier", "--after", "2")
+    d = P.obj_dir(line(j, "continued"))
+    inv = P.load_inventory(d)
+    hist = P.read_json(d, inv, P.OBJ)["history"]
+    assert [P.doc_version_of(d, inv, v) for v in hist] == [2, 4, 3]
+    assert P.document_version_errors(line(j, "continued"), d, inv) == []
+    assert errors(j) == []
+
+
+def test_the_archive_of_a_parent_url(tmp_path):
+    a = make(tmp_path, "authors")
+    deposit(a, "paper", "one", new=True)
+    obj_id = line(a, "paper")
+    s = tmp_path / "store"
+    shutil.copytree(a, s)
+    (s / "ocfl").rename(s / "objects")
+    disc = json.loads((s / "opensheaf.json").read_text())
+    disc["storageRoot"] = "objects/"
+    (s / "opensheaf.json").write_text(json.dumps(disc))
+    at = P.path_of(obj_id)
+    url = f"https://example.org/store/objects/{at}/v1/"
+    with remote.Resolver(here=False) as r:
+        assert r.archive_of(url) == ["https://example.org/store/"]
+        assert r.archive_of(url) is r.archive_of(url)
+        found = r.latest(*obj_id.split(":")[1:], r.archive_of(url))
+        assert found.status == "verified" and found.copy.where == "https://example.org/store/"
+        assert r.archive_of(f"https://example.org/authors/ocfl/{at}/v1/") == ["https://example.org/authors/"]
+        assert r.archive_of("https://example.org/store/objects/") == []
+        assert r.archive_of(f"https://example.org/nowhere/ocfl/{at}/v1/") == []
+        assert not [n for n in r.notes if "unavailable" in n[1]]
+
+
 def test_draft_and_seal(tmp_path):
     a = make(tmp_path, "a")
     pdf = tmp_path / "d.pdf"

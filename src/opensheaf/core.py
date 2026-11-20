@@ -1904,7 +1904,7 @@ def document_version_errors(obj_id, d, inv):
     document version (a version with sourcesMissing may be completed by adding
     files), the history, and notices kept unchanged."""
     errors = []
-    seen, files_of, missing_of, highest = {}, {}, {}, 0
+    seen, files_of, missing_of, highest, first = {}, {}, {}, 0, 1
     had_history, notices = False, []
     for ver, vinfo in inv["versions"].items():
         obj = read_json(d, inv, OBJ, ver)
@@ -1920,7 +1920,7 @@ def document_version_errors(obj_id, d, inv):
                if p not in IDENTITY and not is_evidence(p) and p not in notes}
         change = (obj.get("changes") or {}).get("text")
         if not seen and obj.get("parent"):
-            highest = n - 1          # a branch numbers on from its branch point (section 9.4)
+            highest, first = n - 1, n    # a branch numbers on from its branch point (section 9.4)
         if n in seen:
             before, mis = files_of[n], missing_of[n]
             if mis:
@@ -1949,7 +1949,7 @@ def document_version_errors(obj_id, d, inv):
                 errors.append(f"{ver} history names unknown object versions")
             else:
                 docs = [read_json(d, inv, OBJ, h)["documentVersion"] for h in hist]
-                if len(set(docs)) != len(docs) or set(docs) != set(range(1, highest + 1)):
+                if len(set(docs)) != len(docs) or set(docs) != set(range(first, highest + 1)):
                     errors.append(f"{ver} history does not list each document version once")
                 for h, k in zip(hist, docs):
                     later = [v for v in known if int(v[1:]) > int(h[1:])
@@ -2328,7 +2328,7 @@ def check_branch(f, place, obj_id, d, inv, genesis, logs, found, tombstoned, res
     elif pid in tombstoned:
         f.result(place, "the parent's line is removed: a tombstone in this archive (section 13.3)")
     elif resolver is not None:
-        res = resolver.latest(p["name"], p["owner"], [p["url"].split("/ocfl/")[0] + "/"] if p.get("url") else [])
+        res = resolver.latest(p["name"], p["owner"], resolver.archive_of(p["url"]) if p.get("url") else [])
         f.result(place, f"the parent's line: {res.status}" + (f" at {res.copy.where}" if res.copy else ""))
     else:
         f.result(place, "the parent's line is not held here (osheaf verify --remote looks for it)")

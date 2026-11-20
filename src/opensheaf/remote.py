@@ -300,7 +300,7 @@ class Resolver:
         self.places = list(places)
         self.here = here and P.OCFL is not None
         self.cache = Path(tempfile.mkdtemp(prefix="osheaf-resolve-"))
-        self.sources, self.fetched, self.logs, self.notes = {}, {}, {}, []
+        self.sources, self.fetched, self.logs, self.notes, self.bases = {}, {}, {}, [], {}
 
     def __enter__(self):
         return self
@@ -355,6 +355,33 @@ class Resolver:
                     self.note("warning", str(e))
                 self.fetched[key] = None
         return self.fetched[key]
+
+    def archive_of(self, url):
+        """The base URL of the archive holding the object version at URL (a parent.url,
+        section 9.1), as a list of one, found through its discovery document; [] if none is."""
+        if url not in self.bases:
+            self.bases[url] = []
+            u = urllib.parse.urlsplit(url)
+            if u.scheme in ("https", "http") and u.netloc:
+                origin = f"{u.scheme}://{u.netloc}"
+                cuts = [k + 1 for k in range(len(u.path) - 2, -1, -1) if u.path[k] == "/"]
+                guess = u.path.find("/ocfl/")
+                if guess >= 0:
+                    cuts.insert(0, guess + 1)
+                for k in dict.fromkeys(cuts):
+                    base = origin + u.path[:k]
+                    src = self.sources.get(base) or Source(base)
+                    try:
+                        root = urllib.parse.urljoin(base, src.discovery().get("storageRoot", "ocfl/"))
+                    except Unavailable:
+                        continue
+                    if not root.endswith("/"):
+                        root += "/"
+                    if (origin + u.path).startswith(root) and len(origin + u.path) > len(root):
+                        self.sources[base] = src
+                        self.bases[url] = [base]
+                        break
+        return self.bases[url]
 
     def key_log(self, owner, where=()):
         """The key log of OWNER: this archive's copy met with those at WHERE, or None."""

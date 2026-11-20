@@ -653,7 +653,7 @@ were missing.
         document version (a version with sourcesMissing may be completed by adding
         files), the history, and notices kept unchanged."""
         errors = []
-        seen, files_of, missing_of, highest = {}, {}, {}, 0
+        seen, files_of, missing_of, highest, first = {}, {}, {}, 0, 1
         had_history, notices = False, []
         for ver, vinfo in inv["versions"].items():
             <<the files of an object version that belong to its document version>>
@@ -687,7 +687,7 @@ belongs to the document version, since it was written and deposited with it
            if p not in IDENTITY and not is_evidence(p) and p not in notes}
     change = (obj.get("changes") or {}).get("text")
     if not seen and obj.get("parent"):
-        highest = n - 1          # a branch numbers on from its branch point (section 9.4)
+        highest, first = n - 1, n    # a branch numbers on from its branch point (section 9.4)
 
 A document version seen before must have the same own files and change
 note, except while its sources are missing: then files may be added (a
@@ -720,7 +720,9 @@ named.
 
 The history, once present, must stay present; it may name only object
 versions that exist at that point; it must list each document version
-known so far exactly once; and each entry must be the last object version
+known so far exactly once, from the first, which for a branch is the
+document version of its branch point (section 9.4: a branch holds none of
+the parent's earlier versions, and numbers on from there); and each entry must be the last object version
 holding its document version, as known when the history was written.
 
     # in check the history recorded in an object version:
@@ -734,7 +736,7 @@ holding its document version, as known when the history was written.
             errors.append(f"{ver} history names unknown object versions")
         else:
             docs = [read_json(d, inv, OBJ, h)["documentVersion"] for h in hist]
-            if len(set(docs)) != len(docs) or set(docs) != set(range(1, highest + 1)):
+            if len(set(docs)) != len(docs) or set(docs) != set(range(first, highest + 1)):
                 errors.append(f"{ver} history does not list each document version once")
             for h, k in zip(hist, docs):
                 later = [v for v in known if int(v[1:]) > int(h[1:])
@@ -915,9 +917,9 @@ in the new one, and the digests of those entries are in the new manifest.
 An inconsistent branch point is an error, an unchecked one a warning; the
 verdict of the branch, the weakest of its branch points, is a result, and
 so is whether the parent's line is held here, removed (a tombstone) or
-withdrawn, or found elsewhere (with `--remote`, at the base URL that
-`parent.url` gives when the storage root has its conventional name
-`ocfl/`, and at the places the resolver knows). A rename that neither the
+withdrawn, or found elsewhere (with `--remote`, in the archive that holds
+the object version at `parent.url`, found by its discovery document, and
+at the places the resolver knows). A rename that neither the
 objects nor the tombstones of the archive justify (the names of smaller
 algorithm numbers are free here for the owner) is a warning (section 5.3).
 
@@ -997,7 +999,7 @@ The parent's line, as far as the verifier finds it.
     elif pid in tombstoned:
         f.result(place, "the parent's line is removed: a tombstone in this archive (section 13.3)")
     elif resolver is not None:
-        res = resolver.latest(p["name"], p["owner"], [p["url"].split("/ocfl/")[0] + "/"] if p.get("url") else [])
+        res = resolver.latest(p["name"], p["owner"], resolver.archive_of(p["url"]) if p.get("url") else [])
         f.result(place, f"the parent's line: {res.status}" + (f" at {res.copy.where}" if res.copy else ""))
     else:
         f.result(place, "the parent's line is not held here (osheaf verify --remote looks for it)")
