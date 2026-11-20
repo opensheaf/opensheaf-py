@@ -873,11 +873,15 @@ The pins of a member held in the archive.
         if pos != sorted(pos):
             f.error(who, "revisions not in the order of the history (section 8.4)")
 
-Selections keep their accepted copies apart: two selections of the
-archive with the same owner must not keep accepted copies of the same
-document (sections 9.6 and 14.5), which would be one line. An accepted copy
-is a member of a selection that is a branch owned by the selection's owner;
-the document is its genesis record, by its genesis name.
+Selections keep their accepted copies apart: an owner keeps one accepted
+copy of a document, so selections that keep different accepted copies of
+the same document have different owners (sections 9.6 and 14.5). The
+selections of one owner, the issues of a journal, share its accepted copy,
+and each of them may list it: that is no breach. What is one is an owner
+whose selections list two different lines as accepted copies of one
+document. An accepted copy is a member of a selection that is a branch
+owned by the selection's owner; the document is its genesis record, by its
+genesis name.
 
     # in check the members of a collection version:
     def check_accepted_copies(f, found, obj_id, d, inv, kept):
@@ -894,11 +898,11 @@ the document is its genesis record, by its genesis name.
                 continue
             g = read_logical(md, minv, GENESIS, "v1")
             key = (owner, names.name(g.read_bytes()) if g else mid)
-            other = kept.setdefault(key, obj_id)
-            if other != obj_id:
-                f.error(where(obj_id), f"keeps an accepted copy of the document that {where(other)}, a selection "
-                        "of the same owner, keeps: selections keeping copies of one document have different "
-                        "owners (section 9.6)")
+            other, other_copy = kept.setdefault(key, (obj_id, mid))
+            if other_copy != mid:
+                f.error(where(obj_id), f"keeps an accepted copy of a document of which {where(other)}, a selection "
+                        "of the same owner, keeps another: selections keeping different accepted copies of one "
+                        "document have different owners (section 9.6)")
 
 Branches (9.3, 9.4)
 -------------------

@@ -2459,11 +2459,11 @@ def check_accepted_copies(f, found, obj_id, d, inv, kept):
             continue
         g = read_logical(md, minv, GENESIS, "v1")
         key = (owner, names.name(g.read_bytes()) if g else mid)
-        other = kept.setdefault(key, obj_id)
-        if other != obj_id:
-            f.error(where(obj_id), f"keeps an accepted copy of the document that {where(other)}, a selection "
-                    "of the same owner, keeps: selections keeping copies of one document have different "
-                    "owners (section 9.6)")
+        other, other_copy = kept.setdefault(key, (obj_id, mid))
+        if other_copy != mid:
+            f.error(where(obj_id), f"keeps an accepted copy of a document of which {where(other)}, a selection "
+                    "of the same owner, keeps another: selections keeping different accepted copies of one "
+                    "document have different owners (section 9.6)")
 
 
 def check_indexes(f, schema, disc):
