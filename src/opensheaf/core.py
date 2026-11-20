@@ -1477,7 +1477,8 @@ def collect(args):
     inv = add_version(coll_id, files, obj, f"Collection version {version}: {len(members)} documents",
                       acknowledged=bool(getattr(args, "i_know", False)))
     write_discovery()
-    print(f"{label}: {inv['head']} ({len(members)} members)")
+    print(f"Done: the main catalogue {label} is at {inv['head']}, with "
+          f"{plural(len(members), 'member') if members else 'no members'}.")
 
 
 def line_status(d, inv, head):
@@ -1831,7 +1832,7 @@ def readable_index(args):
             if (read_json(fd, load_inventory(fd), OBJ) or {}).get("kind") != "collection":
                 sys.exit(f"osheaf.json: index.html.featured names {featured}, which is not a collection")
         pages = html.render(members, featured=fid)
-        print(f"opensheaf.json, index.html, {pages} landing pages and sitemap.xml written")
+        print(f"Done: opensheaf.json, index.html, {plural(pages, 'landing page')} and sitemap.xml written.")
         return
     template = (ROOT / INDEX["template"]).read_text(encoding="latin-1")
     line = "  <paper-index>\n"
@@ -1840,8 +1841,9 @@ def readable_index(args):
     pages = html.render(members, home=False)
     here = [m for m in members if html.held(m)]
     if len(here) < len(members):
-        print(f"warning: {len(members) - len(here)} member(s) held in other archives are left out of index.tm "
-              "(the website shows them)", file=sys.stderr)
+        print(f"Warning: {plural(len(members) - len(here), 'member')} held in other archives "
+              f"{'is' if len(members) - len(here) == 1 else 'are'} left out of index.tm (the website shows "
+              "them).", file=sys.stderr)
     entries = "\n\n".join(index_entry(m) for m in here)
     with open(ROOT / "index.tm", "w", encoding="latin-1", newline="") as f:
         f.write(template.replace(line, entries + "\n"))
@@ -1851,8 +1853,8 @@ def readable_index(args):
         run_texmacs(export_calls(ROOT / "index.tm", pdf=scratch / "index.pdf",
                                  html=ROOT / "index.html"))
         shutil.rmtree(scratch, ignore_errors=True)
-    print("opensheaf.json, index.tm" + ("" if getattr(args, "no_html", False) else ", index.html")
-          + f", {pages} landing pages and sitemap.xml written")
+    print("Done: opensheaf.json, index.tm" + ("" if getattr(args, "no_html", False) else ", index.html")
+          + f", {plural(pages, 'landing page')} and sitemap.xml written.")
 
 
 def present():

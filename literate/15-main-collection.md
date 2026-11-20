@@ -271,4 +271,5 @@ discovery document is rewritten.
     inv = add_version(coll_id, files, obj, f"Collection version {version}: {len(members)} documents",
                       acknowledged=bool(getattr(args, "i_know", False)))
     write_discovery()
-    print(f"{label}: {inv['head']} ({len(members)} members)")
+    print(f"Done: the main catalogue {label} is at {inv['head']}, with "
+          f"{plural(len(members), 'member') if members else 'no members'}.")

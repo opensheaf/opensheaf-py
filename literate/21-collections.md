@@ -322,7 +322,9 @@ revision that has one, and CC0, since a collection holds only metadata.
             P.LABELS[label] = coll_id
         inv = P.add_version(coll_id, files, obj, message)
         P.write_discovery()
-        print(f"{label or coll_id}: {inv['head']} (document version {version}, {len(mem['members'])} members)")
+        n = len(mem["members"])
+        print(f"Done: the collection {label or coll_id} is at {inv['head']}, document version {version}, with "
+              f"{P.plural(n, 'member') if n else 'no members'}.")
         return inv
 
 Finding the version a member pins
