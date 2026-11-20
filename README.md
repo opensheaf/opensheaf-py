@@ -126,6 +126,62 @@ current key of the owner, added with `osheaf owner rotate --add`, is given
 in the secret `OPENSHEAF_SIGNING_KEY` (the base64 seed), and the commands
 sign with it.
 
+## Keys and security levels
+
+An owner has current keys, which sign its documents, and rotation keys,
+which alone change the current keys (section 6.2 of the specification).
+Where they are kept is the owner's *security level*, chosen with `--keys`
+on `osheaf init --new-owner`, `owner init` and `owner rotate`:
+
+- **`offline`, the default and the maximum.** The rotation keys are
+  exported once, encrypted under a passphrase, to `--export DIR` (USB
+  sticks, kept apart) and to printed sheets (`--print`), and never kept on
+  a device; each device makes its own current key (`osheaf key new`),
+  which a rotation adds.
+- **`github:OWNER/REPO`, a key wallet in a private GitHub repository.** The
+  rotation keys and the current keys are kept as files
+  `<owner>/<k>.key.enc` of a private repository of their own (never the
+  archive's: the tools refuse a public repository and the archive's own,
+  and never create one), encrypted under the passphrase, and read and
+  written through the GitHub CLI (`gh auth login` once). A new machine
+  pulls the current key (`osheaf key pull`, or by itself when it first
+  signs) and keeps it in its credential store. Rotations read the rotation
+  keys from the wallet, with no USB stick.
+- **`command`, a key wallet in your password manager** (1Password `op`,
+  Bitwarden `bw`, `pass`): the same, through a `read` and a `write` command
+  configured in `osheaf.json` (chapter 9 of the literate program has
+  examples for the three).
+
+A wallet trades security for convenience, and the tools say so each time
+they put keys in one: whoever controls the wallet *and* knows the
+passphrase controls the owner, and a current key in a wallet is on every
+machine that pulls it. Keep the passphrase somewhere else than the wallet:
+in the Passwords app of macOS, for instance, so that GitHub and Apple
+would both have to fail. Move up at any time with one rotation: `osheaf
+owner rotate --keys offline --export DIR` signs with the rotation keys of
+the wallet and exports the new ones offline only, after which those in the
+wallet are used up (`osheaf key forget --wallet --used` removes them).
+
+```
+gh repo create me/opensheaf-keys --private        # once, by hand: the tools never create it
+osheaf init my-papers --name "Papers of Jane Doe" --base-url https://example.org/papers/ \
+  --curator "Doe, Jane" --new-owner --keys github:me/opensheaf-keys
+osheaf key list                                   # owner, key, kind, did:key: never a secret
+osheaf key pull                                   # on another machine
+osheaf owner rotate --add did:key:NEW             # rotation keys read from the wallet
+osheaf owner rotate --keys offline --export /Volumes/USB/opensheaf-keys --print   # move up
+osheaf key forget --wallet --used
+```
+
+The wallet is named in `osheaf.json` (`"keys": {"wallet":
+"github:me/opensheaf-keys"}`, written by `init`), or in the environment
+variable `OPENSHEAF_WALLET`, which wins and keeps its name out of the
+archive. The passphrase is asked once per command, or taken from
+`OPENSHEAF_PASSPHRASE`. A current key also goes to and from a password
+manager through the clipboard: `osheaf key export --clipboard` (paste it
+into a note of the Passwords app; `--encrypt` encrypts it under the
+passphrase) and, on another machine, `osheaf key import --clipboard`.
+
 ## An archive
 
 The quickest start is the template
@@ -173,6 +229,9 @@ osheaf init FOLDER --name NAME --base-url URL --curator "Family, Given" --new-ow
 osheaf init FOLDER ... --owner OWNER --key-log DIR             (an existing owner)
 osheaf init FOLDER ... --index texmacs --index-template FILE   (a TeXmacs index, profile texmacs)
 osheaf owner init|rotate|expose|end|show ; owner pull URL|PATH ; key new
+osheaf owner init|rotate ... --keys offline|github:OWNER/REPO|command [--plain-current]
+osheaf key push|pull|list [--keys WALLET] ; key forget [--wallet [--used]] DID...
+osheaf key export --clipboard|--stdout [DID] [--encrypt] ; key import --clipboard|--stdin
 osheaf deposit LABEL SOURCE --pdf PAPER.pdf --title T --author "Family, Given|Affiliation" --new ...
 osheaf deposit LABEL SOURCE --pdf PAPER.pdf ...               (a new version of the line LABEL)
 osheaf deposit LABEL SOURCE.tm --title T --author ...         (TeXmacs: typeset by the archive)
