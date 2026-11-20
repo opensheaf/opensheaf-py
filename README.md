@@ -160,7 +160,8 @@ or from `--root`. They maintain:
   its key log (current keys, rotations, exposed keys, an end, a successor,
   the keeper); and `sitemap.xml`; from the templates in `templates/`
   (`{{name}}` placeholders; MathJax renders `$...$`), copied there by `init`;
-- or, with a TeXmacs index, `site/<label>/` (HTML versions of TeXmacs
+- or, with a TeXmacs index (`osheaf init --index texmacs [--index-template
+  FILE]`), `site/<label>/` (HTML versions of TeXmacs
   documents) and an index made from a TeXmacs template, with the same
   landing pages, owner pages and `sitemap.xml` as the website (from the
   archive's own `templates/paper.html`, if it has one).
@@ -170,6 +171,7 @@ or from `--root`. They maintain:
 ```
 osheaf init FOLDER --name NAME --base-url URL --curator "Family, Given" --new-owner --export DIR
 osheaf init FOLDER ... --owner OWNER --key-log DIR             (an existing owner)
+osheaf init FOLDER ... --index texmacs --index-template FILE   (a TeXmacs index, profile texmacs)
 osheaf owner init|rotate|expose|end|show ; owner pull URL|PATH ; key new
 osheaf deposit LABEL SOURCE --pdf PAPER.pdf --title T --author "Family, Given|Affiliation" --new ...
 osheaf deposit LABEL SOURCE --pdf PAPER.pdf ...               (a new version of the line LABEL)

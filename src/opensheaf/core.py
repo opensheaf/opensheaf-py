@@ -37,8 +37,9 @@ current key of this device is kept in the system's credential store (or in
 ~/.config/opensheaf/keys/), the rotation keys in files exported once to a
 folder outside the archive (`osheaf owner init --export DIR`).
 
-The index is either a TeXmacs document made from a template, as above, or
-the website (the profile website, appendix A.3), which osheaf init sets up:
+The index is either a TeXmacs document made from a template, as above, which
+osheaf init --index texmacs sets up, or the website (the profile website,
+appendix A.3), which osheaf init sets up by default:
 "index": {"html": {"templates": "templates", "featured": "<label>"}}, featured
 optional. Either way the website writes the landing pages paper/<label>/, the
 owner pages owner/<owner>/ and sitemap.xml, after every change, and osheaf index
@@ -2679,7 +2680,8 @@ def verify(args):
 def init(args):
     """Create an archive in the folder: osheaf.json, the storage root, the owner and its
     key log (made, or copied), the empty main catalogue, the discovery document, and the
-    website with its templates (to edit)."""
+    website with its templates (to edit), or, with --index texmacs, the TeXmacs index
+    with its template."""
     root = Path(args.folder or ".").resolve()
     root.mkdir(parents=True, exist_ok=True)
     if any((root / n).exists() for n in CONFIG_NAMES):
@@ -2691,12 +2693,17 @@ def init(args):
         sys.exit("init: give --new-owner, or --owner NAME --key-log DIR")
     family, _, given = args.curator.partition(",")
     family, given = family.strip(), given.strip()
+    kind = getattr(args, "index", None) or "website"
+    if kind not in ("website", "texmacs"):
+        sys.exit("--index is website or texmacs")
+    if getattr(args, "index_template", None) and kind != "texmacs":
+        sys.exit("--index-template goes with --index texmacs")
     cfg = {
         "owner": None,
         "name": args.name,
         "contact": args.contact or args.base_url,
         "baseUrl": args.base_url if args.base_url.endswith("/") else args.base_url + "/",
-        "profiles": ["website"],
+        "profiles": [kind],
         "storageLayout": layout,
         "mainCollection": "main",
         "curator": {"name": f"{family}, {given}" if given else family, "givenName": given,
@@ -2704,6 +2711,8 @@ def init(args):
         "depositor": {"name": f"{given} {family}".strip(), "address": args.contact or args.base_url},
         "index": {"html": {"templates": "templates"}},
     }
+    if kind == "texmacs":
+        cfg["index"] = {"template": index_template(root, args)}
     global ARCHIVE
     set_paths(root, layout)
     ARCHIVE = dict(cfg)
@@ -2725,18 +2734,54 @@ def init(args):
         owners.write_key_log(obj_dir(log.id), log)
     cfg["owner"] = log.owner
     (root / CONFIG_NAME).write_text(json.dumps(cfg, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-    from . import html
-    (root / "templates").mkdir(exist_ok=True)
-    for f in sorted(html.DEFAULTS.iterdir()):
-        if f.is_file() and not (root / "templates" / f.name).exists():
-            shutil.copyfile(f, root / "templates" / f.name)
+    if kind == "website":
+        from . import html
+        (root / "templates").mkdir(exist_ok=True)
+        for f in sorted(html.DEFAULTS.iterdir()):
+            if f.is_file() and not (root / "templates" / f.name).exists():
+                shutil.copyfile(f, root / "templates" / f.name)
     configure(root)
     collect(args)
     index(argparse_namespace(no_html=True))
-    print(f"archive created in {root}, owned by {log.owner}: edit {CONFIG_NAME} and templates/, then "
+    edit = "templates/" if kind == "website" else cfg["index"]["template"]
+    print(f"archive created in {root}, owned by {log.owner}: edit {CONFIG_NAME} and {edit}, then "
           f"deposit (osheaf deposit --new LABEL ...)")
     print("note: OpenSheaf 0.2 is a draft; until version 1.0 a revision may change the format in"
-          " incompatible ways, and archives may have to be rebuilt")
+          " incompatible ways, and archives may have to be rebuilt", file=sys.stderr)
+
+
+TEXMACS_INDEX_TEMPLATE = """<TeXmacs|2.1>
+
+<style|notes>
+
+<\\body>
+  <chapter*|{title}>
+
+  <paper-index>
+</body>
+"""
+
+
+def index_template(root, args):
+    """The template of the TeXmacs index of a new archive in ROOT, copied from
+    --index-template or written: its path relative to ROOT."""
+    given = getattr(args, "index_template", None)
+    if not given:
+        if not (root / "index-template.tm").exists():
+            (root / "index-template.tm").write_text(
+                TEXMACS_INDEX_TEMPLATE.format(title=tm_escape(args.name)), encoding="latin-1")
+        return "index-template.tm"
+    src = Path(given).resolve()
+    if not src.is_file():
+        sys.exit(f"--index-template: no file {given}")
+    if src.read_text(encoding="latin-1").count("  <paper-index>\n") != 1:
+        sys.exit(f"--index-template: {given} must contain one paragraph <paper-index>")
+    dest = root / src.name
+    if dest.resolve() != src:
+        if dest.exists():
+            sys.exit(f"--index-template: {dest} exists already")
+        shutil.copyfile(src, dest)
+    return src.name
 
 
 def argparse_namespace(**kw):

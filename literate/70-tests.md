@@ -840,6 +840,38 @@ log is copied from the folder of its owner object in another archive.
             run("init", str(tmp_path / "c"), "--name", "C", "--base-url", "https://example.org/c/",
                 "--curator", "Doe, Jane", "--owner", owner)
 
+An archive whose home page is a TeXmacs index is made with `--index
+texmacs`: it declares the profile `texmacs`, not `website`, and its
+configuration names the template of the index, here the minimal one, written
+with the name of the archive as its title. No template of the website is
+copied, no home page written; `index.tm` is, and the landing page of the
+main catalogue, with the default style sheet it uses. A template given that
+lacks the paragraph `<paper-index>`, or one without `--index texmacs`, stops
+`init` before anything is made.
+
+    # in test: making an archive with osheaf init:
+    def test_init_with_a_texmacs_index(tmp_path):
+        bad = tmp_path / "bad.tm"
+        bad.write_text("<TeXmacs|2.1>\n\n<\\body>\n  Nothing.\n</body>\n")
+        with pytest.raises(SystemExit, match="one paragraph <paper-index>"):
+            make_archive(tmp_path / "x", "X", "--index", "texmacs", "--index-template", str(bad))
+        with pytest.raises(SystemExit, match="goes with --index texmacs"):
+            make_archive(tmp_path / "y", "Y", "--index-template", str(bad))
+        assert not (tmp_path / "x" / "osheaf.json").exists() and not (tmp_path / "x" / "ocfl").exists()
+        root = tmp_path / "t"
+        run("init", str(root), "--name", "Papers <of> Doe", "--base-url", "https://example.org/t/", "--curator",
+            "Doe, Jane", "--new-owner", "--export", str(tmp_path / "t-keys"), "--no-passphrase", "--yes",
+            "--index", "texmacs")
+        cfg = json.loads((root / "osheaf.json").read_text())
+        assert cfg["profiles"] == ["texmacs"] and cfg["index"] == {"template": "index-template.tm"}
+        assert json.loads((root / "opensheaf.json").read_text())["profiles"] == ["texmacs"]
+        template = (root / "index-template.tm").read_text(encoding="latin-1")
+        assert "<chapter*|Papers <less>of<gtr> Doe>" in template and "\n  <paper-index>\n" in template
+        assert not (root / "templates").exists() and not (root / "index.html").exists()
+        assert (root / "index.tm").exists() and (root / "paper" / "main" / "index.html").exists()
+        assert (root / "style.css").exists()
+        assert [x for x in P.verify_findings() if x["severity"] != "result"] == []
+
 ### Deposits
 
 The first test follows the life of a small archive kept without TeXmacs.
@@ -1567,14 +1599,18 @@ archive still verifies, its main catalogue pinning a version now removed.
         assert P.verify_errors() == []
 
 An archive whose home page is a TeXmacs index gets the landing pages, the
-owner pages and the sitemap of the website too. The test needs no TeXmacs:
-`--no-html` writes `index.tm` and stops before the export. The archive's own
-template of the landing page, in its `templates` folder, is used without
-any setting, and, since it does not use the default style sheet, no
-`style.css` is written. A document with an HTML version in
-`site/<label>/` gets a link to it, and an entry in the sitemap. The
-archive declares the TeXmacs profile instead of the website's, whose home
-page, exported by TeXmacs, the test does not write.
+owner pages and the sitemap of the website too. It is made so by `osheaf
+init --index texmacs`, with the template of its index (here already in the
+folder, and so not copied): the archive declares the TeXmacs profile
+instead of the website's, and no template of the website is copied. The
+test needs no TeXmacs: `--no-html` writes `index.tm` and stops before the
+export. The archive's own template of the landing page, in its `templates`
+folder, is used without any setting, and, since it does not use the
+default style sheet, no `style.css` is written. A document with an HTML
+version in `site/<label>/` gets a link to it, and an entry in the sitemap.
+Verification checks the landing pages, which give the `sheaf:` URI of their
+line, and warns when one does not, since the archive does not declare the
+profile website, which would make it an error (appendix A.3).
 
 The entries of the index follow the rules shared with the website: the
 title links the landing page; the authors are written `A, B and C.`; the
@@ -1587,18 +1623,16 @@ relation was recorded with one; and a change note says what it is
         """A TeXmacs index: index.tm with uniform entries, and the landing pages,
         from the archive's own template, and the sitemap of the website."""
         root = tmp_path / "a"
-        make_archive(root)
-        cfg = json.loads((root / "osheaf.json").read_text())
-        cfg["index"], cfg["profiles"] = {"template": "index-template.tm"}, ["texmacs"]
-        (root / "osheaf.json").write_text(json.dumps(cfg))
-        for f in ("index.html", "style.css", "sitemap.xml"):    # written by init, for the website
-            (root / f).unlink()
-        shutil.rmtree(root / "templates")
-        (root / "templates").mkdir()
+        (root / "templates").mkdir(parents=True)
         (root / "templates" / "paper.html").write_text(
             "<html><head>{{head}}<link rel=stylesheet href='{{root}}resources/notes-base.css'></head>"
             "<body class=house>{{title}} by {{authors}}{{html_link}} {{sheaf_uri}}<ol>{{versions}}</ol></body></html>")
         (root / "index-template.tm").write_text("<TeXmacs|2.1.5>\n\n<\\body>\n  <paper-index>\n</body>\n")
+        make_archive(root, "T", "--index", "texmacs", "--index-template", str(root / "index-template.tm"))
+        cfg = json.loads((root / "osheaf.json").read_text())
+        assert cfg["profiles"] == ["texmacs"] and cfg["index"] == {"template": "index-template.tm"}
+        assert sorted(p.name for p in (root / "templates").iterdir()) == ["paper.html"]
+        assert (root / "index.tm").exists() and not (root / "index.html").exists()
         src, pdf = tmp_path / "p.tex", tmp_path / "p.pdf"
         src.write_text("\\documentclass{article}")
         pdf.write_bytes(b"%PDF-1.4 p")

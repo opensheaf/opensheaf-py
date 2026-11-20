@@ -181,8 +181,9 @@ too.
     ~/.config/opensheaf/keys/), the rotation keys in files exported once to a
     folder outside the archive (`osheaf owner init --export DIR`).
 
-    The index is either a TeXmacs document made from a template, as above, or
-    the website (the profile website, appendix A.3), which osheaf init sets up:
+    The index is either a TeXmacs document made from a template, as above, which
+    osheaf init --index texmacs sets up, or the website (the profile website,
+    appendix A.3), which osheaf init sets up by default:
     "index": {"html": {"templates": "templates", "featured": "<label>"}}, featured
     optional. Either way the website writes the landing pages paper/<label>/, the
     owner pages owner/<owner>/ and sitemap.xml, after every change, and osheaf index

@@ -525,6 +525,29 @@ def test_init_with_an_existing_owner(tmp_path):
             "--curator", "Doe, Jane", "--owner", owner)
 
 
+def test_init_with_a_texmacs_index(tmp_path):
+    bad = tmp_path / "bad.tm"
+    bad.write_text("<TeXmacs|2.1>\n\n<\\body>\n  Nothing.\n</body>\n")
+    with pytest.raises(SystemExit, match="one paragraph <paper-index>"):
+        make_archive(tmp_path / "x", "X", "--index", "texmacs", "--index-template", str(bad))
+    with pytest.raises(SystemExit, match="goes with --index texmacs"):
+        make_archive(tmp_path / "y", "Y", "--index-template", str(bad))
+    assert not (tmp_path / "x" / "osheaf.json").exists() and not (tmp_path / "x" / "ocfl").exists()
+    root = tmp_path / "t"
+    run("init", str(root), "--name", "Papers <of> Doe", "--base-url", "https://example.org/t/", "--curator",
+        "Doe, Jane", "--new-owner", "--export", str(tmp_path / "t-keys"), "--no-passphrase", "--yes",
+        "--index", "texmacs")
+    cfg = json.loads((root / "osheaf.json").read_text())
+    assert cfg["profiles"] == ["texmacs"] and cfg["index"] == {"template": "index-template.tm"}
+    assert json.loads((root / "opensheaf.json").read_text())["profiles"] == ["texmacs"]
+    template = (root / "index-template.tm").read_text(encoding="latin-1")
+    assert "<chapter*|Papers <less>of<gtr> Doe>" in template and "\n  <paper-index>\n" in template
+    assert not (root / "templates").exists() and not (root / "index.html").exists()
+    assert (root / "index.tm").exists() and (root / "paper" / "main" / "index.html").exists()
+    assert (root / "style.css").exists()
+    assert [x for x in P.verify_findings() if x["severity"] != "result"] == []
+
+
 def test_init_deposit(tmp_path):
     root = tmp_path / "archive"
     make_archive(root)
@@ -1070,18 +1093,16 @@ def test_texmacs_index_with_landing_pages(tmp_path):
     """A TeXmacs index: index.tm with uniform entries, and the landing pages,
     from the archive's own template, and the sitemap of the website."""
     root = tmp_path / "a"
-    make_archive(root)
-    cfg = json.loads((root / "osheaf.json").read_text())
-    cfg["index"], cfg["profiles"] = {"template": "index-template.tm"}, ["texmacs"]
-    (root / "osheaf.json").write_text(json.dumps(cfg))
-    for f in ("index.html", "style.css", "sitemap.xml"):    # written by init, for the website
-        (root / f).unlink()
-    shutil.rmtree(root / "templates")
-    (root / "templates").mkdir()
+    (root / "templates").mkdir(parents=True)
     (root / "templates" / "paper.html").write_text(
         "<html><head>{{head}}<link rel=stylesheet href='{{root}}resources/notes-base.css'></head>"
         "<body class=house>{{title}} by {{authors}}{{html_link}} {{sheaf_uri}}<ol>{{versions}}</ol></body></html>")
     (root / "index-template.tm").write_text("<TeXmacs|2.1.5>\n\n<\\body>\n  <paper-index>\n</body>\n")
+    make_archive(root, "T", "--index", "texmacs", "--index-template", str(root / "index-template.tm"))
+    cfg = json.loads((root / "osheaf.json").read_text())
+    assert cfg["profiles"] == ["texmacs"] and cfg["index"] == {"template": "index-template.tm"}
+    assert sorted(p.name for p in (root / "templates").iterdir()) == ["paper.html"]
+    assert (root / "index.tm").exists() and not (root / "index.html").exists()
     src, pdf = tmp_path / "p.tex", tmp_path / "p.pdf"
     src.write_text("\\documentclass{article}")
     pdf.write_bytes(b"%PDF-1.4 p")

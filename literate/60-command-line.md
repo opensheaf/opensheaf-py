@@ -700,7 +700,15 @@ osheaf init my-papers --name "Papers of Jane Doe" --base-url https://example.org
 
 With `--curated` the main catalogue is a curated one, whose members, from
 any archive, and order are the curator's, kept with `osheaf collection`
-([collections](21-collections.md)).
+([collections](21-collections.md)). With `--index texmacs` the home page is
+a TeXmacs index instead of the website, made from the template given with
+`--index-template` or from a minimal one ([creating an archive](18-init.md)):
+
+```
+osheaf init papers --name "Papers of Jane Doe" --base-url https://example.org/papers/ \
+    --curator "Doe, Jane" --new-owner --export /Volumes/USB/opensheaf-keys \
+    --index texmacs --index-template old/index-template.tm
+```
 
     # in the options of osheaf init:
     n = sub.add_parser("init", help="create an archive (osheaf.json, storage root, owner, main catalogue)")
@@ -717,6 +725,12 @@ any archive, and order are the curator's, kept with `osheaf collection`
     owner_init_options(n)
     n.add_argument("--curated", action="store_true",
                    help="the main catalogue is curated (osheaf collection add|sync)")
+    n.add_argument("--index", choices=["website", "texmacs"],
+                   help="the home page: the website (default, profile website) or a TeXmacs index "
+                        "(profile texmacs)")
+    n.add_argument("--index-template", metavar="FILE",
+                   help="with --index texmacs: the template of the index, copied into the archive "
+                        "(default: a minimal one)")
     n.add_argument("--from", dest="from_file", metavar="FILE",
                     help="take the options from a YAML or JSON file (a list: several, in order)")
     n.set_defaults(func=None)

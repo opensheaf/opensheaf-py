@@ -259,6 +259,12 @@ def build_parser():
     owner_init_options(n)
     n.add_argument("--curated", action="store_true",
                    help="the main catalogue is curated (osheaf collection add|sync)")
+    n.add_argument("--index", choices=["website", "texmacs"],
+                   help="the home page: the website (default, profile website) or a TeXmacs index "
+                        "(profile texmacs)")
+    n.add_argument("--index-template", metavar="FILE",
+                   help="with --index texmacs: the template of the index, copied into the archive "
+                        "(default: a minimal one)")
     n.add_argument("--from", dest="from_file", metavar="FILE",
                     help="take the options from a YAML or JSON file (a list: several, in order)")
     n.set_defaults(func=None)
