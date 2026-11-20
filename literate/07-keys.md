@@ -70,7 +70,9 @@ optional package keyring, as for the tokens of [Zenodo](50-zenodo.md).
     the service opensheaf-current-key and the account <owner>:<k>; on macOS
     the keychain directly, under the same names; and the file
     ~/.config/opensheaf/keys/<owner>/<k>.key, readable only by its owner.
-    OPENSHEAF_KEY_STORE=keyring|security|file uses that store alone."""
+    OPENSHEAF_KEY_STORE=keyring|security|file uses that store alone;
+    OPENSHEAF_KEY_STORE=none keeps current keys in the memory of a command only,
+    opened from the key wallet by each command that signs."""
 
     import base64
     import binascii
@@ -204,20 +206,38 @@ order, as for the tokens of Zenodo:
 The variable `OPENSHEAF_KEY_STORE` restricts the stores to one, for a user
 who wants to know where the key is, and for the tests.
 
+`OPENSHEAF_KEY_STORE=none` keeps no current key on the computer at all:
+a key lives in the memory of the command that needs it, and nowhere else.
+When a command signs, it opens the current key from the owner's key wallet
+([key wallets](09-wallets.md)), with the passkey (one Touch ID, through the
+browser) or the passphrase, signs, and forgets it when it ends; the next
+command that signs asks again. It suits a computer where osheaf runs from
+ever new Python environments, as `uvx` makes them while developing: the
+keychain then never asks for its permission, at the price of one Touch ID
+per command that signs. Without a wallet, nothing can sign; `osheaf key
+new` and `osheaf key import`, which would make or bring a key only to lose
+it, refuse.
+
     # in keys: where current keys are kept:
     SERVICE = "opensheaf-current-key"
     SIGNING_KEY = "OPENSHEAF_SIGNING_KEY"
     KEY_STORE = "OPENSHEAF_KEY_STORE"
     STORES = ("keyring", "security", "file")
+    NONE = "none"
 
 
     def _stores():
         pinned = os.environ.get(KEY_STORE)
         if pinned:
-            if pinned not in STORES:
-                raise KeyStoreError(f"{KEY_STORE} is one of {', '.join(STORES)}")
-            return [pinned]
+            if pinned not in STORES + (NONE,):
+                raise KeyStoreError(f"{KEY_STORE} is one of {', '.join(STORES + (NONE,))}")
+            return [] if pinned == NONE else [pinned]
         return list(STORES)
+
+
+    def kept_on_device():
+        """Whether current keys are kept on this device (unless OPENSHEAF_KEY_STORE=none)."""
+        return os.environ.get(KEY_STORE) != NONE
 
 
     def _account(owner, kid):
@@ -235,8 +255,43 @@ log, and asks for each in turn. A store that is missing or refuses is
 skipped. A seed is base64; one whose key is not the one it is filed under
 is an error, never used.
 
+Each item of a store is read at most once in a command. On macOS, every
+read of a keychain item by a program that the item does not list asks the
+user's permission ("python3 wants to use your confidential information
+stored in opensheaf-current-key"), unless the user has answered *Always
+Allow*; a command that asked twice for the same key, once to see whether
+the computer holds it and once to sign, would ask twice. What a command
+has read, a seed or the absence of one, is therefore remembered in its
+memory, `_SEEN`, by store, owner and key (and, for files, by folder);
+writing and forgetting a key update it, and the memory is cleared at the
+start and the end of every command (`forget_seen`, called with
+`forget_passphrase` of [the owner commands](19-owner-commands.md)). The
+keys held in memory only, with `OPENSHEAF_KEY_STORE=none`, are kept there
+too, under the store `none`, which no read ever reaches.
+
     # in keys: where current keys are kept:
+    _SEEN = {}
+
+
+    def forget_seen():
+        """Forget what this command has read from the stores, and the keys held in memory only."""
+        _SEEN.clear()
+
+
+    def _slot(store, owner, kid):
+        return (store, str(key_folder(owner)) if store == "file" else "", owner, kid)
+
+
+    def _lookup(store, owner, kid):
+        slot = _slot(store, owner, kid)
+        if slot not in _SEEN:
+            _SEEN[slot] = _read(store, owner, kid)
+        return _SEEN[slot]
+
+
     def _read(store, owner, kid):
+        if store == NONE:
+            return None
         if store == "keyring":
             try:
                 import keyring
@@ -264,8 +319,8 @@ is an error, never used.
         return Key(seed)
 
 The current keys of an owner on this device are those found among its
-current keys; with the environment variable, the one key it holds, which
-must be one of them.
+current keys, in the stores and in memory; with the environment variable,
+the one key it holds, which must be one of them.
 
     # in keys: where current keys are kept:
     def current_keys(owner, keys):
@@ -280,8 +335,8 @@ must be one of them.
         found = []
         for did in keys:
             kid = names.key_id(did)
-            for store in _stores():
-                text = _read(store, owner, kid)
+            for store in _stores() + [NONE]:
+                text = _lookup(store, owner, kid)
                 if text:
                     key = key_from_base64(text, f"{store} {_account(owner, kid)}")
                     if key.did != did:
@@ -290,28 +345,37 @@ must be one of them.
                     break
         return found
 
-Storing a key tries the stores in the same order, and checks that the key
-can be read back, since a store may accept and forget (keyring has a
-backend that does nothing). With `security`, the seed is passed on the
-standard input of `security -i` rather than on its command line, where
-other users of the machine could see it. The file is created with mode
-0600, inside a folder of mode 0700, and never replaces another.
+Storing a key tries the stores in the same order (with
+`OPENSHEAF_KEY_STORE=none`, memory alone), and remembers what it wrote, so
+that the command does not read it again. A store may accept and forget:
+keyring has a backend that does nothing, chosen only by a user who asks for
+it, which is taken for a store that refuses. With `security`, the seed is
+passed on the standard input of `security -i` rather than on its command
+line, where other users of the machine could see it. The file is created
+with mode 0600, inside a folder of mode 0700, and never replaces another.
 
     # in keys: where current keys are kept:
     def store_current_key(owner, key, store=None):
-        """Keep the current key KEY of OWNER on this device; returns the name of the store used."""
+        """Keep the current key KEY of OWNER on this device; returns the name of the store used
+        ("none": in the memory of this command only)."""
         text = base64.b64encode(key.seed).decode("ascii")
-        for s in ([store] if store else _stores()):
-            if _write(s, owner, key.id, text) and _read(s, owner, key.id) == text:
+        for s in ([store] if store else _stores() or [NONE]):
+            if _write(s, owner, key.id, text):
+                _SEEN[_slot(s, owner, key.id)] = text
                 return s
         raise KeyStoreError(f"no store kept the key {key.did}")
 
 
     def _write(store, owner, kid, text):
         account = _account(owner, kid)
+        if store == NONE:
+            return True
         if store == "keyring":
             try:
                 import keyring
+                from keyring.backends import null
+                if isinstance(keyring.get_keyring(), null.Keyring):
+                    return False
                 keyring.set_password(SERVICE, account, text)
                 return True
             except Exception:
@@ -332,8 +396,33 @@ other users of the machine could see it. The file is created with mode
               "credential store", file=sys.stderr)
         return True
 
+On macOS, an item that keyring writes to the keychain trusts one program
+without asking: the one that wrote it, the very Python binary of the
+environment that ran osheaf. Another Python, such as the one of a new `uvx`
+environment, is asked for, once per read, until the user answers *Always
+Allow*, which adds that Python to the item. An item that the `security`
+command writes trusts, in the same way, the `security` command, the same
+program of the system whatever Python runs osheaf; with
+`OPENSHEAF_KEY_STORE=security`, *Always Allow* is answered once for all.
+osheaf adds no other program itself: `-A` would let every program of the
+user read the key without asking, and a list of programs given with `-T`
+would name the Python binaries of environments that come and go.
+
+Hence the advice for running osheaf with `uvx` without installing it: name
+the Python, so that uv runs the same interpreter of its own every time
+(the environments of `uvx` link to it), and answer *Always Allow* once:
+
+```sh
+uvx --python 3.13 --from "opensheaf[validate,keys] @ git+https://github.com/opensheaf/opensheaf-py" osheaf ...
+```
+
+with `--refresh` to update osheaf. Without `--python`, uvx may pick another
+Python from one day to the next, and each one is asked anew; when uv
+updates its Python 3.13, the new one is asked once. Who prefers never to
+be asked keeps no key on the computer: `OPENSHEAF_KEY_STORE=none`, above.
+
 A retired key is no longer needed; `forget_current_key` removes it from
-every store.
+every store, and from the memory of the command.
 
     # in keys: where current keys are kept:
     def forget_current_key(owner, did):
@@ -351,6 +440,8 @@ every store.
                                capture_output=True)
             elif store == "file":
                 (key_folder(owner) / f"{kid}.key").unlink(missing_ok=True)
+            _SEEN[_slot(store, owner, kid)] = None
+        _SEEN.pop(_slot(NONE, owner, kid), None)
 
 Encrypting a seed
 -----------------

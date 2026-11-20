@@ -123,6 +123,9 @@ record (section 6.2); if it is taken in the archive, a new nonce is drawn
 (section 5.3). The first version of the key log is computed from the
 genesis record (section 6.1) and written into the storage root; the
 current key is kept in the system's credential store, under the owner name.
+With `OPENSHEAF_KEY_STORE=none` ([chapter 7](07-keys.md)) it is kept in the
+wallet only, and an owner without a wallet is refused: its current key
+would be lost when the command ends.
 
     # in create an owner:
     def owner_init(args):
@@ -144,6 +147,9 @@ current key is kept in the system's credential store, under the owner name.
                      "(or keep them in a wallet, a lower security level: --keys github:OWNER/REPO|command)")
         if w is not None and getattr(args, "no_passphrase", False):
             sys.exit("--no-passphrase: the keys in a wallet are always encrypted")
+        if w is None and not keys.kept_on_device():
+            sys.exit(f"{keys.KEY_STORE}=none keeps no current key on this computer: keep the keys in a "
+                     "wallet (--keys github:OWNER/REPO|command)")
         for did in others:
             try:
                 names.did_key_public(did)
@@ -171,7 +177,8 @@ current key is kept in the system's credential store, under the owner name.
             sys.exit(str(e))
         owners.write_key_log(obj_dir(log.id), log)
         print(f"owner {log.owner}")
-        print(f"current key of this device {current.did} (kept in {store})")
+        kept = f"{w.name} only, {keys.KEY_STORE}=none" if store == keys.NONE else store
+        print(f"current key of this device {current.did} (kept in {kept})")
         print("warning: " + owners.ROTATION_KEYS_WARNING, file=sys.stderr)
         return log
 
@@ -218,7 +225,8 @@ It is asked once per command, however many keys it encrypts or decrypts,
 naming the wallet whose keys it opens, if any:
 a rotation that reads the rotation keys from a wallet and keeps new ones
 there asks once. The command line forgets it when the command ends
-(`forget_passphrase`). A good place for it is a password manager, such as
+(`forget_passphrase`), together with what the command has read from the
+stores of current keys ([chapter 7](07-keys.md)). A good place for it is a password manager, such as
 the Passwords app of macOS: a different provider from the wallet, so that
 neither alone gives the keys.
 
@@ -253,6 +261,7 @@ neither alone gives the keys.
 
     def forget_passphrase():
         _ASKED.clear()
+        keys.forget_seen()
 
 ### The security level and the wallet
 
@@ -586,11 +595,14 @@ A new device makes its own current key, never copied from another
 (section 6.2): `osheaf key new` makes it, keeps it in the credential store
 under the owner name, and prints its `did:key`, which a new version of the
 key log adds to the current keys (`osheaf owner rotate --add`), with the
-rotation keys kept apart. Until then it signs nothing.
+rotation keys kept apart. Until then it signs nothing. With
+`OPENSHEAF_KEY_STORE=none`, which keeps no key on the device, it refuses.
 
     # in a new current key for this device:
     def key_new(args):
         owner = getattr(args, "owner", None) or ARCHIVE["owner"]
+        if not keys.kept_on_device():
+            sys.exit(NOT_KEPT)
         key = keys.new_key()
         try:
             store = keys.store_current_key(owner, key)
@@ -652,7 +664,9 @@ reads them there, without calling the wallet. Signing pulls them itself
 when this device holds too few current keys and a wallet is configured
 (`pull_from_wallet`, called by `signing_keys`): a new laptop signs at once,
 asking for the passphrase once. The command says what it pulls, and then
-in a sentence what this device holds.
+in a sentence what this device holds. With `OPENSHEAF_KEY_STORE=none`,
+nothing is pulled: the keys stay in the wallet by choice, and each command
+that signs opens them there.
 
     # in the commands of key wallets:
     def key_pull(args):
@@ -662,6 +676,9 @@ in a sentence what this device holds.
         if latest is None:
             sys.exit(f"the owner {owner} has ended (section 6.3)")
         w = wallet_for(args)
+        if not keys.kept_on_device():
+            print(not_kept(w, owner))
+            return
         try:
             have = {k.did for k in keys.current_keys(owner, latest.keys["keys"])}
         except keys.KeyStoreError as e:
@@ -671,7 +688,16 @@ in a sentence what this device holds.
 
 
     STORE_NAMES = {"keyring": "the keychain" if sys.platform == "darwin" else "the system keyring",
-                   "security": "the keychain", "file": "a file of this computer"}
+                   "security": "the keychain", "file": "a file of this computer",
+                   keys.NONE: "memory, for this command only"}
+    NOT_KEPT = (f"{keys.KEY_STORE}=none: no current key is kept on this computer, so a new one would be "
+                "lost when the command ends")
+
+
+    def not_kept(w, owner):
+        """The sentence that says why nothing is pulled with OPENSHEAF_KEY_STORE=none."""
+        return (f"The current keys of {names.short(owner)} are not kept on this computer, by choice "
+                f"({keys.KEY_STORE}=none): each command that signs opens them in {w.name}.")
 
 
     def pull_current_keys(w, owner, dids):
@@ -935,7 +961,9 @@ ends with one sentence on the standard output.
 `osheaf key unlock` opens with the passkey the keys of the owner that it
 can open, which checks that the enrollment works, and, in an archive,
 keeps on this device the current keys of the latest version of the key
-log that it does not hold, as `osheaf key pull` does, with one Touch ID.
+log that it does not hold, as `osheaf key pull` does, with one Touch ID
+(with `OPENSHEAF_KEY_STORE=none`, it says that they are not kept, by
+choice).
 It never falls back to the passphrase: it is the passkey that it tries.
 It says how many keys the passkey opened, and what this device holds.
 
@@ -960,7 +988,9 @@ It says how many keys the passkey opened, and what this device holds.
             print(f"{opened} of the {n} keys of {who} opened with your passkey; the others need the passphrase.")
         log = key_log(owner) if ROOT is not None else None
         latest = log.latest() if log is not None else None
-        if latest is not None:
+        if latest is not None and not keys.kept_on_device():
+            print(not_kept(w, owner))
+        elif latest is not None:
             try:
                 have = {k.did for k in keys.current_keys(owner, latest.keys["keys"])}
             except keys.KeyStoreError as e:
@@ -1021,7 +1051,8 @@ for the passphrase if it is encrypted, and keeps the key on this device. A
 rotation key is refused: it is never kept on a device, but read from its
 file or its wallet when it signs. A key that the latest version of the key
 log does not list is kept with a warning: it signs nothing until a version
-adds it.
+adds it. With `OPENSHEAF_KEY_STORE=none` it refuses, as `osheaf key new`
+does.
 
     # in a key to and from a password manager:
     def key_import(args):
@@ -1029,6 +1060,8 @@ adds it.
         from . import wallet
         if bool(getattr(args, "clipboard", False)) == bool(getattr(args, "stdin", False)):
             sys.exit("give --clipboard or --stdin")
+        if not keys.kept_on_device():
+            sys.exit(NOT_KEPT)
         try:
             text = wallet.from_clipboard() if args.clipboard else sys.stdin.read()
         except wallet.WalletError as e:

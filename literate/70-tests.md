@@ -122,6 +122,7 @@ differ from those of the other tests, and the same at every run.
         monkeypatch.delenv(keys.SIGNING_KEY, raising=False)
         monkeypatch.delenv(P.PASSPHRASE, raising=False)
         monkeypatch.delenv(wallet.WALLET, raising=False)
+        keys.forget_seen()
         monkeypatch.setattr(wallet, "GH", "/nonexistent/gh")
         monkeypatch.setattr(wallet, "COPY", ["/nonexistent/pbcopy"])
         monkeypatch.setattr(wallet, "PASTE", ["/nonexistent/pbpaste"])

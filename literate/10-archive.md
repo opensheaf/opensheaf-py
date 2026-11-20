@@ -918,7 +918,8 @@ log: in `OPENSHEAF_SIGNING_KEY`, in the credential store, or in a file of
 the user's configuration ([chapter 7](07-keys.md)). A device that holds
 fewer than `threshold` of them, in an archive with a key wallet, pulls the
 others from the wallet ([chapter 19](19-owner-commands.md)), and keeps them,
-so that it calls the wallet once. A device holding fewer
+so that it calls the wallet once (with `OPENSHEAF_KEY_STORE=none`, in the
+memory of the command only, so that each command calls it once). A device holding fewer
 than `threshold` of them cannot sign alone: an owner whose threshold needs
 the keys of several members (section 6.2) signs on one device holding them
 all, which these tools do not yet organise otherwise.
@@ -943,8 +944,10 @@ all, which these tools do not yet organise otherwise.
         if len(found) < need and not os.environ.get(keys.SIGNING_KEY):
             found = pull_from_wallet(owner, latest, found)
         if len(found) < need:
+            hint = ("configure a key wallet, from which each command opens them" if not keys.kept_on_device()
+                    else "osheaf key new makes one for this device")
             sys.exit(f"this device holds {len(found)} of the current keys of {owner}, and v{latest.number} "
-                     f"of its key log needs {need} to sign (osheaf key new makes one for this device)")
+                     f"of its key log needs {need} to sign ({hint})")
         return log, latest, found
 
 The witness files of a version, by name: the signature files and anything

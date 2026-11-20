@@ -46,6 +46,33 @@ validator; without the first two, it says which schema checks it skipped.
 Depositing TeXmacs documents needs [GNU TeXmacs](https://www.texmacs.org) (`TEXMACS_BIN`, by default the macOS
 application).
 
+### Running without installing
+
+[uv](https://docs.astral.sh/uv/) runs `osheaf` without installing it. Name
+the Python, so that uv uses the same interpreter of its own every time:
+
+```
+uvx --python 3.13 --from "opensheaf[validate,keys] @ git+https://github.com/opensheaf/opensheaf-py" osheaf ...
+uvx --refresh --python 3.13 --from "opensheaf[validate,keys] @ git+https://github.com/opensheaf/opensheaf-py" osheaf ...   # to update
+```
+
+or, once, in your shell's configuration:
+
+```
+alias osheaf='uvx --python 3.13 --from "opensheaf[validate,keys] @ git+https://github.com/opensheaf/opensheaf-py" osheaf'
+```
+
+The extra `keys` installs keyring, which keeps the current keys in the
+macOS keychain. The keychain lets the program that wrote a key read it
+without asking, and asks for any other: "python3.13 wants to use your
+confidential information stored in opensheaf-current-key". Answer **Always
+Allow** (with your login password), and that Python is never asked again.
+A Python that changes, as it does when uvx picks whichever one it finds,
+is asked anew, which is why the line above names one. osheaf reads each key
+at most once per command, so it asks at most once per command and key. If
+you would rather not keep the current key on the computer at all, set
+`OPENSHEAF_KEY_STORE=none` ([Keys and security levels](#keys-and-security-levels)).
+
 ## A walk through
 
 An archive, from its creation to a DOI. The owner is made with the archive:
@@ -181,6 +208,19 @@ archive. The passphrase is asked once per command, or taken from
 manager through the clipboard: `osheaf key export --clipboard` (paste it
 into a note of the Passwords app; `--encrypt` encrypts it under the
 passphrase) and, on another machine, `osheaf key import --clipboard`.
+
+Where a machine keeps its current keys is `OPENSHEAF_KEY_STORE`: by
+default the system's credential store (the macOS keychain, through the
+extra `keys`), else the keychain through the `security` command, else a
+file of `~/.config/opensheaf/keys` readable only by you; `keyring`,
+`security` or `file` uses that one alone. **`OPENSHEAF_KEY_STORE=none`**
+keeps no current key on the computer: each command that signs opens the
+key from the wallet, with your passkey (one Touch ID per command that
+signs) or the passphrase, and forgets it when it ends; `osheaf key pull`
+says that the keys are not kept on this computer, by choice. It suits
+development with `uvx`, whose Python environments come and go: the
+keychain never asks (see [Running without installing](#running-without-installing)).
+It needs a wallet.
 
 ### Passkey unlock
 

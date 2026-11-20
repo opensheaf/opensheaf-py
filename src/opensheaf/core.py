@@ -555,8 +555,10 @@ def signing_keys(owner):
     if len(found) < need and not os.environ.get(keys.SIGNING_KEY):
         found = pull_from_wallet(owner, latest, found)
     if len(found) < need:
+        hint = ("configure a key wallet, from which each command opens them" if not keys.kept_on_device()
+                else "osheaf key new makes one for this device")
         sys.exit(f"this device holds {len(found)} of the current keys of {owner}, and v{latest.number} "
-                 f"of its key log needs {need} to sign (osheaf key new makes one for this device)")
+                 f"of its key log needs {need} to sign ({hint})")
     return log, latest, found
 
 
@@ -2846,6 +2848,7 @@ def passphrase(confirm=True, where=None):
 
 def forget_passphrase():
     _ASKED.clear()
+    keys.forget_seen()
 
 
 def archive_repositories():
@@ -3016,6 +3019,9 @@ def owner_init(args):
                  "(or keep them in a wallet, a lower security level: --keys github:OWNER/REPO|command)")
     if w is not None and getattr(args, "no_passphrase", False):
         sys.exit("--no-passphrase: the keys in a wallet are always encrypted")
+    if w is None and not keys.kept_on_device():
+        sys.exit(f"{keys.KEY_STORE}=none keeps no current key on this computer: keep the keys in a "
+                 "wallet (--keys github:OWNER/REPO|command)")
     for did in others:
         try:
             names.did_key_public(did)
@@ -3043,7 +3049,8 @@ def owner_init(args):
         sys.exit(str(e))
     owners.write_key_log(obj_dir(log.id), log)
     print(f"owner {log.owner}")
-    print(f"current key of this device {current.did} (kept in {store})")
+    kept = f"{w.name} only, {keys.KEY_STORE}=none" if store == keys.NONE else store
+    print(f"current key of this device {current.did} (kept in {kept})")
     print("warning: " + owners.ROTATION_KEYS_WARNING, file=sys.stderr)
     return log
 
@@ -3164,6 +3171,8 @@ def owner_show(args):
 
 def key_new(args):
     owner = getattr(args, "owner", None) or ARCHIVE["owner"]
+    if not keys.kept_on_device():
+        sys.exit(NOT_KEPT)
     key = keys.new_key()
     try:
         store = keys.store_current_key(owner, key)
@@ -3213,6 +3222,9 @@ def key_pull(args):
     if latest is None:
         sys.exit(f"the owner {owner} has ended (section 6.3)")
     w = wallet_for(args)
+    if not keys.kept_on_device():
+        print(not_kept(w, owner))
+        return
     try:
         have = {k.did for k in keys.current_keys(owner, latest.keys["keys"])}
     except keys.KeyStoreError as e:
@@ -3222,7 +3234,16 @@ def key_pull(args):
 
 
 STORE_NAMES = {"keyring": "the keychain" if sys.platform == "darwin" else "the system keyring",
-               "security": "the keychain", "file": "a file of this computer"}
+               "security": "the keychain", "file": "a file of this computer",
+               keys.NONE: "memory, for this command only"}
+NOT_KEPT = (f"{keys.KEY_STORE}=none: no current key is kept on this computer, so a new one would be "
+            "lost when the command ends")
+
+
+def not_kept(w, owner):
+    """The sentence that says why nothing is pulled with OPENSHEAF_KEY_STORE=none."""
+    return (f"The current keys of {names.short(owner)} are not kept on this computer, by choice "
+            f"({keys.KEY_STORE}=none): each command that signs opens them in {w.name}.")
 
 
 def pull_current_keys(w, owner, dids):
@@ -3460,7 +3481,9 @@ def key_unlock(args):
         print(f"{opened} of the {n} keys of {who} opened with your passkey; the others need the passphrase.")
     log = key_log(owner) if ROOT is not None else None
     latest = log.latest() if log is not None else None
-    if latest is not None:
+    if latest is not None and not keys.kept_on_device():
+        print(not_kept(w, owner))
+    elif latest is not None:
         try:
             have = {k.did for k in keys.current_keys(owner, latest.keys["keys"])}
         except keys.KeyStoreError as e:
@@ -3510,6 +3533,8 @@ def key_import(args):
     from . import wallet
     if bool(getattr(args, "clipboard", False)) == bool(getattr(args, "stdin", False)):
         sys.exit("give --clipboard or --stdin")
+    if not keys.kept_on_device():
+        sys.exit(NOT_KEPT)
     try:
         text = wallet.from_clipboard() if args.clipboard else sys.stdin.read()
     except wallet.WalletError as e:

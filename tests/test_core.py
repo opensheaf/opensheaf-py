@@ -20,6 +20,7 @@ def keys_of_the_tests(tmp_path, monkeypatch, request):
     monkeypatch.delenv(keys.SIGNING_KEY, raising=False)
     monkeypatch.delenv(P.PASSPHRASE, raising=False)
     monkeypatch.delenv(wallet.WALLET, raising=False)
+    keys.forget_seen()
     monkeypatch.setattr(wallet, "GH", "/nonexistent/gh")
     monkeypatch.setattr(wallet, "COPY", ["/nonexistent/pbcopy"])
     monkeypatch.setattr(wallet, "PASTE", ["/nonexistent/pbpaste"])

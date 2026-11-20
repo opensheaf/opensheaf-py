@@ -13,7 +13,9 @@ integration); the credential store, through the package keyring, under
 the service opensheaf-current-key and the account <owner>:<k>; on macOS
 the keychain directly, under the same names; and the file
 ~/.config/opensheaf/keys/<owner>/<k>.key, readable only by its owner.
-OPENSHEAF_KEY_STORE=keyring|security|file uses that store alone."""
+OPENSHEAF_KEY_STORE=keyring|security|file uses that store alone;
+OPENSHEAF_KEY_STORE=none keeps current keys in the memory of a command only,
+opened from the key wallet by each command that signs."""
 
 import base64
 import binascii
@@ -94,15 +96,21 @@ SERVICE = "opensheaf-current-key"
 SIGNING_KEY = "OPENSHEAF_SIGNING_KEY"
 KEY_STORE = "OPENSHEAF_KEY_STORE"
 STORES = ("keyring", "security", "file")
+NONE = "none"
 
 
 def _stores():
     pinned = os.environ.get(KEY_STORE)
     if pinned:
-        if pinned not in STORES:
-            raise KeyStoreError(f"{KEY_STORE} is one of {', '.join(STORES)}")
-        return [pinned]
+        if pinned not in STORES + (NONE,):
+            raise KeyStoreError(f"{KEY_STORE} is one of {', '.join(STORES + (NONE,))}")
+        return [] if pinned == NONE else [pinned]
     return list(STORES)
+
+
+def kept_on_device():
+    """Whether current keys are kept on this device (unless OPENSHEAF_KEY_STORE=none)."""
+    return os.environ.get(KEY_STORE) != NONE
 
 
 def _account(owner, kid):
@@ -115,7 +123,28 @@ def key_folder(owner):
     return Path(base) / "opensheaf" / "keys" / owner
 
 
+_SEEN = {}
+
+
+def forget_seen():
+    """Forget what this command has read from the stores, and the keys held in memory only."""
+    _SEEN.clear()
+
+
+def _slot(store, owner, kid):
+    return (store, str(key_folder(owner)) if store == "file" else "", owner, kid)
+
+
+def _lookup(store, owner, kid):
+    slot = _slot(store, owner, kid)
+    if slot not in _SEEN:
+        _SEEN[slot] = _read(store, owner, kid)
+    return _SEEN[slot]
+
+
 def _read(store, owner, kid):
+    if store == NONE:
+        return None
     if store == "keyring":
         try:
             import keyring
@@ -155,8 +184,8 @@ def current_keys(owner, keys):
     found = []
     for did in keys:
         kid = names.key_id(did)
-        for store in _stores():
-            text = _read(store, owner, kid)
+        for store in _stores() + [NONE]:
+            text = _lookup(store, owner, kid)
             if text:
                 key = key_from_base64(text, f"{store} {_account(owner, kid)}")
                 if key.did != did:
@@ -167,19 +196,26 @@ def current_keys(owner, keys):
 
 
 def store_current_key(owner, key, store=None):
-    """Keep the current key KEY of OWNER on this device; returns the name of the store used."""
+    """Keep the current key KEY of OWNER on this device; returns the name of the store used
+    ("none": in the memory of this command only)."""
     text = base64.b64encode(key.seed).decode("ascii")
-    for s in ([store] if store else _stores()):
-        if _write(s, owner, key.id, text) and _read(s, owner, key.id) == text:
+    for s in ([store] if store else _stores() or [NONE]):
+        if _write(s, owner, key.id, text):
+            _SEEN[_slot(s, owner, key.id)] = text
             return s
     raise KeyStoreError(f"no store kept the key {key.did}")
 
 
 def _write(store, owner, kid, text):
     account = _account(owner, kid)
+    if store == NONE:
+        return True
     if store == "keyring":
         try:
             import keyring
+            from keyring.backends import null
+            if isinstance(keyring.get_keyring(), null.Keyring):
+                return False
             keyring.set_password(SERVICE, account, text)
             return True
         except Exception:
@@ -216,6 +252,8 @@ def forget_current_key(owner, did):
                            capture_output=True)
         elif store == "file":
             (key_folder(owner) / f"{kid}.key").unlink(missing_ok=True)
+        _SEEN[_slot(store, owner, kid)] = None
+    _SEEN.pop(_slot(NONE, owner, kid), None)
 
 
 OPSLIMIT, MEMLIMIT = pwhash.argon2id.OPSLIMIT_MODERATE, pwhash.argon2id.MEMLIMIT_MODERATE

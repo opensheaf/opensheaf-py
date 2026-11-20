@@ -99,6 +99,7 @@ def doubles(tmp_path, monkeypatch, request):
     monkeypatch.setenv(keys.TEST_KEYS, ",".join(f"{request.node.name} {i}" for i in range(80)))
     monkeypatch.setattr(keys, "OPSLIMIT", FAST["opslimit"])
     monkeypatch.setattr(keys, "MEMLIMIT", FAST["memlimit"])
+    keys.forget_seen()
     gh = tmp_path / "gh-state"
     gh.mkdir()
     (gh / "repos.json").write_text(json.dumps({"me/keys": True, "me/open": False, "me/papers": True}))
@@ -603,3 +604,95 @@ def test_passphrase_command(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr("getpass.getpass", lambda prompt: asked.append(prompt) or "correct horse")
     run(*r, "key", "pull")
     assert len(asked) == 1 and "gave no passphrase" in capsys.readouterr().err
+
+
+def counting_store(monkeypatch, held):
+    """A double of keyring, HELD ({(owner, kid): seed text}), whose reads are counted."""
+    reads = []
+    read, write = keys._read, keys._write
+
+    def fake_read(store, owner, kid):
+        if store != "keyring":
+            return read(store, owner, kid)
+        reads.append((owner, kid))
+        return held.get((owner, kid))
+
+    def fake_write(store, owner, kid, text):
+        if store != "keyring":
+            return write(store, owner, kid, text)
+        held[(owner, kid)] = text
+        return True
+
+    monkeypatch.setattr(keys, "_read", fake_read)
+    monkeypatch.setattr(keys, "_write", fake_write)
+    monkeypatch.setenv(keys.KEY_STORE, "keyring")
+    return reads
+
+
+def test_one_read_per_key_and_command(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv(P.PASSPHRASE, "correct horse")
+    opened = []
+    monkeypatch.setattr(passkey, "OPEN", fake_browser(opened))
+    root = make_archive(tmp_path, "--keys", "github:me/keys")
+    owner = P.ARCHIVE["owner"]
+    current = P.key_log(owner).latest().keys["keys"][0]
+    kid = names.key_id(current)
+    r = ["--root", str(root)]
+    run(*r, "key", "enroll")
+    seed = (tmp_path / "config" / "opensheaf" / "keys" / owner / f"{kid}.key").read_text().strip()
+    held = {(owner, kid): seed}
+    reads = counting_store(monkeypatch, held)
+    for command in (["key", "unlock"], ["key", "pull"], ["owner", "show"]):
+        reads.clear()
+        run(*r, *command)
+        assert reads == [(owner, kid)], command
+    reads.clear()
+    deposit(root, "p", "one", new=True)
+    deposit(root, "p", "two")
+    assert reads == [(owner, kid)] * 2
+    for command in (["key", "unlock"], ["key", "pull"]):
+        del held[(owner, kid)]
+        reads.clear()
+        run(*r, *command)
+        assert reads == [(owner, kid)] and (owner, kid) in held, command
+    del held[(owner, kid)]
+    reads.clear()
+    deposit(root, "p", "three")
+    assert reads == [(owner, kid)] and (owner, kid) in held
+    reads.clear()
+    run(*r, "key", "forget", current)
+    assert reads == []
+    assert P.verify_errors() == []
+
+
+def test_no_key_store(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv(P.PASSPHRASE, "correct horse")
+    opened = []
+    monkeypatch.setattr(passkey, "OPEN", fake_browser(opened))
+    root = make_archive(tmp_path, "--keys", "github:me/keys")
+    owner = P.ARCHIVE["owner"]
+    current = P.key_log(owner).latest().keys["keys"][0]
+    r = ["--root", str(root)]
+    run(*r, "key", "enroll")
+    run(*r, "key", "forget", current)
+    monkeypatch.delenv(P.PASSPHRASE)
+    monkeypatch.setattr("getpass.getpass", lambda prompt: pytest.fail("the passphrase was asked"))
+    reads = counting_store(monkeypatch, {})
+    monkeypatch.setenv(keys.KEY_STORE, "none")
+    capsys.readouterr()
+    run(*r, "key", "pull")
+    out = capsys.readouterr().out
+    assert "not kept on this computer, by choice (OPENSHEAF_KEY_STORE=none)" in out
+    run(*r, "key", "unlock")
+    assert "not kept on this computer, by choice" in capsys.readouterr().out
+    with pytest.raises(SystemExit, match="OPENSHEAF_KEY_STORE=none"):
+        run(*r, "key", "new")
+    unlocks = len([q for q in opened if q.get("mode") == "unlock"])
+    deposit(root, "p", "one", new=True)
+    deposit(root, "p", "two")
+    assert len([q for q in opened if q.get("mode") == "unlock"]) == unlocks + 2
+    assert "memory, for this command only" in capsys.readouterr().err
+    assert reads == [] and local_keys(tmp_path, owner) == [] and P.verify_errors() == []
+    monkeypatch.setattr(P, "configured_wallet", lambda: None)
+    with pytest.raises(SystemExit, match="configure a key wallet"):
+        deposit(root, "p", "three")
