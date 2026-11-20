@@ -195,12 +195,12 @@ osheaf key unlock        # on another Mac: Touch ID, and the current keys are pu
 `osheaf key enroll` asks the passphrase once, then opens the page
 <https://opensheaf.org/manager/unlock.html> in the browser, which creates a
 passkey for `opensheaf.org` ("OpenSheaf owner …") and derives a secret from
-it (the WebAuthn PRF extension; Safari, Chrome and Firefox, with iCloud
+it (the WebAuthn PRF extension; Safari 17+, Chrome 133+ or Firefox 130+, with iCloud
 Keychain, Google Password Manager, 1Password or a security key that
-supports it). The page hands the secret to `osheaf` on your own computer
-(a form posted to `http://127.0.0.1:<port>`, a listener that answers once,
-to the one page it opened), and every key of the owner in the wallet gets
-a second lock, under that secret, besides the passphrase. From then on,
+supports it). The page hands the secret to `osheaf` on your own computer,
+by going to `http://127.0.0.1:<port>/callback`, a listener that answers
+once, to the one page it opened; and every key of the owner in the wallet
+gets a second lock, under that secret, besides the passphrase. From then on,
 whenever `osheaf` needs a key of the wallet, it opens the page, which asks
 you to click *Unlock* and then for Touch ID; a passkey in iCloud Keychain
 is on all your Macs. Run `osheaf key enroll` again after a rotation that
@@ -208,7 +208,7 @@ did not unlock with the passkey, so that it opens the new keys too.
 
 The passphrase stays the way back: `osheaf` asks for it when the page
 reports an error, after two minutes without an answer, when you press
-Ctrl-C at "waiting for the browser", and always with
+Ctrl-C at "Waiting for the browser…", and always with
 `OPENSHEAF_UNLOCK=passphrase` or `OPENSHEAF_PASSPHRASE` set (scripts).
 `OPENSHEAF_PASSPHRASE_COMMAND` names a command that prints it, run before
 it is asked, e.g. `security find-generic-password -w -s
@@ -222,6 +222,16 @@ JavaScript, no other server), which sees the secret, and the browser. The
 secret opens the wallet only together with the wallet's files, which stay
 behind your GitHub sign-in; it is never stored, by the page or by
 `osheaf`.
+
+The secret never travels in clear, not even to `127.0.0.1`: `osheaf` puts
+a one-time X25519 public key in the address of the page; the page makes
+its own one-time X25519 key pair, and sends back its public key and the
+secret XOR HKDF-SHA256 of the shared X25519 secret (with the state of the
+request as the salt). Only `osheaf`, while it waits, can open it. It is
+not a form: Safari warns that a form sent from an `https` page to
+`http://127.0.0.1` is "a non-secure form", and the address that the page
+goes to instead stays in the browser's history; it holds only a ciphertext,
+useless once `osheaf` has ended and forgotten its key.
 
 ## An archive
 

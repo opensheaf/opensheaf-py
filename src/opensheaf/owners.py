@@ -467,7 +467,8 @@ class KeyLog:
                 warnings.append(f"{where}/{j.file}: {j.status}: {j.reason}")
         need = prev.keys["nextThreshold"]
         if len(good) < need:
-            return [f"signed by {len(good)} rotation key(s) of v{prev.number}, which needs {need} (section 6.1)"]
+            return [f"signed by {len(good)} rotation key{'' if len(good) == 1 else 's'} of v{prev.number}, "
+                    f"which needs {need} (section 6.1)"]
         return []
 
     def _fork_record_problems(self, fr, side):
@@ -686,8 +687,8 @@ def describe(log):
         k = v.keys or {}
         what = ("fork record, carrying " + ", ".join(f"v{c.number}" for c in v.carried) if v.fork_record
                 else "ended" + (f", successor {k['successor']}" if k.get("successor") else "") if k.get("ended")
-                else f"{len(k.get('keys', []))} current key(s), threshold {k.get('threshold')}, "
-                     f"{len(k.get('next', []))} rotation key(s), nextThreshold {k.get('nextThreshold')}"
+                else f"{_count(k.get('keys', []), 'current key')}, threshold {k.get('threshold')}, "
+                     f"{_count(k.get('next', []), 'rotation key')}, nextThreshold {k.get('nextThreshold')}"
                      + (f", exposes {len(k['exposed'])}" if k.get("exposed") else ""))
         mark = "" if v.is_version else " (not a version)"
         out.append(f"v{v.number} {v.digest[:16]}  {what}{mark}")
@@ -701,6 +702,10 @@ def describe(log):
     out += [f"exposed {did}" for did in sorted(log.exposed_keys())]
     out += [f"error: {e}" for e in errors] + [f"warning: {w}" for w in warnings]
     return out
+
+
+def _count(items, noun):
+    return f"{len(items)} {noun}" + ("" if len(items) == 1 else "s")
 
 
 def load_key_log(obj_dir):

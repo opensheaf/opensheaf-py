@@ -189,6 +189,18 @@ the signature files without listing a folder.
         """The 16 characters naming the signature file of a key, signature-<k>.json (section 7.2)."""
         return key_digest(did)[:16]
 
+A person reads a long name more easily shortened, in a line that says
+what a command is doing: an owner name or a `did:key` is shown by its
+first 8 and last 4 characters (the `did:key:` prefix left out), which tell
+apart the few names of one user. A result, which may be copied, shows the
+name in full.
+
+    # in names: did:key URIs and the digests of keys:
+    def short(name):
+        """NAME, an owner name or a did:key URI, shortened for a person: its first 8 and last 4 characters."""
+        name = name[len("did:key:"):] if name.startswith("did:key:") else name
+        return name if len(name) <= 14 else f"{name[:8]}…{name[-4:]}"
+
 Genesis records
 ---------------
 

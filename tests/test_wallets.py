@@ -14,6 +14,7 @@ from pathlib import Path
 
 import pytest
 from nacl import pwhash
+from nacl.public import PrivateKey
 
 from opensheaf import cli, core as P, keys, names, owners, passkey, wallet
 
@@ -228,13 +229,13 @@ def test_push_pull_list(tmp_path, monkeypatch, capsys):
     assert local_keys(tmp_path, owner) == []
     run(*r, "key", "pull", "--keys", "github:me/keys")
     assert local_keys(tmp_path, owner) == [f"{kid}.key"]
-    assert "1 current key(s)" in capsys.readouterr().out
+    assert "Pulled 1 current key of" in capsys.readouterr().out
     run(*r, "key", "forget", current)
     with pytest.raises(SystemExit, match="holds 0 of the current keys"):
         deposit(root, "p", "one", new=True)
     monkeypatch.setenv(wallet.WALLET, "github:me/keys")
     deposit(root, "p", "one", new=True)
-    assert "pulled from github:me/keys" in capsys.readouterr().err
+    assert "Pulling the current key of " in capsys.readouterr().err
     assert local_keys(tmp_path, owner) == [f"{kid}.key"] and P.verify_errors() == []
     assert seed not in capsys.readouterr().out
 
@@ -260,7 +261,7 @@ def test_owner_in_a_github_wallet(tmp_path, monkeypatch, capsys):
     laptop = P.key_new(P.argparse_namespace(owner=None)).did
     run(*r, "owner", "rotate", "--add", laptop, "--keys", "github:me/keys")
     out2, err2 = capsys.readouterr()
-    assert "rotation key(s) of v1 read from github:me/keys" in err2
+    assert "Read 2 rotation keys of v1 from github:me/keys." in err2
     v2 = P.key_log(owner).latest().keys
     assert laptop in v2["keys"] and {f"{owner}/{d[:16]}.key.enc" for d in v2["next"]} < set(in_repo(tmp_path))
     assert f"{owner}/{names.key_id(laptop)}.key.enc" in in_repo(tmp_path)
@@ -399,6 +400,27 @@ def test_passkey_key_files():
         keys.add_passkey(keys.key_file_text(k, owner, keys.CURRENT), None, pk)
 
 
+HAND_OFF = {"sk": "3MnQ1WVJ9j-gIHW04onidnPAdXBkj8Ex38awjc_xIFU", "pk": "EDUGNAoWiXZye3oZT1uexqCDj6g-_pOiwL6N01HzQX0",
+            "esk": "XsIioGnOBETGr9GuOkvzh0s9Mnee8lz8KkfLHClLxGc", "epk": "wz_hpV5NNJh92Eqb4TE6dA7IVbA2LrWBmV8GisGgjBE",
+            "state": "Zaz8C5ywR4VKbNOX7dQHUg", "secret": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+            "ct": "zFOj0v4rRRRpaSyM_xRgRRWo-SH_pdvdYHDVc--it4k"}
+
+
+def test_hand_off_vector():
+    v = {k: passkey.from_b64url(x) if k != "state" else x for k, x in HAND_OFF.items()}
+    sk, esk = PrivateKey(v["sk"]), PrivateKey(v["esk"])
+    assert bytes(sk.public_key) == v["pk"] and bytes(esk.public_key) == v["epk"]
+    assert v["secret"] == bytes(range(32))
+    assert passkey.seal(v["secret"], v["pk"], v["state"], esk) == (v["epk"], v["ct"])
+    assert passkey.unseal(sk, v["epk"], v["ct"], v["state"]) == v["secret"]
+    assert passkey.unseal(sk, v["epk"], v["ct"], "another state") != v["secret"]
+    assert passkey.unseal(esk, v["pk"], v["ct"], v["state"]) == v["secret"]
+    assert passkey.hkdf(b"\x0b" * 22, bytes(range(13)), bytes(range(0xf0, 0xfa)), 42).hex() == (
+        "3cb25f25faacd57a90434f64d0362f2a2d2d0a90cf1a5a4c5db02d56ecc4c5bf34007208d5b887185865")
+    with pytest.raises(ValueError):
+        passkey.unseal(sk, v["epk"], v["ct"][:16], v["state"])
+
+
 def fake_browser(opened, answer="secret", cred="ZmFrZS1wYXNza2V5LWNyZWRlbnRpYWw"):
     def opener(url):
         assert url.startswith(passkey.PAGE + "?")
@@ -410,21 +432,22 @@ def fake_browser(opened, answer="secret", cred="ZmFrZS1wYXNza2V5LWNyZWRlbnRpYWw"
         assert salt == keys.passkey_salt(q["owner"])
         used = cred if q["mode"] == "enroll" else q["cred"].split(",")[0]
         fields = {"state": q["state"] if answer != "wrong state" else "W" * 22}
-        if answer == "error":
-            fields["error"] = "NotAllowedError: the user cancelled"
+        if answer in ("error", "x25519-unavailable"):
+            fields["error"] = "NotAllowedError: the user cancelled" if answer == "error" else answer
         else:
-            fields.update(cred=used, secret=passkey.b64url(names.sha256(b"fake prf " + used.encode() + salt)))
+            prf = names.sha256(b"fake prf " + used.encode() + salt)
+            epk, ct = passkey.seal(prf, passkey.from_b64url(q["pk"]), q["state"])
+            fields.update(epk=passkey.b64url(epk), ct=passkey.b64url(ct), cred=used)
+        to = f"http://127.0.0.1:{q['port']}/callback?" + urllib.parse.urlencode(fields)
 
-        def post():
-            req = urllib.request.Request(f"http://127.0.0.1:{q['port']}/callback",
-                                         data=urllib.parse.urlencode(fields).encode(),
-                                         headers={"Content-Type": "application/x-www-form-urlencoded"})
+        def go():
+            opened.append({"went": to})
             try:
-                urllib.request.build_opener(urllib.request.ProxyHandler({})).open(req, timeout=5).read()
+                urllib.request.build_opener(urllib.request.ProxyHandler({})).open(to, timeout=5).read()
             except urllib.error.HTTPError as e:
                 opened.append({"status": e.code})
 
-        threading.Thread(target=post, daemon=True).start()
+        threading.Thread(target=go, daemon=True).start()
         return True
     return opener
 
@@ -446,23 +469,38 @@ def test_enroll_and_unlock(tmp_path, monkeypatch, capsys):
     r = ["--root", str(root)]
     capsys.readouterr()
     run(*r, "key", "enroll")
-    assert len(asked) == 1 and [q["mode"] for q in opened] == ["enroll"] and opened[0]["owner"] == owner
+    assert len(asked) == 1 and [q["mode"] for q in opened if "mode" in q] == ["enroll"]
+    assert opened[0]["owner"] == owner and len(passkey.from_b64url(opened[0]["pk"])) == 32
+    assert asked == ["Passphrase of the keys in github:me/keys: "]
+    out, err = capsys.readouterr()
+    short = names.short(owner)
+    assert out == f"Done: the 4 keys of {short} open with your passkey (Touch ID) and still with your passphrase.\n"
+    assert f"Opening the 4 keys of {short} in github:me/keys with the passphrase…" in err
+    assert "  1/4 " in err and "  4/4 " in err and "Saving the 4 keys to github:me/keys…" in err
+    assert "Opening the browser to create a passkey for" in err and "Still waiting" not in err
+    assert passkey.PAGE not in err and "(s)" not in out + err
+    went = [q["went"] for q in opened if "went" in q]
+    assert "secret" not in went[0] and "&ct=" in went[0]
     files = in_repo(tmp_path)
     assert len(files) == 4 and all("encryption envelope-secretbox\nwrap passphrase argon2id" in t
                                    and "wrap passkey prf rp=opensheaf.org cred=ZmFrZS1w" in t for t in files.values())
     run(*r, "key", "enroll")
-    assert "already" in capsys.readouterr().out and len(opened) == 1 and len(asked) == 1
+    assert "already" in capsys.readouterr().out and len(opened) == 2 and len(asked) == 1
     run(*r, "key", "forget", current)
     monkeypatch.setattr("getpass.getpass", lambda prompt: pytest.fail("the passphrase was asked"))
+    capsys.readouterr()
     run(*r, "key", "unlock")
-    assert opened[-1]["mode"] == "unlock" and opened[-1]["cred"] == "ZmFrZS1wYXNza2V5LWNyZWRlbnRpYWw"
+    assert opened[-2]["mode"] == "unlock" and opened[-2]["cred"] == "ZmFrZS1wYXNza2V5LWNyZWRlbnRpYWw"
     assert local_keys(tmp_path, owner) == [f"{names.key_id(current)}.key"]
     out, err = capsys.readouterr()
-    assert "4 of the 4 key(s)" in out and "1 current key(s)" in out
+    assert out == (f"All 4 keys of {short} opened with your passkey.\n"
+                   f"Pulled 1 current key of {short} from github:me/keys into a file of this computer.\n")
+    run(*r, "key", "pull")
+    assert capsys.readouterr().out == f"The current key of {short} is already on this computer.\n"
     deposit(root, "p", "one", new=True)
     monkeypatch.setattr("getpass.getpass", lambda prompt: asked.append(prompt) or "correct horse")
     run(*r, "owner", "rotate", "--keys", "github:me/keys")
-    assert len(opened) == 3 and len(asked) == 2
+    assert len([q for q in opened if "mode" in q]) == 3 and len(asked) == 2
     v2 = P.key_log(owner).latest().keys
     new = [in_repo(tmp_path)[f"{owner}/{d[:16]}.key.enc"] for d in v2["next"]]
     assert all("wrap passkey" in t for t in new) and P.verify_errors() == []
@@ -485,17 +523,17 @@ def test_unlock_falls_back_to_the_passphrase(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr("getpass.getpass", lambda prompt: asked.append(prompt) or "correct horse")
     capsys.readouterr()
     for answer, said in (("error", "the page says: NotAllowedError"), ("wrong state", "no answer"),
-                         ("none", "no answer")):
+                         ("none", "no answer"), ("x25519-unavailable", "Safari 17+")):
         run(*r, "key", "forget", current)
         monkeypatch.setattr(passkey, "OPEN", fake_browser(opened, answer))
         run(*r, "key", "pull")
         assert said in capsys.readouterr().err and local_keys(tmp_path, owner) != []
-    assert len(asked) == 3 and {"status": 403} in opened
+    assert len(asked) == 4 and {"status": 403} in opened
     run(*r, "key", "forget", current)
     monkeypatch.setenv(passkey.UNLOCK, "passphrase")
     monkeypatch.setattr(passkey, "OPEN", lambda url: pytest.fail("a browser was opened"))
     run(*r, "key", "pull")
-    assert len(asked) == 4 and local_keys(tmp_path, owner) != []
+    assert len(asked) == 5 and local_keys(tmp_path, owner) != []
     monkeypatch.setattr(passkey, "OPEN", fake_browser(opened, "error"))
     with pytest.raises(SystemExit, match="did not unlock"):
         run(*r, "key", "unlock")
@@ -509,25 +547,46 @@ def test_listener():
         q = {k: v[0] for k, v in urllib.parse.parse_qs(urllib.parse.urlsplit(url).query).items()}
         o = urllib.request.build_opener(urllib.request.ProxyHandler({}))
         base = f"http://127.0.0.1:{q['port']}"
-        for path in (f"/other?state={q['state']}&error=x", f"/callback?state={q['state']}&secret=AAAA&error=x",
-                     f"/callback?state={q['state']}&error=no+passkey"):
+        s, short = q["state"], passkey.b64url(b"short")
+        for path in (f"/other?state={s}&error=x", f"/callback?state={s}&secret=AAAA&error=x",
+                     f"/callback?state={s}&epk=AAAA", f"/callback?state={s}&error=x&error=y",
+                     f"/callback?state={s}&epk={short}&ct={short}&cred=Y3JlZA&more=1", None,
+                     f"/callback?state={s}&epk={short}&ct={short}&cred=Y3JlZA"):
             try:
-                got.append(o.open(base + path, timeout=5).status)
+                data = b"state=" + s.encode() if path is None else None
+                got.append(o.open(base + (path or "/callback"), data=data, timeout=5).status)
             except urllib.error.HTTPError as e:
                 got.append(e.code)
         return True
 
     passkey.OPEN = opener
     try:
-        with pytest.raises(passkey.UnlockFailed, match="no passkey"):
+        with pytest.raises(passkey.UnlockFailed, match="damaged"):
             passkey.unlock(owner, ["Y3JlZA"])
     finally:
         passkey.OPEN = lambda url: pytest.fail("a browser was opened")
-    assert got == [404, 404, 200]
+    assert got == [404, 400, 400, 400, 400, 501, 200]
     with pytest.raises(passkey.UnlockFailed, match="32 bytes"):
-        passkey._answer({"state": "s", "secret": passkey.b64url(b"short"), "cred": "Y3JlZA"})
+        passkey._answer({"secret": b"short", "cred": "Y3JlZA"})
     with pytest.raises(passkey.UnlockFailed, match="another passkey"):
-        passkey._answer({"secret": passkey.b64url(bytes(32)), "cred": "b3RoZXI"}, ["Y3JlZA"])
+        passkey._answer({"secret": bytes(32), "cred": "b3RoZXI"}, ["Y3JlZA"])
+
+
+def test_the_address_when_no_browser_opens(monkeypatch, capsys):
+    owner = "56wo6cdpjsxk7ddgnqfp2quipfghukhtmvjuahvwzko7m4tkz3pa"
+    monkeypatch.setattr(passkey, "STILL", 0.2)
+    monkeypatch.setattr(passkey, "OPEN", lambda url: True)
+    with pytest.raises(passkey.UnlockFailed, match="no answer"):
+        passkey.unlock(owner, ["Y3JlZA"], timeout=0.5)
+    err = capsys.readouterr().err
+    assert err.index("Waiting for the browser") < err.index("Still waiting… if the browser did not open, go to:\n  "
+                                                             + passkey.PAGE + "?mode=unlock&")
+    monkeypatch.setattr(passkey, "OPEN", lambda url: pytest.fail("a browser was opened"))
+    with pytest.raises(passkey.UnlockFailed, match="no answer"):
+        passkey.unlock(owner, ["Y3JlZA"], timeout=0.3, no_browser=True)
+    err = capsys.readouterr().err
+    assert "Go to this address in your browser" in err and "Opening the browser" not in err
+    assert "Still waiting" not in err
 
 
 def test_passphrase_command(tmp_path, monkeypatch, capsys):

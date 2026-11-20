@@ -595,6 +595,9 @@ passkey itself: only a web page of the passkey's relying party can, here
     <<passkey: the page>>
 
 
+    <<passkey: the hand-off>>
+
+
     <<passkey: the listener>>
 
 
@@ -602,28 +605,58 @@ passkey itself: only a web page of the passkey's relying party can, here
 
 The way there and back is this. The command starts a *listener*, a small
 web server on `127.0.0.1` only, on a port chosen by the system, with a
-`state`, 128 random bits, which only this command and the page it opens
-know. It opens the browser at the page, with the port, the state, the
-owner, the PRF salt of the owner (chapter 7) and, to unlock, the
-credentials of its passkeys. The page says what is asked, waits until the
-user clicks, then calls WebAuthn: to enroll, it creates a passkey for
-`opensheaf.org` and derives its PRF secret; to unlock, it derives the
-secret of one of the passkeys named. It hands the secret back by
-submitting a form, `POST http://127.0.0.1:<port>/callback`, with the
-state, the credential and the secret, or an error. A form, and not
-`fetch`: browsers block a page of the web from reading a local server, but
-let it navigate there; the answer is a page of the listener, shown in the
-tab, which says that the tab can be closed.
+`state`, 128 random bits, and a one-time X25519 key pair, which only this
+command knows. It opens the browser at the page, with the port, the state,
+the public key of the pair, the owner, the PRF salt of the owner
+(chapter 7) and, to unlock, the credentials of its passkeys. The page says
+what is asked, waits until the user clicks, then calls WebAuthn: to
+enroll, it creates a passkey for `opensheaf.org` and derives its PRF
+secret; to unlock, it derives the secret of one of the passkeys named. It
+hands the secret back by going to `http://127.0.0.1:<port>/callback`, a
+`GET` whose query holds the state, the credential and the secret
+*encrypted to the listener* (the hand-off, below), or an error. The answer
+is a page of the listener, shown in the tab, which says that the tab can
+be closed.
+
+Why an address, and not `fetch` or a form. Browsers block a page of the
+web from reading a local server, but let it navigate there. A form posted
+there would carry the secret in the body of the request, out of the
+browser's history; but `http://127.0.0.1` is not `https`, and Safari stops
+a form of an `https` page that is sent to it with a warning that it is "a
+non-secure form", which is right in general, and would teach the user to
+dismiss it. A navigation is not a form, and draws no warning; but an
+address stays in the browser's history. So the secret is never in it, only
+a ciphertext that the one-time private key of the listener alone opens,
+and that key is forgotten when the command ends: in the history, the
+address is useless.
+
+The hand-off is an ephemeral Diffie-Hellman exchange, then a one-time pad.
+The page makes its own one-time X25519 key pair (WebCrypto), and derives
+the shared secret of its private key and the public key of the listener;
+HKDF-SHA256 (RFC 5869) of that shared secret, with the state (in UTF-8) as
+the salt and `opensheaf unlock hand-off v1` as the info, gives as many
+bytes as the PRF secret has, 32, and the ciphertext is the PRF secret XOR
+these bytes. The page sends its public key (`epk`) and the ciphertext
+(`ct`), in base64url; the listener derives the same bytes from its private
+key and `epk`, and recovers the secret. A key pair used once, for 32
+bytes, needs nothing more than XOR; a ciphertext changed on the way gives
+another secret, which opens no key. The credential is sent as it is: it is
+not secret, and the address of the page holds it already. A browser
+without X25519 in WebCrypto (before Safari 17, Chrome 133, Firefox 130)
+sends nothing but the error `x25519-unavailable`, and the passphrase is
+asked.
 
     # in passkey: the docstring and the imports:
     """Passkey unlock (opensheaf-py): the command line's side of the page
     https://opensheaf.org/manager/unlock.html, which creates a passkey for
     opensheaf.org or derives the PRF secret of one (WebAuthn), and hands the
-    secret back by a form POST to a one-time listener on 127.0.0.1.
+    secret back to a one-time listener on 127.0.0.1, encrypted to a one-time
+    X25519 key of the listener (X25519, HKDF-SHA256, XOR).
 
     OPENSHEAF_UNLOCK=passphrase never asks the browser."""
 
     import base64
+    import hashlib
     import hmac
     import html
     import http.server
@@ -633,6 +666,8 @@ tab, which says that the tab can be closed.
     import threading
     import urllib.parse
     import webbrowser
+
+    from nacl import bindings, public
 
     from . import keys, names
 
@@ -644,14 +679,16 @@ tab, which says that the tab can be closed.
 
 The address of the page carries everything it needs, in its query, and
 nothing secret: the mode (`enroll` or `unlock`), the port, the state, the
-owner, the salt in base64url, and the credentials, separated by commas.
-The page refuses anything else, and posts only to `127.0.0.1` at that
-port. `PAGE` is a variable, which the tests replace.
+public key of the listener, the owner, the salt in base64url, and the
+credentials, separated by commas. The page refuses anything else, and
+answers only `127.0.0.1` at that port. `PAGE` is a variable, which the
+tests replace.
 
     # in passkey: the page:
     PAGE = "https://opensheaf.org/manager/unlock.html"
     UNLOCK = "OPENSHEAF_UNLOCK"
     TIMEOUT = 120.0
+    STILL = 10.0
     B64URL = re.compile(r"[A-Za-z0-9_-]+")
 
 
@@ -665,57 +702,110 @@ port. `PAGE` is a variable, which the tests replace.
         return base64.urlsafe_b64decode(text + "=" * (-len(text) % 4))
 
 
-    def page_url(mode, port, state, owner, creds=()):
-        """The address of the page, in MODE, for the listener on PORT with STATE."""
-        query = {"mode": mode, "port": str(port), "state": state, "owner": owner,
+    def page_url(mode, port, state, pk, owner, creds=()):
+        """The address of the page, in MODE, for the listener on PORT with STATE and public key PK."""
+        query = {"mode": mode, "port": str(port), "state": state, "pk": b64url(pk), "owner": owner,
                  "salt": b64url(keys.passkey_salt(owner))}
         if creds:
             query["cred"] = ",".join(creds)
         return PAGE + "?" + urllib.parse.urlencode(query)
 
+### The hand-off
+
+Both sides of the hand-off are here: `seal` is what the page does, which
+the tests play, and which a test vector, shared with the tests of the
+page, fixes; `unseal` is what the listener does. HKDF is written out, as
+in chapter 7: it is two lines of HMAC.
+
+    # in passkey: the hand-off:
+    HAND_OFF_INFO = b"opensheaf unlock hand-off v1"
+
+
+    def hkdf(ikm, salt, info, length):
+        """HKDF-SHA256 (RFC 5869): LENGTH bytes from IKM, SALT and INFO."""
+        prk = hmac.new(salt, ikm, hashlib.sha256).digest()
+        out, block = b"", b""
+        for i in range(1, -(-length // 32) + 1):
+            block = hmac.new(prk, block + info + bytes([i]), hashlib.sha256).digest()
+            out += block
+        return out[:length]
+
+
+    def _pad(private, other, state, length):
+        shared = bindings.crypto_scalarmult(bytes(private), bytes(other))
+        return hkdf(shared, state.encode("utf-8"), HAND_OFF_INFO, length)
+
+
+    def seal(secret, pk, state, ephemeral=None):
+        """(epk, ct): SECRET encrypted to the X25519 public key PK, as the page does, with the one-time
+        private key EPHEMERAL (a fresh one by default)."""
+        ephemeral = ephemeral or public.PrivateKey.generate()
+        pad = _pad(ephemeral, pk, state, len(secret))
+        return bytes(ephemeral.public_key), bytes(a ^ b for a, b in zip(secret, pad))
+
+
+    def unseal(private, epk, ct, state):
+        """The secret that the page encrypted as CT, with its public key EPK, to the key pair PRIVATE."""
+        if len(epk) != 32 or len(ct) != 32:
+            raise ValueError("not a hand-off of 32 bytes")
+        pad = _pad(private, epk, state, len(ct))
+        return bytes(a ^ b for a, b in zip(ct, pad))
+
 ### The listener
 
-The listener answers one request, `POST /callback`, a form
-(`application/x-www-form-urlencoded`, a few kilobytes at most), whose
-`state` is the right one (compared in constant time); a request with
-another state is refused (403), and the listener keeps waiting, as it does
-for any other path (404). An error of the page may also come as `GET
-/callback?state=...&error=...`; a secret never comes in an address. The
-first right answer ends the wait; the tab shows a short page.
+The listener answers one request, `GET /callback`, whose query holds the
+`state`, and either `epk`, `ct` and `cred` or an `error`, and nothing else
+(a few fields, a few kilobytes at most). A request with another state is
+refused (403), and the listener keeps waiting, as it does for any other
+path (404) or any other query (400). Once the state is right, the answer
+is opened: a damaged one (not base64url, not 32 bytes, a public key that
+X25519 refuses) counts as an error of the page. The first right answer
+ends the wait; the tab shows a short page. No `POST` is answered: the page
+never sends a form.
 
     # in passkey: the listener:
-    DONE = "osheaf has the key; you can close this tab."
-    FAILED = "osheaf received the answer: {}. It asks for the passphrase instead; you can close this tab."
+    DONE = "osheaf has the key. You can close this tab."
+    FAILED = "osheaf did not get the key ({}): it asks for the passphrase instead. You can close this tab."
+    NO_X25519 = ("this browser cannot hand the key to osheaf securely; use Safari 17+, Chrome 133+ "
+                 "or Firefox 130+, or the passphrase")
+    ANSWER = ({"state", "epk", "ct", "cred"}, {"state", "epk", "ct"}, {"state", "error"})
 
 
     class _Handler(http.server.BaseHTTPRequestHandler):
-        def do_POST(self):
-            if urllib.parse.urlsplit(self.path).path != "/callback":
-                return self._answer(404, "not found")
-            if not self.headers.get("Content-Type", "").startswith("application/x-www-form-urlencoded"):
-                return self._answer(415, "a form is expected")
-            n = int(self.headers.get("Content-Length") or 0)
-            if n > 16384:
-                return self._answer(413, "too long")
-            body = self.rfile.read(n).decode("ascii", "replace")
-            self._receive(urllib.parse.parse_qs(body, max_num_fields=8))
-
         def do_GET(self):
             url = urllib.parse.urlsplit(self.path)
-            fields = urllib.parse.parse_qs(url.query, max_num_fields=8)
-            if url.path != "/callback" or "error" not in fields or "secret" in fields:
+            if url.path != "/callback":
                 return self._answer(404, "not found")
-            self._receive(fields)
-
-        def _receive(self, fields):
+            try:
+                fields = urllib.parse.parse_qs(url.query, max_num_fields=6, strict_parsing=True)
+            except ValueError:
+                fields = {}
+            if set(fields) not in ANSWER or any(len(v) != 1 for v in fields.values()) or len(url.query) > 8192:
+                return self._answer(400, "this is not an answer of the page")
             fields = {k: v[0] for k, v in fields.items()}
-            if not hmac.compare_digest(fields.get("state", "").encode(), self.server.state.encode()):
+            if not hmac.compare_digest(fields["state"].encode(), self.server.state.encode()):
                 return self._answer(403, "this is not the answer osheaf is waiting for")
             if self.server.result is not None:
                 return self._answer(409, "osheaf has its answer already")
-            self.server.result = fields
-            self._answer(200, FAILED.format(fields["error"][:200]) if "error" in fields else DONE)
+            self.server.result = result = self._open(fields)
+            if "error" in result:
+                error = NO_X25519 if result["error"] == "x25519-unavailable" else result["error"][:200]
+                self._answer(200, FAILED.format(error))
+            else:
+                self._answer(200, DONE)
             self.server.done.set()
+
+        def _open(self, fields):
+            if "error" in fields:
+                return {"error": fields["error"][:200] or "an error"}
+            try:
+                epk, ct = from_b64url(fields["epk"]), from_b64url(fields["ct"])
+                if "cred" in fields:
+                    from_b64url(fields["cred"])
+                secret = unseal(self.server.key, epk, ct, self.server.state)
+            except Exception:
+                return {"error": "the page sent a damaged answer"}
+            return {"cred": fields.get("cred"), "secret": secret}
 
         def _answer(self, status, text):
             page = (f"<!DOCTYPE html><html lang=en><meta charset=utf-8><title>osheaf</title>"
@@ -723,6 +813,7 @@ first right answer ends the wait; the tab shows a short page.
             self.send_response(status)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Cache-Control", "no-store")
+            self.send_header("Referrer-Policy", "no-referrer")
             self.send_header("Content-Length", str(len(page)))
             self.end_headers()
             self.wfile.write(page)
@@ -732,63 +823,68 @@ first right answer ends the wait; the tab shows a short page.
 
 ### Asking the browser
 
-`ask` runs the way there and back. It prints the address, so that the
-user can open it by hand when no browser opens (`--no-browser`, a remote
-shell), opens it with `OPEN` (the standard `webbrowser`, which the tests
-replace by a double that plays the page), and waits for the answer, two
-minutes at most, or until the user presses Ctrl-C to type the passphrase
-instead. The listener is closed whatever happens.
+`ask` runs the way there and back. It opens the address with `OPEN` (the
+standard `webbrowser`, which the tests replace by a double that plays the
+page), and waits for the answer, two minutes at most, or until the user
+presses Ctrl-C (to type the passphrase instead, or to stop). It says what
+it does on the standard error, and shows the address, which is long, only
+when it is needed: when no browser opens (`--no-browser`, a remote shell),
+or after ten seconds without an answer, in case the browser did not come
+up. The listener is closed whatever happens, and its private key goes with
+it.
 
     # in passkey: asking the browser:
     OPEN = webbrowser.open
 
 
-    def ask(mode, owner, creds=(), *, no_browser=False, timeout=None):
-        """The fields the page posts back, in MODE (enroll or unlock), for OWNER and its credentials
-        CREDS; UnlockFailed if none come."""
+    def ask(mode, owner, creds=(), *, no_browser=False, timeout=None, ctrl_c="type the passphrase instead"):
+        """The answer of the page ({cred, secret} or {error}), in MODE (enroll or unlock), for OWNER and
+        its credentials CREDS; UnlockFailed if none comes."""
         if not names.OWNER_NAME.match(owner) or mode not in ("enroll", "unlock"):
             raise UnlockFailed(f"not an owner name: {owner}")
         server = http.server.HTTPServer(("127.0.0.1", 0), _Handler)
         server.state, server.result, server.done = secrets.token_urlsafe(16), None, threading.Event()
+        server.key = public.PrivateKey.generate()
         thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.1}, daemon=True)
         thread.start()
         try:
-            url = page_url(mode, server.server_port, server.state, owner, creds)
-            what = "create a passkey for" if mode == "enroll" else "unlock with your passkey the keys of"
-            print(f"osheaf asks the browser to {what} {owner}:\n  {url}", file=sys.stderr)
+            url = page_url(mode, server.server_port, server.state, bytes(server.key.public_key), owner, creds)
+            what = (f"create a passkey for {names.short(owner)}" if mode == "enroll"
+                    else f"unlock the keys of {names.short(owner)} with your passkey")
             opened = False
             if not no_browser:
+                print(f"Opening the browser to {what} (Touch ID)…", file=sys.stderr)
                 try:
                     opened = OPEN(url)
                 except Exception:
                     opened = False
             if not opened:
-                print("open this address in your browser", file=sys.stderr)
-            print("waiting for the browser (Ctrl-C to type the passphrase instead)", file=sys.stderr)
+                print(f"Go to this address in your browser, to {what} (Touch ID):\n  {url}", file=sys.stderr)
+            print(f"Waiting for the browser (Ctrl-C to {ctrl_c})…", file=sys.stderr)
+            limit = TIMEOUT if timeout is None else timeout
             try:
-                if not server.done.wait(TIMEOUT if timeout is None else timeout):
+                if opened and limit > STILL and not server.done.wait(STILL):
+                    print(f"Still waiting… if the browser did not open, go to:\n  {url}", file=sys.stderr)
+                    limit -= STILL
+                if not server.done.wait(limit):
                     raise UnlockFailed("no answer from the browser in time")
             except KeyboardInterrupt:
                 raise UnlockFailed("interrupted") from None
         finally:
             server.shutdown()
             server.server_close()
+            server.key = None
         if "error" in server.result:
-            raise UnlockFailed(f"the page says: {server.result['error'][:200]}")
+            error = server.result["error"]
+            raise UnlockFailed(NO_X25519 if error == "x25519-unavailable" else f"the page says: {error[:200]}")
         return server.result
 
 The answer is checked before it is used: a secret of 32 bytes, and a
-credential in base64url, one of those asked for when unlocking.
+credential, one of those asked for when unlocking.
 
     # in passkey: asking the browser:
-    def _answer(fields, creds=()):
-        try:
-            secret = from_b64url(fields.get("secret", ""))
-            cred = fields.get("cred") or None
-            if cred is not None:
-                from_b64url(cred)
-        except ValueError:
-            raise UnlockFailed("the page sent a damaged answer") from None
+    def _answer(result, creds=()):
+        secret, cred = result.get("secret") or b"", result.get("cred")
         if len(secret) != 32:
             raise UnlockFailed("the page sent a secret that is not 32 bytes")
         if creds and cred is not None and cred not in creds:

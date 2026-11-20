@@ -103,6 +103,12 @@ def key_id(did):
     return key_digest(did)[:16]
 
 
+def short(name):
+    """NAME, an owner name or a did:key URI, shortened for a person: its first 8 and last 4 characters."""
+    name = name[len("did:key:"):] if name.startswith("did:key:") else name
+    return name if len(name) <= 14 else f"{name[:8]}…{name[-4:]}"
+
+
 GENESIS = "genesis.json"
 GENESIS_FORMAT = "opensheaf-genesis/0.2"
 KINDS = ("document", "collection", "owner")

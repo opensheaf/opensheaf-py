@@ -419,7 +419,7 @@ def test_checks_of_a_key_log_on_disk(tmp_path):
     log.versions[1].witnesses.clear()
     log._checked = None
     errors, _ = log.check()
-    assert errors == ["v2: signed by 0 rotation key(s) of v1, which needs 2 (section 6.1)"]
+    assert errors == ["v2: signed by 0 rotation keys of v1, which needs 2 (section 6.1)"]
     assert log.latest() is log.versions[0]
     ended = authors_log(2)
     ended.end([R[4], R[5]], user=USER_A)

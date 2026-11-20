@@ -61,7 +61,7 @@ def record_key_log(r, owner):
             print(f"warning: the key log of {owner} at {w}: {e}", file=sys.stderr)
             continue
         if what == "extended":
-            print(f"key log of {owner}: {n} version(s) added from the copy at {w}")
+            print(f"key log of {owner}: {n} version{'' if n == 1 else 's'} added from the copy at {w}")
         elif what == "fork":
             print(f"key log of {owner}: a fork at v{n} met at {w}: fork record appended as "
                   f"v{local.versions[-1].number}; the owner has ended (section 6.3)")
