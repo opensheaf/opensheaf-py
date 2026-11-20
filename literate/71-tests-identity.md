@@ -475,7 +475,7 @@ signed for it any more.
         assert log.check() == ([], [])
         assert log.ended and log.fork_point == 3 and log.latest() is None
         assert log.lookup(3, KL3T) is not None and log.lookup(3, KL3) is log.versions[2]
-        assert "ended by a fork at v3" in owners.describe(log)
+        assert "Status        ended by a fork at v3" in owners.describe(log)
         with pytest.raises(owners.OwnerError):
             log.rotate([R[7], R[8]], next_keys=[K("x")], next_threshold=1, user=USER_A)
         with pytest.raises(owners.OwnerError):
@@ -908,7 +908,7 @@ never to touch the keychain of the machine they run on.
         path = tmp_path / "opensheaf" / "keys" / A / f"{K3.id}.key"
         assert stat.S_IMODE(path.stat().st_mode) == 0o600
         assert stat.S_IMODE(path.parent.stat().st_mode) == 0o700
-        assert "warning" in capsys.readouterr().err
+        assert capsys.readouterr().err.startswith("Warning: A current key of ")
         assert [k.did for k in keys.current_keys(A, [K1.did, K3.did])] == [K3.did]
         assert keys.current_keys(A, [K1.did]) == [] and keys.current_keys(J, [K3.did]) == []
         with pytest.raises(FileExistsError):

@@ -204,16 +204,16 @@ def owner_pull(args):
             except owners.OwnerError as e:
                 sys.exit(str(e))
             if other.owner != owner:
-                sys.exit(f"{place} is the key log of {other.owner}, not of {owner}")
+                P.stop(f"{place} is the key log of {names.short(other.owner)}, not of {names.short(owner)}")
             r.key_log(owner)
             r.logs[owner]["found"].append((place, other))
         else:
             r.key_log(owner, [place])
         if not any(w != "here" for w, _ in r.found_logs(owner)):
-            sys.exit(f"no copy of the key log of {owner} at {place}")
+            P.stop(f"no copy of the key log of {names.short(owner)} at {place}")
         log = record_key_log(r, owner)
     P.write_discovery()
     if log is not None:
-        print(f"key log of {owner}: v{len(log.versions)} held" +
-              (f", ended by a fork at v{log.fork_point}" if log.fork_point else
-               ", ended" if log.ended else ""))
+        print(f"The key log of {names.short(owner)} is here up to v{len(log.versions)}" +
+              (f"; it was ended by a fork at v{log.fork_point}." if log.fork_point else
+               "; the owner has ended." if log.ended else "."))

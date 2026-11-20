@@ -673,36 +673,46 @@ SINGLE_ROTATION_RISK = (
     "With a single rotation key, its loss leaves the owner unable ever to change its keys "
     "or end, and its theft lets the thief take the owner over (sections 6.2 and 15.1).")
 ROTATION_KEYS_WARNING = (
-    "An owner left with fewer than nextThreshold rotation keys of the latest version of its "
-    "key log can never change its keys or end (section 6.2).")
+    "Keep the rotation keys safe: an owner left with fewer of them than the next version of its key "
+    "log needs to sign can never change its keys or end (section 6.2).")
 
 
-def describe(log):
-    """Lines describing the key log LOG for a person."""
+def describe(log, here=()):
+    """Lines describing the key log LOG for a person; HERE, the did:keys held on this computer."""
     errors, warnings = log.check()
     rec = _json_or_none(log.genesis) or {}
-    out = [f"owner {log.owner}"]
+    out = [f"Owner         {log.owner}"]
     if rec.get("keeper"):
-        out.append(f"keeper {rec['keeper'][0]}")
-    for v in log.versions:
+        out.append(f"Keeper        {rec['keeper'][0]}")
+    for i, v in enumerate(log.versions):
         k = v.keys or {}
         what = ("fork record, carrying " + ", ".join(f"v{c.number}" for c in v.carried) if v.fork_record
                 else "ended" + (f", successor {k['successor']}" if k.get("successor") else "") if k.get("ended")
-                else f"{_count(k.get('keys', []), 'current key')}, threshold {k.get('threshold')}, "
-                     f"{_count(k.get('next', []), 'rotation key')}, nextThreshold {k.get('nextThreshold')}"
+                else _signers(k.get("keys", []), k.get("threshold"), "current key", "sign")
+                     + ", " + _signers(k.get("next", []), k.get("nextThreshold"), "rotation key",
+                                       "sign the next version")
                      + (f", exposes {len(k['exposed'])}" if k.get("exposed") else ""))
         mark = "" if v.is_version else " (not a version)"
-        out.append(f"v{v.number} {v.digest[:16]}  {what}{mark}")
+        out.append(f"{'Key log' if i == 0 else '':<14}v{v.number}  {v.digest[:16]}  {what}{mark}")
     latest = log.latest()
     if latest is not None:
-        out += [f"current key {did}" for did in latest.keys["keys"]]
+        out += [f"{'Current keys' if i == 0 else '':<14}{did}" + ("  (on this computer)" if did in here else "")
+                for i, did in enumerate(latest.keys["keys"])]
+    out += [f"{'Exposed keys' if i == 0 else '':<14}{did}" for i, did in enumerate(sorted(log.exposed_keys()))]
     if log.fork_point:
-        out.append(f"ended by a fork at v{log.fork_point}")
+        out.append(f"Status        ended by a fork at v{log.fork_point}")
     elif log.ended:
-        out.append("ended")
-    out += [f"exposed {did}" for did in sorted(log.exposed_keys())]
-    out += [f"error: {e}" for e in errors] + [f"warning: {w}" for w in warnings]
+        out.append("Status        ended")
+    out += [f"Error: {e}" for e in errors] + [f"Warning: {w}" for w in warnings]
     return out
+
+
+def _signers(items, threshold, noun, what):
+    """N NOUNs, and how many of them WHAT: "3 rotation keys (any 2 sign the next version)"."""
+    if len(items) == 1:
+        return _count(items, noun)
+    verb = what.replace("sign", "signs", 1) if threshold == 1 else what
+    return f"{_count(items, noun)} (any {threshold} {verb})"
 
 
 def _count(items, noun):

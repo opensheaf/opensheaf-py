@@ -79,11 +79,11 @@ another owner it hosts. Its key log must be in the storage root.
     def owner_of(args):
         """The owner name a command is about, and its key log in the storage root."""
         if ROOT is None:
-            sys.exit("no archive here (no osheaf.json in this folder or above it): give --root")
+            stop("no archive here (no osheaf.json in this folder or above it): give --root")
         owner = getattr(args, "owner", None) or ARCHIVE["owner"]
         log = key_log(owner)
         if log is None:
-            sys.exit(f"the key log of {owner} is not in the storage root")
+            stop(f"the key log of {names.short(owner)} is not in the storage root")
         return owner, log
 
 
@@ -123,12 +123,24 @@ record (section 6.2); if it is taken in the archive, a new nonce is drawn
 (section 5.3). The first version of the key log is computed from the
 genesis record (section 6.1) and written into the storage root; the
 current key is kept in the system's credential store, under the owner name.
+The command ends with a summary, the owner name and the `did:key` in full,
+to be copied:
+
+```
+Done: the owner em4v3kp5…gora is made, with v1 of its key log:
+  owner          em4v3kp5…(the full name)
+  current key    did:key:z6MkpZ85…(in full), kept in the keychain
+  rotation keys  3, kept in github:mgubi/opensheaf-keys; any 2 of them sign the next version of the key log
+```
+
+(in `osheaf init`, it starts "The owner …", and the archive's own "Done:"
+line follows).
 With `OPENSHEAF_KEY_STORE=none` ([chapter 7](07-keys.md)) it is kept in the
 wallet only, and an owner without a wallet is refused: its current key
 would be lost when the command ends.
 
     # in create an owner:
-    def owner_init(args):
+    def owner_init(args, done=True):
         """Make an owner (section 6.2): its current key on this device, its rotation keys,
         exported outside the archive, and the first version of its key log, in the storage root."""
         single = bool(getattr(args, "single_rotation_key", False))
@@ -137,24 +149,24 @@ would be lost when the command ends.
         others = list(getattr(args, "key", None) or [])
         threshold = int(getattr(args, "threshold", None) or 1)
         if not 1 <= next_threshold <= n_rot or not 1 <= threshold <= 1 + len(others):
-            sys.exit("a threshold is at least 1, and at most the number of keys (section 6.1, rule 1)")
+            stop("a threshold is at least 1, and at most the number of keys (section 6.1, rule 1)")
         keeper = getattr(args, "keeper", None)
         if keeper and not names.keeper_valid(keeper):
-            sys.exit(f"a keeper is an ORCID iD (with its check digit) or https://<domain>/: {keeper}")
+            stop(f"a keeper is an ORCID iD (with its check digit) or https://<domain>/: {keeper}")
         w = level_wallet(args)
         if w is None and not getattr(args, "export", None):
-            sys.exit("give --export DIR, a folder outside the archive where the rotation keys are written "
-                     "(or keep them in a wallet, a lower security level: --keys github:OWNER/REPO|command)")
+            stop("give --export DIR, a folder outside the archive where the rotation keys are written "
+                 "(or keep them in a wallet, a lower security level: --keys github:OWNER/REPO|command)")
         if w is not None and getattr(args, "no_passphrase", False):
-            sys.exit("--no-passphrase: the keys in a wallet are always encrypted")
+            stop("--no-passphrase: the keys in a wallet are always locked with a passphrase")
         if w is None and not keys.kept_on_device():
-            sys.exit(f"{keys.KEY_STORE}=none keeps no current key on this computer: keep the keys in a "
-                     "wallet (--keys github:OWNER/REPO|command)")
+            stop(f"{keys.KEY_STORE}=none keeps no current key on this computer: keep the keys in a "
+                 "wallet (--keys github:OWNER/REPO|command)")
         for did in others:
             try:
                 names.did_key_public(did)
             except ValueError:
-                sys.exit(f"not a did:key URI of an Ed25519 key: {did}")
+                stop(f"not a did:key URI of an Ed25519 key: {did}")
         current = keys.new_key()
         rotation = [keys.new_key() for _ in range(n_rot)]
         while True:
@@ -162,11 +174,11 @@ would be lost when the command ends.
                 log = owners.new_owner([current] + others, rotation, threshold=threshold,
                                        next_threshold=next_threshold, keeper=keeper)
             except (ValueError, owners.OwnerError) as e:
-                sys.exit(str(e))
+                stop(str(e))
             if not obj_dir(log.id).exists():
                 break
         if next_threshold == 1:
-            print("warning: " + owners.SINGLE_ROTATION_RISK, file=sys.stderr)
+            warn(owners.SINGLE_ROTATION_RISK)
         if getattr(args, "export", None):
             export_and_confirm(rotation, log.owner, 1, args)
         if w is not None:
@@ -174,12 +186,16 @@ would be lost when the command ends.
         try:
             store = keys.store_current_key(log.owner, current)
         except (keys.KeyStoreError, OSError) as e:
-            sys.exit(str(e))
+            stop(str(e))
         owners.write_key_log(obj_dir(log.id), log)
-        print(f"owner {log.owner}")
-        kept = f"{w.name} only, {keys.KEY_STORE}=none" if store == keys.NONE else store
-        print(f"current key of this device {current.did} (kept in {kept})")
-        print("warning: " + owners.ROTATION_KEYS_WARNING, file=sys.stderr)
+        kept = f"{w.name} only ({keys.KEY_STORE}=none)" if store == keys.NONE else store_name(store)
+        print(f"{'Done: the' if done else 'The'} owner {names.short(log.owner)} is made, with v1 of its key log:")
+        print(f"  owner          {log.owner}")
+        print(f"  current key    {current.did}, kept in {kept}")
+        for did in others:
+            print(f"  current key    {did}, of another device")
+        print(rotation_line(n_rot, next_threshold, kept_where(args, w)))
+        warn(owners.ROTATION_KEYS_WARNING)
         return log
 
 `osheaf owner init` makes an owner in an existing archive, which then hosts
@@ -251,13 +267,13 @@ neither alone gives the keys.
             if r.returncode == 0 and given:
                 _ASKED["passphrase"] = given
                 return given
-            print(f"warning: {PASSPHRASE_COMMAND} gave no passphrase: {r.stderr.strip()}", file=sys.stderr)
+            warn(f"{PASSPHRASE_COMMAND} gave no passphrase: {r.stderr.strip()}")
         import getpass
         first = getpass.getpass(f"Passphrase of the keys in {where}: " if where else "Passphrase of the keys: ")
         if not first:
-            sys.exit("an empty passphrase: give --no-passphrase to export the keys unencrypted")
+            stop("an empty passphrase: give --no-passphrase to export the keys without a passphrase lock")
         if confirm and getpass.getpass("The passphrase again: ") != first:
-            sys.exit("the two passphrases differ")
+            stop("the two passphrases differ")
         _ASKED["passphrase"] = first
         return first
 
@@ -288,7 +304,7 @@ the wallet, which refuses them.
         try:
             return wallet.configured(ARCHIVE.get("keys"), forbidden=archive_repositories())
         except wallet.WalletError as e:
-            sys.exit(str(e))
+            stop(str(e))
 
 
     def level_wallet(args):
@@ -301,7 +317,7 @@ the wallet, which refuses them.
                 return w if isinstance(w, wallet.CommandWallet) else wallet.parse(spec)
             return wallet.parse(spec, forbidden=archive_repositories())
         except wallet.WalletError as e:
-            sys.exit(str(e))
+            stop(str(e))
 
 
     def wallet_for(args):
@@ -309,8 +325,8 @@ the wallet, which refuses them.
         from . import wallet
         w = level_wallet(args) or configured_wallet()
         if w is None:
-            sys.exit("no key wallet: give --wallet github:OWNER/REPO (or command), or configure one in "
-                     f'{wallet.user_config_path()} or osheaf.json ("keys": {{"wallet": ...}}) or in OPENSHEAF_WALLET')
+            stop("no key wallet: give --wallet github:OWNER/REPO (or command), or configure one in "
+                 f'{wallet.user_config_path()} or osheaf.json ("keys": {{"wallet": ...}}) or in OPENSHEAF_WALLET')
         return w
 
 ### Exporting and confirming
@@ -337,18 +353,22 @@ committed, and can be deleted.
                 if keys.read_rotation_key(path, secret).key.did != key.did:
                     raise keys.KeyStoreError(f"{path} does not read back")
         except keys.KeyStoreError as e:
-            sys.exit(str(e))
+            stop(str(e))
+        lock = "locked with your passphrase" if secret else "with no lock (--no-passphrase)"
+        print(f"Exported {plural(len(rotation), 'rotation key')} of {names.short(owner)} to {paths[0].parent}, "
+              f"{lock}:")
         for key, path in zip(rotation, paths):
-            print(f"rotation key {key.did}\n  file  {path}\n  check {keys.sheet_check(key.seed)}")
-            if getattr(args, "print", False):
+            print(f"  {key_label(keys.ROTATION, key.did)}  {path.name}  check {keys.sheet_check(key.seed)}")
+        if getattr(args, "print", False):
+            for key in rotation:
                 print(keys.rotation_key_sheet(key, owner, version))
         if getattr(args, "yes", False):
             return
-        print("Put the files (or the printed sheets) away, apart from this device and from each other.")
+        print("Put the files (or the printed sheets) away, apart from this computer and from each other.")
         for key, path in zip(rotation, paths):
-            typed = input(f"type the check of {path.name} to confirm it is kept: ").strip().upper()
+            typed = input(f"Type the check of {path.name} to confirm: ").strip().upper()
             if typed != keys.sheet_check(key.seed):
-                sys.exit("not confirmed: nothing was written to the key log (the files exported may be deleted)")
+                stop("not confirmed: nothing was written to the key log (the exported files may be deleted)")
 
 ### Keeping keys in a wallet
 
@@ -365,21 +385,65 @@ says what it saves, and each key as it is saved.
         """Keep the rotation keys ROTATION of OWNER, committed in VERSION, and the current keys CURRENT
         ([(key, version listing it)]) in the wallet W; stops if it fails."""
         from . import wallet
-        print("warning: " + wallet.risk(w.name, owner), file=sys.stderr)
+        warn(wallet.risk(w.name, owner))
         unlocked = unlocked_passkeys(owner)
         secret = wallet_passphrase(w, owner) if unlocked else passphrase(where=w.name)
         try:
             w.check_writable()
             todo = [(key, keys.ROTATION, version) for key in rotation]
             todo += [(key, keys.CURRENT, v) for key, v in current if w.read(owner, key.id, keys.CURRENT) is None]
-            print(f"Saving {the_keys(len(todo))} of {names.short(owner)} to {w.name}…", file=sys.stderr)
-            for key, kind, v in todo:
+            n = len(todo)
+            print(f"Saving {the_keys(n)} of {names.short(owner)} to {w.name}…", file=sys.stderr)
+            for i, (key, kind, v) in enumerate(todo, 1):
                 plain = kind == keys.CURRENT and getattr(args, "plain_current", False)
                 wallet.put_key(w, owner, key, kind, v, None if plain else secret, unlocked)
-                print(f"{kind.capitalize()} key {key.did}: kept in {w.name}")
+                print(f"  {i}/{n} {key_label(kind, key.did)}  saved", file=sys.stderr)
         except wallet.WalletError as e:
-            sys.exit(f"{e}: nothing was written to the key log")
+            stop(f"{e}: nothing was written to the key log")
         enroll_hint(owner, unlocked)
+
+### How the commands speak
+
+The commands of owners and keys speak in one plain style. A result is a
+full sentence, with a capital and a period, on the standard output; a line
+of progress ends with "…", and the steps under it are indented, numbered
+when they are counted (`  2/4 rotation key  z6MkgYBn…uTGo  saved`), on the
+standard error, with the warnings (`Warning: …`) and the statements of
+risk. Owners and keys are named in their short form (`names.short`, the
+first 8 and last 4 characters) where they only tell which is which, and in
+full where the user may have to copy them: the owner made, the `did:key` of
+a new key, the current keys of a new version of the key log. What the code
+calls a *wrap* is a *lock* for the user: a key in a wallet has a
+passphrase lock, and a passkey lock for each passkey enrolled; the words
+wrap, envelope and key-encryption key stay in the code. Before it removes
+anything, a command lists what will change and asks the user to type a
+word, always as "Type forget to confirm:" (`--yes` skips it, for scripts);
+a command of several steps ends with a summary that starts with "Done:".
+An error ends the command with one sentence, through `stop`: its first
+word is capitalized unless it is a name (an option, a file, a `did:key`, a
+wallet such as `command`, or a program such as `gh`).
+
+    # in keep keys in a wallet:
+    def lock_words(locks):
+        """What opens a key with the locks LOCKS (wallet.locks), for a person: "your passkey
+        (unlock.opensheaf.org) and your passphrase"."""
+        words = [f"your {x}" for x in locks if x.startswith("passkey")] + \
+                [f"your {x}" for x in locks if not x.startswith("passkey")]
+        return " and ".join(words) or "no passphrase or passkey (they have no lock)"
+
+
+    def kept_where(args, w):
+        """Where the new rotation keys are kept: the folder of --export, the wallet W, or both."""
+        places = ([str(Path(args.export).resolve())] if getattr(args, "export", None) else []) + \
+                 ([w.name] if w is not None else [])
+        return " and in ".join(places)
+
+
+    def rotation_line(n, next_threshold, where, new=False):
+        """The line of a summary on the rotation keys: N (NEW) of them, kept in WHERE."""
+        verb = "signs" if next_threshold == 1 else "sign"
+        more = "" if n == 1 else f"; any {next_threshold} of them {verb} the next version of the key log"
+        return f"  rotation keys  {n}{' new' if new else ''}, kept in {where}{more}"
 
 
     def plural(n, noun):
@@ -394,7 +458,41 @@ says what it saves, and each key as it is saved.
 
     def key_label(kind, did):
         """A key in a line of progress: its kind and its short did:key, in columns."""
-        return f"{kind + ' key':<13}{names.short(did)}"
+        return f"{kind + ' key':<14}{names.short(did)}"
+
+
+    LOWER_NAMES = ("gh", "osheaf", "command")
+
+
+    def sentence(text):
+        """TEXT as a sentence: its first word capitalized, unless it is a name (of a program, a wallet,
+        an owner, a key, an option or a file), and a final period."""
+        m = re.match(r"([a-z][a-z']{0,14})(?=[ ,;])", text)
+        if m and m.group(1) not in LOWER_NAMES:
+            text = text[0].upper() + text[1:]
+        return text if text.endswith((".", "?", "!", ":", "…")) else text + "."
+
+
+    def stop(text):
+        """End the command with the message TEXT, a sentence."""
+        sys.exit(sentence(text))
+
+
+    def warn(text):
+        """Say TEXT, a warning, on the standard error."""
+        print("Warning: " + sentence(text), file=sys.stderr)
+
+
+    def confirmed(word, args=None):
+        """Whether the user typed WORD to confirm what was listed (always, with --yes)."""
+        if args is not None and getattr(args, "yes", False):
+            return True
+        return input(f"Type {word} to confirm: ").strip() == word
+
+
+    def store_name(store):
+        """Where a current key kept in STORE is, for a person."""
+        return STORE_NAMES.get(store, store)
 
 
     def version_listing(log, did):
@@ -420,9 +518,9 @@ passphrase once, for all of them.
                 except keys.PassphraseNeeded:
                     rk = keys.read_rotation_key(Path(f), passphrase(confirm=False))
             except (keys.KeyStoreError, OSError) as e:
-                sys.exit(f"{f}: {e}")
+                stop(f"{f}: {e}")
             if rk.owner not in (None, owner):
-                sys.exit(f"{f} is a rotation key of {rk.owner}, not of {owner}")
+                stop(f"{f} is a rotation key of {names.short(rk.owner)}, not of {names.short(owner)}")
             out.append(rk.key)
         return out
 
@@ -442,8 +540,8 @@ that a rotation can tell the owner that it has used them up.
         from . import wallet
         w = configured_wallet() or level_wallet(args)
         if w is None:
-            sys.exit("give the rotation keys that sign the new version of the key log (--rotation-key FILE), "
-                     "or the wallet that keeps them (--keys github:OWNER/REPO)")
+            stop("give the rotation keys that sign the new version of the key log (--rotation-key FILE), "
+                 "or the wallet that keeps them (--keys github:OWNER/REPO)")
         need, out = prev.keys["nextThreshold"], []
         print(f"Reading {the_keys(need, 'rotation key')} of v{prev.number} of {names.short(owner)} that sign "
               f"from {w.name}…", file=sys.stderr)
@@ -456,10 +554,10 @@ that a rotation can tell the owner that it has used them up.
                 if len(out) == need:
                     break
         except wallet.WalletError as e:
-            sys.exit(str(e))
+            stop(str(e))
         if len(out) < need:
-            sys.exit(f"{w.name} holds {len(out)} of the rotation keys of v{prev.number} of the key log of {owner}, "
-                     f"and {need} sign the next version: give them with --rotation-key FILE")
+            stop(f"the wallet {w.name} holds {len(out)} of the rotation keys of v{prev.number} of the key log of "
+                 f"{names.short(owner)}, and {need} sign the next version: give them with --rotation-key FILE")
         print(f"Read {plural(len(out), 'rotation key')} of v{prev.number} from {w.name}.", file=sys.stderr)
         return out, w
 
@@ -486,19 +584,27 @@ checked by `KeyLog.add` (the rules of section 6.1, the signatures), the new
 rotation keys are exported and confirmed, and only then is it written.
 
     # in change the keys of an owner:
+    MOVED_UP = ("Moved up to the maximum security level: the rotation keys kept in {w} are used up and sign "
+                "nothing more (section 6.2), and the new ones are kept offline only. To remove the used ones "
+                "from {w}: osheaf key forget --from-wallet --used. The current keys kept in {w} still sign until "
+                "a version of the key log retires them (osheaf owner rotate --retire DID); then osheaf key "
+                "forget --from-wallet DID removes them.")
+
+
     def owner_rotate(args, exposed=()):
         """A new version of the key log changing the current keys (section 6.2) or exposing
         some (section 6.3), signed by rotation keys, committing new rotation keys."""
         owner, log = owner_of(args)
+        who = names.short(owner)
         prev = log.latest()
         if prev is None:
-            sys.exit(f"the owner {owner} has ended (section 6.3): its key log takes no new version")
+            stop(f"the owner {who} has ended (section 6.3): its key log takes no new version")
         w = level_wallet(args)
         if w is None and not getattr(args, "export", None):
-            sys.exit("give --export DIR, a folder outside the archive where the new rotation keys are written "
-                     "(or keep them in a wallet, a lower security level: --keys github:OWNER/REPO|command)")
+            stop("give --export DIR, a folder outside the archive where the new rotation keys are written "
+                 "(or keep them in a wallet, a lower security level: --keys github:OWNER/REPO|command)")
         if w is not None and getattr(args, "no_passphrase", False):
-            sys.exit("--no-passphrase: the keys in a wallet are always encrypted")
+            stop("--no-passphrase: the keys in a wallet are always locked with a passphrase")
         signers, source = rotation_signers(args, owner, prev)
         n_rot = int(getattr(args, "rotation", None) or len(prev.keys["next"]))
         next_threshold = int(getattr(args, "next_threshold", None) or min(prev.keys["nextThreshold"], n_rot))
@@ -506,7 +612,7 @@ rotation keys are exported and confirmed, and only then is it written.
             try:
                 names.did_key_public(did)
             except ValueError:
-                sys.exit(f"not a did:key URI of an Ed25519 key: {did}")
+                stop(f"not a did:key URI of an Ed25519 key: {did}")
         new = [keys.new_key() for _ in range(n_rot)]
         try:
             v = log.rotate(signers, next_keys=new, next_threshold=next_threshold,
@@ -515,9 +621,9 @@ rotation keys are exported and confirmed, and only then is it written.
                            message=getattr(args, "message", None) or ("Keys exposed" if exposed else "Keys changed"),
                            user=depositor())
         except owners.OwnerError as e:
-            sys.exit(str(e))
+            stop(str(e))
         if next_threshold == 1:
-            print("warning: " + owners.SINGLE_ROTATION_RISK, file=sys.stderr)
+            warn(owners.SINGLE_ROTATION_RISK)
         if getattr(args, "export", None):
             export_and_confirm(new, owner, v.number, args)
         if w is not None:
@@ -528,14 +634,17 @@ rotation keys are exported and confirmed, and only then is it written.
             keep_in_wallet(w, owner, new, v.number, args, current=[(k, version_listing(log, k.did)) for k in here])
         owners.write_key_log(obj_dir(log.id), log)
         write_discovery()
-        print(f"{owner}: v{v.number} of the key log, current keys: {', '.join(v.keys['keys'])}")
-        if source is not None and w is None:
-            print(f"moved up: the rotation keys kept in {source.name} are used up and sign nothing more "
-                  "(section 6.2); the new ones are kept offline only. osheaf key forget --from-wallet --used removes "
-                  f"the used ones; current keys kept in {source.name} still sign until a version retires them "
-                  "(osheaf owner rotate --retire) and osheaf key forget --from-wallet removes them", file=sys.stderr)
+        print(f"Done: v{v.number} of the key log of {who}, signed by {plural(len(signers), 'rotation key')} "
+              f"of v{prev.number}:")
+        for did in v.keys["keys"]:
+            print(f"  current key    {did}")
         for did in exposed:
-            print(f"exposed {did}: what it alone signed is contested (section 7.3)")
+            print(f"  exposed key    {did}")
+        print(rotation_line(n_rot, next_threshold, kept_where(args, w), new=True))
+        if exposed:
+            print("What an exposed key alone signed is contested (section 7.3): osheaf sign signs it again.")
+        if source is not None and w is None:
+            print(MOVED_UP.format(w=source.name), file=sys.stderr)
 
 
     def owner_expose(args):
@@ -555,42 +664,49 @@ the wallet, as for a rotation.
     def owner_end(args):
         """The ending version of the key log (section 6.3)."""
         owner, log = owner_of(args)
+        who = names.short(owner)
         successor = getattr(args, "successor", None)
         if successor is not None and not names.OWNER_NAME.match(successor):
-            sys.exit(f"the successor is an owner name: {successor}")
+            stop(f"the successor is an owner name: {successor}")
         if log.latest() is None:
-            sys.exit(f"the owner {owner} has ended (section 6.3): its key log takes no new version")
+            stop(f"the owner {who} has ended (section 6.3): its key log takes no new version")
         signers, _ = rotation_signers(args, owner, log.latest())
         try:
             v = log.end(signers, successor=successor, exposed=getattr(args, "expose", None) or (),
                         message=getattr(args, "message", None) or "Owner ended", user=depositor())
         except owners.OwnerError as e:
-            sys.exit(str(e))
+            stop(str(e))
         owners.write_key_log(obj_dir(log.id), log)
         write_discovery()
-        print(f"{owner}: ended at v{v.number} of its key log" + (f", successor {successor}" if successor else ""))
+        print(f"Done: the owner {who} has ended, at v{v.number} of its key log" +
+              (f"; its successor is {successor}." if successor else "."))
 
 Showing
 -------
 
 `owner show` describes the key log, version by version, with its current
 keys, its end and its exposed keys, and its findings (section 14.3), and
-says which of its current keys this device holds.
+marks the current keys that this computer holds:
+
+```
+Owner         em4v3kp5…(the full name)
+Key log       v1  20ac7d88772cd510  1 current key, 3 rotation keys (any 2 sign the next version)
+              v2  0900f00f39defb0e  2 current keys (any 1 signs), 3 rotation keys (any 2 sign the next version)
+Current keys  did:key:z6MkpZ85…  (on this computer)
+              did:key:z6MkgYBn…
+```
 
     # in show an owner:
     def owner_show(args):
         owner, log = owner_of(args)
-        for line in owners.describe(log):
-            print(line)
-        latest = log.latest()
+        latest, here = log.latest(), []
         if latest is not None:
             try:
-                here = keys.current_keys(owner, latest.keys["keys"])
+                here = [k.did for k in keys.current_keys(owner, latest.keys["keys"])]
             except keys.KeyStoreError as e:
-                print(f"warning: {e}", file=sys.stderr)
-                here = []
-            for k in here:
-                print(f"on this device {k.did}")
+                warn(str(e))
+        for line in owners.describe(log, here):
+            print(line)
 
 A new current key
 -----------------
@@ -606,15 +722,16 @@ rotation keys kept apart. Until then it signs nothing. With
     def key_new(args):
         owner = getattr(args, "owner", None) or ARCHIVE["owner"]
         if not keys.kept_on_device():
-            sys.exit(NOT_KEPT)
+            stop(NOT_KEPT)
         key = keys.new_key()
         try:
             store = keys.store_current_key(owner, key)
         except (keys.KeyStoreError, OSError) as e:
-            sys.exit(str(e))
-        print(key.did)
-        print(f"kept in {store}; it signs once a version of the key log adds it: "
-              f"osheaf owner rotate --add {key.did} --rotation-key FILE ... --export DIR")
+            stop(str(e))
+        print(f"New current key of {names.short(owner)}, kept in {store_name(store)}:")
+        print(f"  {key.did}")
+        print(f"It signs once a version of the key log adds it: osheaf owner rotate --add {key.did} "
+              "--rotation-key FILE ... --export DIR")
         return key
 
 Key wallets
@@ -626,40 +743,57 @@ Four commands move current keys between this device and a wallet
 `osheaf key push` puts the current keys of this device into the wallet:
 those of the latest version of the key log, or those named. A key made on
 a new device with `osheaf key new`, and not yet listed, is pushed by name.
-A key the wallet holds already is left as it is. The current keys are
-encrypted under the passphrase unless `--plain-current`; the risk is
-stated.
+A key the wallet holds already is left as it is, and when it holds all of
+them nothing is asked. The current keys are locked with the passphrase
+(and with the passkey, if one has opened the keys in this command) unless
+`--plain-current`; the risk is stated, and the last line says how they are
+locked.
 
     # in the commands of key wallets:
     def key_push(args):
         """Put the current keys of this device into the wallet."""
         from . import wallet
         owner, log = owner_of(args)
+        who = names.short(owner)
         latest = log.latest()
         if latest is None:
-            sys.exit(f"the owner {owner} has ended (section 6.3)")
+            stop(f"the owner {who} has ended (section 6.3)")
         w = wallet_for(args)
         dids = list(getattr(args, "did", None) or latest.keys["keys"])
         try:
             here = keys.current_keys(owner, dids)
         except keys.KeyStoreError as e:
-            sys.exit(str(e))
+            stop(str(e))
         if not here:
-            sys.exit(f"this device holds none of the keys {', '.join(dids)} of {owner}")
-        print("warning: " + wallet.risk(w.name, owner), file=sys.stderr)
-        unlocked = [] if getattr(args, "plain_current", False) else unlocked_passkeys(owner)
-        secret = None if getattr(args, "plain_current", False) else \
-            wallet_passphrase(w, owner) if unlocked else passphrase(where=w.name)
+            stop(f"this computer holds none of the keys {', '.join(names.short(d) for d in dids)} of {who}")
         try:
             w.check_writable()
-            for key in here:
-                if w.read(owner, key.id, keys.CURRENT) is not None:
-                    print(f"Current key {key.did}: in {w.name} already")
+            there = {k.did for k in here if w.read(owner, k.id, keys.CURRENT) is not None}
+        except wallet.WalletError as e:
+            stop(str(e))
+        n = len(here)
+        if len(there) == n:
+            print(f"{'The current key' if n == 1 else f'The {n} current keys'} of {who} "
+                  f"{'is' if n == 1 else 'are'} already in {w.name}.")
+            return
+        warn(wallet.risk(w.name, owner))
+        plain = getattr(args, "plain_current", False)
+        unlocked = [] if plain else unlocked_passkeys(owner)
+        secret = None if plain else wallet_passphrase(w, owner) if unlocked else passphrase(where=w.name)
+        print(f"Saving {the_keys(n, 'current key')} of {who} to {w.name}…", file=sys.stderr)
+        try:
+            for i, key in enumerate(here, 1):
+                if key.did in there:
+                    print(f"  {i}/{n} {key_label(keys.CURRENT, key.did)}  already there", file=sys.stderr)
                     continue
                 wallet.put_key(w, owner, key, keys.CURRENT, version_listing(log, key.did), secret, unlocked)
-                print(f"Current key {key.did}: pushed to {w.name}")
+                print(f"  {i}/{n} {key_label(keys.CURRENT, key.did)}  saved", file=sys.stderr)
         except wallet.WalletError as e:
-            sys.exit(str(e))
+            stop(str(e))
+        saved = n - len(there)
+        lock = "with no lock (--plain-current)" if plain else \
+            "locked with your passkey and your passphrase" if unlocked else "locked with your passphrase"
+        print(f"Done: {plural(saved, 'current key')} of {who} saved to {w.name}, {lock}.")
 
 `osheaf key pull` is the other way: the current keys of the latest version
 of the key log that this device does not hold are read from the wallet,
@@ -678,7 +812,7 @@ that signs opens them there.
         owner, log = owner_of(args)
         latest = log.latest()
         if latest is None:
-            sys.exit(f"the owner {owner} has ended (section 6.3)")
+            stop(f"the owner {names.short(owner)} has ended (section 6.3)")
         w = wallet_for(args)
         if not keys.kept_on_device():
             print(not_kept(w, owner))
@@ -686,7 +820,7 @@ that signs opens them there.
         try:
             have = {k.did for k in keys.current_keys(owner, latest.keys["keys"])}
         except keys.KeyStoreError as e:
-            sys.exit(str(e))
+            stop(str(e))
         pulled = pull_current_keys(w, owner, [d for d in latest.keys["keys"] if d not in have])
         print(pull_summary(w, owner, latest, have, pulled))
 
@@ -694,7 +828,7 @@ that signs opens them there.
     STORE_NAMES = {"keyring": "the keychain" if sys.platform == "darwin" else "the system keyring",
                    "security": "the keychain", "file": "a file of this computer",
                    keys.NONE: "memory, for this command only"}
-    NOT_KEPT = (f"{keys.KEY_STORE}=none: no current key is kept on this computer, so a new one would be "
+    NOT_KEPT = (f"No current key is kept on this computer ({keys.KEY_STORE}=none), so a new one would be "
                 "lost when the command ends")
 
 
@@ -718,12 +852,12 @@ that signs opens them there.
                     print(f"  {key_label(keys.CURRENT, did)}  not in {w.name}", file=sys.stderr)
                     continue
                 if key.did != did:
-                    sys.exit(f"{w.name} holds another key than {did} under its name")
+                    stop(f"the wallet {w.name} holds another key than {did} under its name")
                 store = keys.store_current_key(owner, key)
-                print(f"  {key_label(keys.CURRENT, did)}  kept in {STORE_NAMES.get(store, store)}", file=sys.stderr)
+                print(f"  {key_label(keys.CURRENT, did)}  kept in {store_name(store)}", file=sys.stderr)
                 out.append((key, store))
         except (wallet.WalletError, keys.KeyStoreError, OSError) as e:
-            sys.exit(str(e))
+            stop(str(e))
         return out
 
 
@@ -731,14 +865,14 @@ that signs opens them there.
         """The sentence that says what a pull did: HAVE, the did:keys held before, PULLED, [(key, store)]."""
         total, held, who = len(latest.keys["keys"]), len(have) + len(pulled), names.short(owner)
         if pulled:
-            stores = sorted({STORE_NAMES.get(s, s) for _, s in pulled})
+            stores = sorted({store_name(s) for _, s in pulled})
             out = f"Pulled {plural(len(pulled), 'current key')} of {who} from {w.name} into {' and '.join(stores)}."
             return out + (f" This computer holds {held} of its {total} current keys." if held < total else "")
         if held == total:
             return (f"The current key of {who} is already on this computer." if total == 1
                     else f"The {total} current keys of {who} are already on this computer.")
-        return (f"{w.name} holds no current key of {who} that this computer lacks: it holds {held} of the "
-                f"{total}.")
+        return (f"The wallet {w.name} holds no current key of {who} that this computer lacks: this computer "
+                f"holds {held} of the {total}.")
 
 
     def pull_from_wallet(owner, latest, found):
@@ -749,21 +883,41 @@ that signs opens them there.
         held = {k.did for k in found}
         return found + [k for k, _ in pull_current_keys(w, owner, [d for d in latest.keys["keys"] if d not in held])]
 
-`osheaf key list` shows what the wallet holds: for each key, its owner, its
-name, its kind, its `did:key` and the version of the key log that commits
-it, as the files say, without decrypting them. No secret is shown.
+`osheaf key list` shows what the wallet holds, as a table: for each key,
+its owner, its kind, its `did:key` (both short), the version of the key log
+that commits it, and its locks (`passphrase`, and `passkey (RP)` for the
+passkeys of each relying party), as the files say, without decrypting
+them. No secret is shown:
+
+```
+The wallet github:mgubi/opensheaf-keys holds 4 keys:
+  Owner          Kind      Key            Version  Locks
+  em4v3kp5…gora  current   z6MkpZ85…Svuy  v1       passphrase, passkey (unlock.opensheaf.org)
+  em4v3kp5…gora  rotation  z6MkgYBn…uTGo  v1       passphrase, passkey (unlock.opensheaf.org)
+  ...
+```
 
     # in the commands of key wallets:
     def key_list(args):
-        """What the wallet holds: owner, key, kind, did:key, version."""
+        """What the wallet holds, as a table: the owner, kind, key, version and locks of each key."""
         from . import wallet
         w = wallet_for(args)
+        owner = getattr(args, "owner", None)
         try:
-            rows = wallet.listing(w, getattr(args, "owner", None))
+            rows = wallet.listing(w, owner)
         except wallet.WalletError as e:
-            sys.exit(str(e))
-        for owner, kid, kind, did, version in rows:
-            print(f"{owner} {kid} {kind:8} {did} {version}".rstrip())
+            stop(str(e))
+        whose = f" of {names.short(owner)}" if owner else ""
+        if not rows:
+            print(f"The wallet {w.name} holds no key{whose}.")
+            return
+        print(f"The wallet {w.name} holds {plural(len(rows), 'key')}{whose}:")
+        table = [("Owner", "Kind", "Key", "Version", "Locks")] + [
+            (names.short(o), kind, names.short(did), version or "-", ", ".join(locks) or "none")
+            for o, _, kind, did, version, locks in rows]
+        widths = [max(len(r[i]) for r in table) for i in range(4)]
+        for r in table:
+            print("  " + "  ".join(c.ljust(n) for c, n in zip(r, widths)) + "  " + r[4])
 
 Unlocking with a passkey
 ------------------------
@@ -829,7 +983,7 @@ says once how to move them: `osheaf key enroll --new-passkey`, then
         except passkey.UnlockFailed as e:
             failed.add(owner)
             if force:
-                sys.exit(f"the passkey did not unlock the keys of {owner}: {e}")
+                stop(f"the passkey did not unlock the keys of {names.short(owner)}: {e}")
             print(f"The passkey did not open the keys ({e}): osheaf asks for the passphrase instead.",
                   file=sys.stderr)
             return None
@@ -838,7 +992,7 @@ says once how to move them: `osheaf key enroll --new-passkey`, then
         if not opened:
             failed.add(owner)
             if force:
-                sys.exit(f"the passkey's answer opens no key of {owner}: nothing was unlocked")
+                stop(f"the passkey's answer opens no key of {names.short(owner)}: nothing was unlocked")
             print("The passkey's answer opens no key: osheaf asks for the passphrase instead.", file=sys.stderr)
             return None
         for c in opened[:1]:
@@ -882,13 +1036,13 @@ new keys: `osheaf key enroll` again, which uses the same passkey.
         try:
             keys.read_key(texts[0], secret)
         except keys.KeyStoreError as e:
-            sys.exit(f"{e}: this is not the passphrase of the keys of {owner} in {w.name}")
+            stop(f"{e}: this is not the passphrase of the keys of {names.short(owner)} in {w.name}")
         return secret
 
 
     def enroll_hint(owner, unlocked):
         if not unlocked and owner in _ASKED.get("seen", set()):
-            print(f"The new keys of {names.short(owner)} open with the passphrase only: run osheaf key enroll "
+            print(f"The new keys of {names.short(owner)} open with your passphrase only: run osheaf key enroll "
                   "so that your passkey opens them too.", file=sys.stderr)
 
 `osheaf key enroll` adds a passkey to the keys of the owner in the wallet.
@@ -923,21 +1077,21 @@ ends with one sentence on the standard output.
         try:
             return [(kid, wallet.read_any(w, o, kid)) for o, kid in w.entries(owner)]
         except wallet.WalletError as e:
-            sys.exit(str(e))
+            stop(str(e))
 
 
     def encrypted_entries(w, owner):
         out = [(kid, t) for kid, t in wallet_entries(w, owner)
                if any(x.startswith("encryption ") and x.split()[1:2] != ["none"] for x in t.splitlines())]
         if not out:
-            sys.exit(f"{w.name} holds no encrypted key of {owner}")
+            stop(f"the wallet {w.name} holds no key of {names.short(owner)} locked with a passphrase")
         return out
 
 
     def key_owner(args):
         owner = getattr(args, "owner", None) or ARCHIVE.get("owner")
         if not owner or not names.OWNER_NAME.match(owner):
-            sys.exit("give --owner NAME, or run the command in an archive")
+            stop("give --owner NAME, or run the command in an archive")
         return owner
 
 
@@ -950,7 +1104,7 @@ ends with one sentence on the standard output.
         try:
             w.check_writable()
         except wallet.WalletError as e:
-            sys.exit(str(e))
+            stop(str(e))
         who = names.short(owner)
         print(f"Reading the keys of {who} in {w.name}…", file=sys.stderr)
         entries = encrypted_entries(w, owner)
@@ -961,7 +1115,7 @@ ends with one sentence on the standard output.
         todo = entries if new else [(kid, t) for kid, t in entries
                                     if not {p.cred for p in keys.passkeys_of(t)} & set(known)]
         if not todo:
-            print(f"Every encrypted key of {who} in {w.name} already opens with your passkey.")
+            print(f"Every key of {who} in {w.name} already opens with your passkey.")
             return
         secret = passphrase(confirm=False, where=w.name)
         n = len(todo)
@@ -970,35 +1124,35 @@ ends with one sentence on the standard output.
             try:
                 rk = keys.read_key(t, secret)
             except keys.KeyStoreError as e:
-                sys.exit(f"{w.name} {kid}: {e}: nothing was changed")
+                stop(f"{w.name} {kid}: {e}: nothing was changed")
             print(f"  {i}/{n} {key_label(rk.kind, rk.key.did)}  opened", file=sys.stderr)
-        stop = "stop: nothing is changed"
+        halt = "stop: nothing is changed"
         try:
             if new:
-                cred, prf = passkey.enroll(owner, known, no_browser=_ASKED["no_browser"], ctrl_c=stop)
+                cred, prf = passkey.enroll(owner, known, no_browser=_ASKED["no_browser"], ctrl_c=halt)
                 print("The passkey is made. Once more, to check it…", file=sys.stderr)
-                again, prf2 = passkey.unlock(owner, [cred], no_browser=_ASKED["no_browser"], ctrl_c=stop)
+                again, prf2 = passkey.unlock(owner, [cred], no_browser=_ASKED["no_browser"], ctrl_c=halt)
                 if again not in (None, cred) or not hmac.compare_digest(prf, prf2):
-                    sys.exit("the new passkey did not give the same secret twice: nothing was changed")
+                    stop("the new passkey did not give the same secret twice: nothing was changed")
             else:
-                cred, prf = passkey.unlock(owner, known, no_browser=_ASKED["no_browser"], ctrl_c=stop)
+                cred, prf = passkey.unlock(owner, known, no_browser=_ASKED["no_browser"], ctrl_c=halt)
         except passkey.UnlockFailed as e:
-            sys.exit(f"no passkey: {e}; nothing was changed")
+            stop(f"no passkey: {e}; nothing was changed")
         kek = keys.passkey_kek(prf)
         if not new:
             opened = [c for c in ([cred] if cred else known)
                       if any(_opens(t, c, kek) for _, t in entries if c in {p.cred for p in keys.passkeys_of(t)})]
             if not opened:
-                sys.exit("the passkey used does not open the keys it is enrolled for: nothing was changed")
+                stop("the passkey used does not open the keys it is enrolled for: nothing was changed")
             cred = opened[0]
         unlocked = keys.Passkey(cred, salt, kek=kek)
-        print(f"Saving {the_keys(n)} to {w.name}…", file=sys.stderr)
+        print(f"Adding a passkey lock to {the_keys(n)} of {who} in {w.name}…", file=sys.stderr)
         try:
             for i, (kid, _) in enumerate(todo, 1):
                 kind, did = wallet.add_passkey(w, owner, kid, secret, unlocked)
-                print(f"  {i}/{n} {key_label(kind, did)}  saved", file=sys.stderr)
+                print(f"  {i}/{n} {key_label(kind, did)}  lock added", file=sys.stderr)
         except wallet.WalletError as e:
-            sys.exit(str(e))
+            stop(str(e))
         print(f"Done: {the_keys(n)} of {who} {'opens' if n == 1 else 'open'} with your passkey (Touch ID) "
               "and still with your passphrase.")
 
@@ -1028,10 +1182,10 @@ It says how many keys the passkey opened, and what this device holds.
         print(f"Reading the keys of {who} in {w.name}…", file=sys.stderr)
         entries = [(kid, t) for kid, t in wallet_entries(w, owner) if keys.passkeys_of(t)]
         if not entries:
-            sys.exit(f"no key of {owner} in {w.name} opens with a passkey: run osheaf key enroll")
+            stop(f"no key of {who} in {w.name} has a passkey lock: run osheaf key enroll")
         keks = passkey_keks(owner, [p for _, t in entries for p in keys.passkeys_of(t)], force=True)
         if not keks:
-            sys.exit(f"no passkey of {owner} to unlock")
+            stop(f"no passkey of {who} to unlock with")
         opened, n = sum(1 for _, t in entries if any(_opens(t, c, k) for c, k in keks.items())), len(entries)
         if opened == n:
             print(f"{'The key' if n == 1 else 'Both keys' if n == 2 else f'All {n} keys'} of {who} opened "
@@ -1046,7 +1200,7 @@ It says how many keys the passkey opened, and what this device holds.
             try:
                 have = {k.did for k in keys.current_keys(owner, latest.keys["keys"])}
             except keys.KeyStoreError as e:
-                sys.exit(str(e))
+                stop(str(e))
             pulled = pull_current_keys(w, owner, [d for d in latest.keys["keys"] if d not in have])
             print(pull_summary(w, owner, latest, have, pulled))
 
@@ -1070,40 +1224,46 @@ that this device holds.
         """Copy a current key of this device to the clipboard (or print it, --stdout)."""
         from . import wallet
         if not getattr(args, "clipboard", False) and not getattr(args, "stdout", False):
-            sys.exit("give --clipboard, or --stdout to print the key")
+            stop("give --clipboard, or --stdout to print the key")
         owner = getattr(args, "owner", None) or ARCHIVE.get("owner")
         if not owner:
-            sys.exit("give --owner NAME, or run the command in an archive")
+            stop("give --owner NAME, or run the command in an archive")
+        who = names.short(owner)
         if getattr(args, "did", None):
             dids = [args.did]
         else:
             latest = key_log(owner).latest() if ROOT is not None and key_log(owner) else None
             if latest is None:
-                sys.exit(f"name the key to export, by its did:key (no key log of {owner} here)")
+                stop(f"name the key to export, by its did:key (no key log of {who} here)")
             dids = latest.keys["keys"]
         try:
             here = keys.current_keys(owner, dids)
         except keys.KeyStoreError as e:
-            sys.exit(str(e))
-        if len(here) != 1:
-            sys.exit(f"this device holds {len(here)} of the keys {', '.join(dids)} of {owner}: name one by its did:key")
+            stop(str(e))
+        if not here:
+            stop(f"this computer holds none of the keys {', '.join(names.short(d) for d in dids)} of {who}")
+        if len(here) > 1:
+            stop(f"this computer holds {len(here)} current keys of {who}: name the one to export by its did:key, "
+                 "one of " + ", ".join(k.did for k in here))
         key = here[0]
-        text = keys.key_text(key, owner, keys.CURRENT, passphrase() if getattr(args, "encrypt", False) else None)
+        locked = getattr(args, "encrypt", False)
+        text = keys.key_text(key, owner, keys.CURRENT, passphrase() if locked else None)
         if getattr(args, "stdout", False):
             sys.stdout.write(text)
         else:
             try:
                 wallet.to_clipboard(text)
             except wallet.WalletError as e:
-                sys.exit(str(e))
+                stop(str(e))
             wallet.clear_later(text)
-            print(f"the current key {key.did} of {owner} is on the clipboard: paste it into a note of your "
-                  f"password manager (the Passwords app) within {int(wallet.CLEAR_AFTER)} seconds, after which "
-                  "osheaf clears the clipboard if it still holds the key", file=sys.stderr)
-            print("warning: any program of yours can read the clipboard, and Universal Clipboard may send it to "
-                  "your other Apple devices nearby", file=sys.stderr)
-        print("warning: a current key kept in a password manager is on every device that it syncs with; "
-              "section 6.2 has one key per device", file=sys.stderr)
+            print(f"The current key {names.short(key.did)} of {who}"
+                  f"{', locked with your passphrase,' if locked else ''} is on the clipboard: paste it into a note "
+                  f"of your password manager (the Passwords app) within {int(wallet.CLEAR_AFTER)} seconds; then "
+                  "osheaf clears the clipboard if it still holds the key.", file=sys.stderr)
+            warn("any program of yours can read the clipboard, and Universal Clipboard may send it to your "
+                 "other Apple devices nearby")
+        warn("a current key kept in a password manager is on every device that it syncs with, while section 6.2 "
+             "has one key per device")
 
 `osheaf key import --clipboard` (or `--stdin`) reads such a text back, asks
 for the passphrase if it is encrypted, and keeps the key on this device. A
@@ -1118,41 +1278,51 @@ does.
         """Keep on this device a key copied from a password manager (the clipboard, or the standard input)."""
         from . import wallet
         if bool(getattr(args, "clipboard", False)) == bool(getattr(args, "stdin", False)):
-            sys.exit("give --clipboard or --stdin")
+            stop("give --clipboard or --stdin")
         if not keys.kept_on_device():
-            sys.exit(NOT_KEPT)
+            stop(NOT_KEPT)
         try:
             text = wallet.from_clipboard() if args.clipboard else sys.stdin.read()
         except wallet.WalletError as e:
-            sys.exit(str(e))
+            stop(str(e))
         try:
             try:
                 rk = keys.read_key(text)
             except keys.PassphraseNeeded:
                 rk = keys.read_key(text, passphrase(confirm=False))
         except keys.KeyStoreError as e:
-            sys.exit(str(e))
+            stop(str(e))
         if rk.kind != keys.CURRENT:
-            sys.exit("a rotation key is never kept on a device: give its file to the command it signs "
-                     "(--rotation-key FILE), or keep it in a wallet")
+            stop("a rotation key is never kept on a device: give its file to the command it signs "
+                 "(--rotation-key FILE), or keep it in a wallet")
         owner = rk.owner or getattr(args, "owner", None) or ARCHIVE.get("owner")
         if getattr(args, "owner", None) and rk.owner and args.owner != rk.owner:
-            sys.exit(f"the key is one of {rk.owner}, not of {args.owner}")
+            stop(f"the key is one of {names.short(rk.owner)}, not of {names.short(args.owner)}")
         if not owner or not names.OWNER_NAME.match(owner):
-            sys.exit("the text names no owner: give --owner NAME")
+            stop("the text names no owner: give --owner NAME")
+        who = names.short(owner)
         log = key_log(owner) if ROOT is not None else None
         latest = log.latest() if log is not None else None
         if latest is not None and rk.key.did not in latest.keys["keys"]:
-            print(f"warning: {rk.key.did} is not a current key of v{latest.number} of the key log of {owner}: "
-                  "it signs nothing until a version adds it", file=sys.stderr)
+            warn(f"{rk.key.did} is not a current key of v{latest.number} of the key log of {who}: it signs "
+                 f"nothing until a version adds it (osheaf owner rotate --add {rk.key.did})")
         try:
             if keys.current_keys(owner, [rk.key.did]):
-                print(f"{rk.key.did}: on this device already")
+                print(f"The current key {names.short(rk.key.did)} of {who} is already on this computer.")
                 return
             store = keys.store_current_key(owner, rk.key)
         except (keys.KeyStoreError, OSError) as e:
-            sys.exit(str(e))
-        print(f"{rk.key.did}\nkept in {store}")
+            stop(str(e))
+        print(f"The current key {names.short(rk.key.did)} of {who} is now kept in {store_name(store)}.")
+
+
+    def forget_here(owner, dids):
+        """Remove the current keys DIDS of OWNER from this computer, and say so."""
+        for did in dids:
+            keys.forget_current_key(owner, did)
+        if dids:
+            print(f"This computer no longer holds {the_keys(len(dids), 'current key')} "
+                  f"{', '.join(names.short(d) for d in dids)} of {names.short(owner)}.")
 
 Forgetting a key
 ----------------
@@ -1165,109 +1335,137 @@ latest version of its key log no longer needs: current keys it does not
 list, and rotation keys it does not commit, used up (section 6.2 asks
 that they be destroyed). A rotation key the latest version commits is kept
 unless `--force`: without `nextThreshold` of them the owner can never
-change its keys (section 6.2). Removing from a wallet is confirmed by
-typing `forget`, unless `--yes`.
+change its keys (section 6.2). Removing from a wallet lists the keys that
+go, and is confirmed by typing `forget` ("Type forget to confirm:"),
+unless `--yes`; each key is then removed in turn, and a line "Done: …"
+says how many.
 
-`osheaf key forget --passkey CRED` and `--rp RP` remove passkey wraps, not
-keys: those of the credential `CRED`, a passkey lost or replaced, or those
-of the relying party `RP`, `opensheaf.org` after moving to
-`unlock.opensheaf.org` (chapter 7). Every key of the owner in the wallet
-that has such a wrap is written back without it, its passphrase wrap and
-its other wraps kept, after the same confirmation.
+`osheaf key forget --passkey CRED` and `--rp RP` remove passkey locks (the
+wraps of chapter 7), not keys: those of the credential `CRED`, a passkey
+lost or replaced, or those of the relying party `RP`, `opensheaf.org` after
+moving to `unlock.opensheaf.org`. Every key of the owner in the wallet that
+has such a lock is written back without it, its passphrase lock and its
+other locks kept, after the same confirmation; the last line says what
+opens the keys now:
+
+```
+Removing the opensheaf.org passkey lock from 4 keys of em4v3kp5…gora in github:mgubi/opensheaf-keys:
+  current key   z6MkpZ85…Svuy
+  rotation key  z6MkgYBn…uTGo
+  ...
+Type forget to confirm: forget
+  1/4 current key   z6MkpZ85…Svuy  lock removed
+  ...
+Done: the 4 keys open with your passkey (unlock.opensheaf.org) and your passphrase.
+```
 
     # in forget a key:
     def key_forget(args):
-        """Remove keys from this device, and with --from-wallet from the wallet; or passkey wraps."""
+        """Remove keys from this device, and with --from-wallet from the wallet; or passkey locks."""
         from . import wallet
         if getattr(args, "passkey", None) or getattr(args, "rp", None):
             return forget_passkey_wraps(args)
         owner, log = owner_of(args)
+        who = names.short(owner)
         latest = log.latest()
         listed = set(latest.keys["keys"]) if latest else set()
         committed = {d[:16] for d in latest.keys["next"]} if latest else set()
         dids = list(getattr(args, "did", None) or [])
         if getattr(args, "used", False):
             if not getattr(args, "from_wallet", False) or dids:
-                sys.exit("--used goes with --from-wallet, and names no key")
+                stop("--used goes with --from-wallet, and names no key")
         elif not dids:
-            sys.exit("name the keys to forget, by their did:key")
+            stop("name the keys to forget, by their did:key")
         for did in dids:
             try:
                 names.did_key_public(did)
             except ValueError:
-                sys.exit(f"not a did:key URI of an Ed25519 key: {did}")
+                stop(f"not a did:key URI of an Ed25519 key: {did}")
         if not getattr(args, "from_wallet", False):
-            for did in dids:
-                keys.forget_current_key(owner, did)
-                print(f"{did}: forgotten on this device")
+            forget_here(owner, dids)
             return
         w = wallet_for(args)
         try:
             rows = wallet.listing(w, owner)
         except wallet.WalletError as e:
-            sys.exit(str(e))
+            stop(str(e))
         if getattr(args, "used", False):
             gone = [r for r in rows if r[3] not in listed and r[1] not in committed]
         else:
             gone = [r for r in rows if r[3] in dids]
         needed = [r for r in gone if r[1] in committed]
         if needed and not getattr(args, "force", False):
-            sys.exit(f"{', '.join(r[3] for r in needed)}: rotation keys of the latest version of the key log, "
-                     "kept (an owner without nextThreshold of them can never change its keys, section 6.2); "
-                     "--force removes them")
-        for r in gone:
-            print(f"to remove from {w.name}: {r[2]} key {r[3]}")
-        if gone and not getattr(args, "yes", False) and input("type forget to remove them: ").strip() != "forget":
-            sys.exit("not confirmed: nothing was removed")
-        for did in dids:
-            keys.forget_current_key(owner, did)
-            print(f"{did}: forgotten on this device")
+            stop(f"{', '.join(names.short(r[3]) for r in needed)}: "
+                 f"{'a rotation key' if len(needed) == 1 else 'rotation keys'} of the latest version of the key log, "
+                 "kept (an owner without enough of them to sign the next version can never change its keys, "
+                 "section 6.2); --force removes them")
+        n = len(gone)
+        if gone:
+            here = f", and {the_keys(len(dids), 'current key')} from this computer" if dids else ""
+            print(f"Removing {plural(n, 'key')} of {who} from {w.name}{here}:", file=sys.stderr)
+            for r in gone:
+                print(f"  {key_label(r[2], r[3])}", file=sys.stderr)
+            if not confirmed("forget", args):
+                stop("not confirmed: nothing was removed")
+        forget_here(owner, dids)
         if not gone:
-            print(f"{w.name} holds none of these keys")
+            print(f"The wallet {w.name} holds none of these keys of {who}.")
+            return
         try:
-            for o, kid, kind, did, _ in gone:
+            for i, (o, kid, kind, did, _, _) in enumerate(gone, 1):
                 w.forget(o, kid, kind)
-                print(f"{did}: removed from {w.name}")
+                print(f"  {i}/{n} {key_label(kind, did)}  removed", file=sys.stderr)
         except wallet.WalletError as e:
-            sys.exit(str(e))
+            stop(str(e))
+        print(f"Done: {plural(n, 'key')} of {who} removed from {w.name}.")
 
 
     def forget_passkey_wraps(args):
-        """Remove the passkey wraps of --passkey CRED or --rp RP from the keys of the owner in the wallet."""
+        """Remove the passkey locks (wrap lines) of --passkey CRED or --rp RP from the keys of the owner
+        in the wallet."""
+        from collections import Counter
         from . import wallet
         cred, rp = getattr(args, "passkey", None), getattr(args, "rp", None)
         if getattr(args, "did", None) or getattr(args, "used", False):
-            sys.exit("--passkey and --rp remove passkey wraps, and name no key")
+            stop("--passkey and --rp remove passkey locks, and name no key")
         owner, w = key_owner(args), wallet_for(args)
+        who = names.short(owner)
         try:
             w.check_writable()
         except wallet.WalletError as e:
-            sys.exit(str(e))
+            stop(str(e))
         todo = []
         for kid, text in wallet_entries(w, owner):
             try:
                 new = keys.remove_passkeys(text, cred, rp)
             except keys.KeyStoreError as e:
-                sys.exit(f"{w.name} {kid}: {e}: nothing was changed")
+                stop(f"{w.name} {kid}: {e}: nothing was changed")
             if new.strip() != text.strip():
                 todo.append((kid, wallet.describe(text), new))
-        what = " and ".join(x for x in (cred and f"of the passkey {cred}", rp and f"of {rp}") if x)
+        what = (f"the {rp} lock of the passkey {cred}" if cred and rp else
+                f"the {rp} passkey lock" if rp else f"the lock of the passkey {cred}")
         if not todo:
-            print(f"No key of {names.short(owner)} in {w.name} has a passkey wrap {what}.")
+            print(f"No key of {who} in {w.name} has {what}.")
             return
+        n = len(todo)
+        print(f"Removing {what} from {plural(n, 'key')} of {who} in {w.name}:", file=sys.stderr)
         for _, f, _ in todo:
-            print(f"to remove from {w.name}: the passkey wrap {what} of the {f.get('kind', '?')} key {f.get('key', '?')}")
-        if not getattr(args, "yes", False) and input("type forget to remove them: ").strip() != "forget":
-            sys.exit("not confirmed: nothing was removed")
+            print(f"  {key_label(f.get('kind', '?'), f.get('key', '?'))}", file=sys.stderr)
+        if not confirmed("forget", args):
+            stop("not confirmed: nothing was removed")
         try:
-            for kid, f, new in todo:
+            for i, (kid, f, new) in enumerate(todo, 1):
                 kind = f.get("kind", keys.CURRENT)
                 w.write(owner, kid, kind, new)
                 if (w.read(owner, kid, kind) or "").strip() != new.strip():
                     raise wallet.WalletError(f"{w.name} did not keep the {kind} key {f.get('key')}")
-                print(f"{f.get('key', kid)}: passkey wrap {what} removed from {w.name}")
+                print(f"  {i}/{n} {key_label(kind, f.get('key', kid))}  lock removed", file=sys.stderr)
         except wallet.WalletError as e:
-            sys.exit(str(e))
+            stop(str(e))
+        groups = Counter(tuple(wallet.locks(new)) for _, _, new in todo)
+        said = [f"{the_keys(k) if len(groups) == 1 else plural(k, 'key')} {'opens' if k == 1 else 'open'} with "
+                f"{lock_words(locks)}" for locks, k in groups.items()]
+        print("Done: " + "; ".join(said) + ".")
 
 Signing again
 -------------
@@ -1301,28 +1499,31 @@ and are added to the witness folder, never replacing one.
         inv = load_inventory(d)
         ver = args.version
         if ver not in inv["versions"]:
-            sys.exit(f"{args.id} has no object version {ver}")
+            stop(f"{args.id} has no object version {ver}")
         owner = obj_id.split(":")[2]
+        who = names.short(owner)
         if owner not in archive_owners():
-            sys.exit(f"{args.id} is a line of an owner this archive does not host: only its owner signs it")
+            stop(f"{args.id} is a line of an owner this archive does not host: only its owner signs it")
         log, latest, signers = signing_keys(owner)
         statuses = line_statuses(d, inv, log)[1]
         status = statuses[int(ver[1:]) - 1]
         if status != sign.CONTESTED:
-            sys.exit(f"{args.id} {ver} is {status}: signing again is for a version contested by an exposed key "
-                     "(section 7.1)")
+            stop(f"{args.id} {ver} is {status}: signing again is for a version contested by an exposed key "
+                 "(section 7.1)")
         held = set(witnesses_of(d, ver))
         fresh = [k for k in signers if k.did not in log.exposed_keys() and sign.file_name(k.did) not in held]
         if len(fresh) < latest.keys["threshold"]:
-            sys.exit(f"this device holds {plural(len(fresh), 'current key')} of {owner} that "
-                     f"{'has' if len(fresh) == 1 else 'have'} not signed {ver}, and "
-                     f"v{latest.number} of the key log needs {latest.keys['threshold']}")
+            stop(f"this computer holds {plural(len(fresh), 'current key')} of {who} that "
+                 f"{'has' if len(fresh) == 1 else 'have'} not signed {ver}, and "
+                 f"v{latest.number} of the key log needs {latest.keys['threshold']}")
         dig = names.sha512_hex((d / ver / "inventory.json").read_bytes())
         if not getattr(args, "yes", False):
-            print(f"{args.id} {ver}: document version {doc_version_of(d, inv, ver)}, deposited "
-                  f"{inv['versions'][ver]['created']}: {inv['versions'][ver].get('message', '')}")
-            if input(f"did {owner[:16]}... make it? type {dig[:8]} to sign it again: ").strip() != dig[:8]:
-                sys.exit("not confirmed: nothing was signed")
+            print(f"Signing {args.id} {ver} again, with {plural(len(fresh), 'current key')} of {who}:")
+            print(f"  document version {doc_version_of(d, inv, ver)}, deposited {inv['versions'][ver]['created']}"
+                  + (f": {inv['versions'][ver]['message']}" if inv["versions"][ver].get("message") else ""))
+            print(f"Sign it again only if {who} made this version.")
+            if not confirmed(dig[:8]):
+                stop("not confirmed: nothing was signed")
         wdir = d / sign.WITNESSES / ver
         wdir.mkdir(parents=True, exist_ok=True)
         pin = log.pin(latest.number)
@@ -1330,5 +1531,5 @@ and are added to the witness folder, never replacing one.
             with open(wdir / sign.file_name(key.did), "xb") as f:
                 f.write(sign.signature_file(key, obj_id, ver, dig, owner, pin))
         write_discovery()
-        print(f"{args.id} {ver}: signed again by {plural(len(fresh), 'key')}, naming v{latest.number} of the key log: "
-              f"{line_statuses(d, inv, log)[1][int(ver[1:]) - 1]}")
+        print(f"Done: {args.id} {ver} signed again by {plural(len(fresh), 'key')} of {who}, under v{latest.number} "
+              f"of the key log; it is now {line_statuses(d, inv, log)[1][int(ver[1:]) - 1]}.")

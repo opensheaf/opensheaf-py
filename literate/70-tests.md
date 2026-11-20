@@ -1369,7 +1369,7 @@ nothing.
         log = P.key_log(P.ARCHIVE["owner"])
         assert json.loads(log.versions[0].files["keys.json"])["nextThreshold"] == 1
         monkeypatch.setattr("builtins.input", lambda prompt: "XXXX")
-        with pytest.raises(SystemExit, match="not confirmed"):
+        with pytest.raises(SystemExit, match="Not confirmed"):
             run("--root", str(root), "owner", "rotate", "--rotation-key", rotation_files(tmp_path / "S-keys")[0],
                 "--export", str(tmp_path / "s2"), "--no-passphrase")
         assert len(P.key_log(P.ARCHIVE["owner"]).versions) == 1

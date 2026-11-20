@@ -193,7 +193,7 @@ wallet are used up (`osheaf key forget --from-wallet --used` removes them).
 gh repo create me/opensheaf-keys --private        # once, by hand: the tools never create it
 osheaf init my-papers --name "Papers of Jane Doe" --base-url https://example.org/papers/ \
   --curator "Doe, Jane" --new-owner --keys github:me/opensheaf-keys
-osheaf key list                                   # owner, key, kind, did:key: never a secret
+osheaf key list                                   # a table: owner, kind, key, version, locks; no secret
 osheaf key pull                                   # on another machine
 osheaf owner rotate --add did:key:NEW             # rotation keys read from the wallet
 osheaf owner rotate --keys offline --export /Volumes/USB/opensheaf-keys --print   # move up
@@ -290,6 +290,10 @@ no longer asks the browser for them, and says so. Move once:
 osheaf key enroll --new-passkey          # a passkey for unlock.opensheaf.org
 osheaf key forget --rp opensheaf.org     # then remove the old locks (the passphrase lock stays)
 ```
+
+The second lists the keys that lose their `opensheaf.org` lock, asks you to
+type `forget` to confirm, and ends with "Done: the 4 keys open with your
+passkey (unlock.opensheaf.org) and your passphrase."
 
 What you trust: the page at unlock.opensheaf.org (served by GitHub Pages
 from [opensheaf/unlock](https://github.com/opensheaf/unlock), plain

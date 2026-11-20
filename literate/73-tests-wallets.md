@@ -240,7 +240,7 @@ pasted around it, and a mistyped group is caught by its check.
         wrong = seed[:-1] + ("A" if seed[-1] != "A" else "B")
         with pytest.raises(keys.KeyStoreError, match="mistyped"):
             keys.read_key(plain.replace(seed, wrong, 1))
-        with pytest.raises(wallet.WalletError, match="only encrypted"):
+        with pytest.raises(wallet.WalletError, match="only locked with a passphrase"):
             wallet.put_key(None, owner, k, keys.ROTATION, 1, None)
 
 The repositories of an archive are those of its git remotes on GitHub and
@@ -282,7 +282,7 @@ missing or signed-out `gh` is said so. The log of the double shows that no
             run(*r, "--wallet", "github:me/internal")
         with pytest.raises(SystemExit, match="repository of the archive"):
             run(*r, "--wallet", "github:me/papers")
-        with pytest.raises(SystemExit, match="no repository me/missing"):
+        with pytest.raises(SystemExit, match="No repository me/missing"):
             run(*r, "--wallet", "github:me/missing")
         monkeypatch.setenv("FAKE_GH_AUTH", "0")
         with pytest.raises(SystemExit, match="not signed in"):
@@ -312,13 +312,16 @@ back, and signs. A machine whose archive names the wallet (here through
         capsys.readouterr()
         run(*r, "key", "push", "--wallet", "github:me/keys")
         out, err = capsys.readouterr()
-        assert wallet.risk("github:me/keys", owner) in err and "pushed to github:me/keys" in out
+        assert wallet.risk("github:me/keys", owner) in err and out == "Done: 1 current key of " \
+            f"{names.short(owner)} saved to github:me/keys, locked with your passphrase.\n"
         files = in_repo(tmp_path)
         assert list(files) == [f"{owner}/{kid}.key.enc"]
         assert "kind current" in files[f"{owner}/{kid}.key.enc"] and "wrap passphrase argon2id" in files[f"{owner}/{kid}.key.enc"]
         run(*r, "key", "list", "--wallet", "github:me/keys")
-        out = capsys.readouterr().out
-        assert out.split() == [owner, kid, "current", current, "v1"]
+        out = capsys.readouterr().out.splitlines()
+        assert out[0] == "The wallet github:me/keys holds 1 key:"
+        assert out[1].split() == ["Owner", "Kind", "Key", "Version", "Locks"]
+        assert out[2].split() == [names.short(owner), "current", names.short(current), "v1", "passphrase"]
         seed = (tmp_path / "config" / "opensheaf" / "keys" / owner / f"{kid}.key").read_text().strip()
         run(*r, "key", "forget", current)
         assert local_keys(tmp_path, owner) == []
@@ -376,7 +379,7 @@ No secret is ever printed on the standard output.
         assert f"{owner}/{names.key_id(laptop)}.key.enc" in in_repo(tmp_path)
         run(*r, "owner", "rotate", "--keys", "offline", "--export", str(tmp_path / "usb"), "--yes")
         out3, err3 = capsys.readouterr()
-        assert "moved up" in err3
+        assert "Moved up to the maximum security level" in err3
         v3 = P.key_log(owner).latest().keys
         assert not {f"{owner}/{d[:16]}.key.enc" for d in v3["next"]} & set(in_repo(tmp_path))
         assert len(list((tmp_path / "usb").glob("rotation-*.txt"))) == 3
@@ -408,7 +411,7 @@ rotation keys and encrypts three.
         with pytest.raises(SystemExit, match="--force removes them"):
             run(*r, "key", "forget", "--from-wallet", did, "--yes")
         monkeypatch.setattr("builtins.input", lambda prompt: "no")
-        with pytest.raises(SystemExit, match="not confirmed"):
+        with pytest.raises(SystemExit, match="Not confirmed"):
             run(*r, "key", "forget", "--from-wallet", did, "--force")
         assert len(in_repo(tmp_path)) == 4
         monkeypatch.delenv(P.PASSPHRASE)
@@ -448,7 +451,7 @@ key, and left alone if the user copied something else.
         run(*r, "key", "forget", current)
         monkeypatch.delenv(P.PASSPHRASE)
         monkeypatch.setattr("getpass.getpass", lambda prompt: "wrong horse")
-        with pytest.raises(SystemExit, match="wrong passphrase"):
+        with pytest.raises(SystemExit, match="Wrong passphrase"):
             run(*r, "key", "import", "--clipboard")
         monkeypatch.setattr("getpass.getpass", lambda prompt: "correct horse")
         run(*r, "key", "import", "--clipboard")
@@ -513,14 +516,15 @@ GitHub wallet there is accepted.
         held = sorted(f.name.rsplit("-", 1)[1] for f in vault.iterdir())
         assert held == ["current.txt"] + ["rotation.txt"] * 3
         run(*r, "key", "list")
-        rows = capsys.readouterr().out.splitlines()
-        assert len(rows) == 4 and sorted(x.split()[2] for x in rows) == ["current"] + ["rotation"] * 3
+        rows = capsys.readouterr().out.splitlines()[2:]
+        assert len(rows) == 4 and sorted(x.split()[1] for x in rows) == ["current"] + ["rotation"] * 3
+        assert all(x.endswith("  passphrase") for x in rows)
         run(*r, "owner", "rotate", "--keys", "command")
         assert len(P.key_log(owner).versions) == 3 and len(list(vault.iterdir())) == 7
         other = tmp_path / "other"
         other.mkdir()
         monkeypatch.setenv(wallet.WALLET, json.dumps(commands(other)))
-        with pytest.raises(SystemExit, match="command holds 0 of the rotation keys"):
+        with pytest.raises(SystemExit, match="The wallet command holds 0 of the rotation keys"):
             run(*r, "owner", "end")
         monkeypatch.setenv(wallet.WALLET, "command")
         run(*r, "owner", "end")
@@ -742,7 +746,7 @@ is printed.
         short = names.short(owner)
         assert out == f"Done: the 4 keys of {short} open with your passkey (Touch ID) and still with your passphrase.\n"
         assert f"Opening the 4 keys of {short} in github:me/keys with the passphrase…" in err
-        assert "  1/4 " in err and "  4/4 " in err and "Saving the 4 keys to github:me/keys…" in err
+        assert "  1/4 " in err and "  4/4 " in err and f"Adding a passkey lock to the 4 keys of {short} in github:me/keys…" in err
         assert "Opening the browser to create a passkey for" in err and "Still waiting" not in err
         assert passkey.UNLOCK_PAGE not in err and "(s)" not in out + err
         assert err.count("Check that the browser shows the code ") == 2
@@ -886,12 +890,21 @@ passphrase.
         run(*r, "key", "enroll")
         assert [q["mode"] for q in opened if "mode" in q] == ["enroll", "unlock"] and "cred" not in opened[0]
         assert all("rp=opensheaf.org" in t and "rp=unlock.opensheaf.org" in t for t in in_repo(tmp_path).values())
-        with pytest.raises(SystemExit, match="not confirmed"):
-            monkeypatch.setattr("builtins.input", lambda prompt: "no")
+        prompts = []
+        with pytest.raises(SystemExit, match="Not confirmed: nothing was removed"):
+            monkeypatch.setattr("builtins.input", lambda prompt: prompts.append(prompt) or "no")
             run(*r, "key", "forget", "--rp", "opensheaf.org")
+        assert prompts == ["Type forget to confirm: "]
         capsys.readouterr()
         run(*r, "key", "forget", "--rp", "opensheaf.org", "--yes")
-        assert capsys.readouterr().out.count("passkey wrap of opensheaf.org removed") == 4
+        out, err = capsys.readouterr()
+        short = names.short(owner)
+        listed = err.splitlines()
+        assert listed[0] == f"Removing the opensheaf.org passkey lock from 4 keys of {short} in github:me/keys:"
+        assert sorted(x.split()[0] for x in listed[1:5]) == ["current"] + ["rotation"] * 3
+        assert [x.split()[0] for x in listed[5:]] == ["1/4", "2/4", "3/4", "4/4"]
+        assert all(x.endswith("  lock removed") for x in listed[5:])
+        assert out == "Done: the 4 keys open with your passkey (unlock.opensheaf.org) and your passphrase.\n"
         files = in_repo(tmp_path).values()
         assert all("rp=opensheaf.org" not in t and "rp=unlock.opensheaf.org" in t for t in files)
         assert all(keys.read_key(t, "correct horse").owner == owner for t in files)

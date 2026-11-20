@@ -119,7 +119,7 @@ The command itself:
         if layout is None:
             sys.exit(f"--layout is one of {', '.join(LAYOUTS)}")
         if bool(getattr(args, "new_owner", False)) == bool(getattr(args, "owner", None)):
-            sys.exit("init: give --new-owner, or --owner NAME --key-log DIR")
+            stop("init: give --new-owner, or --owner NAME --key-log DIR")
         family, _, given = args.curator.partition(",")
         family, given = family.strip(), given.strip()
         kind = getattr(args, "index", None) or "website"
@@ -163,10 +163,10 @@ The command itself:
         collect(args)
         index(argparse_namespace(no_html=True))
         edit = "templates/" if kind == "website" else cfg["index"]["template"]
-        print(f"archive created in {root}, owned by {log.owner}: edit {CONFIG_NAME} and {edit}, then "
-              f"deposit (osheaf deposit --new LABEL ...)")
-        print("note: OpenSheaf 0.2 is a draft; until version 1.0 a revision may change the format in"
-              " incompatible ways, and archives may have to be rebuilt", file=sys.stderr)
+        print(f"Done: the archive is made in {root}, owned by {names.short(log.owner)}. Edit {CONFIG_NAME} and "
+              f"{edit}, then deposit a paper: osheaf deposit --new LABEL ...")
+        print("Note: OpenSheaf 0.2 is a draft; until version 1.0 a revision may change the format in"
+              " incompatible ways, and archives may have to be rebuilt.", file=sys.stderr)
 
 The template of a TeXmacs index is found before anything is written, so
 that a wrong path stops `init` with nothing done. The template given must
@@ -217,19 +217,19 @@ root at the path of its identifier.
 
     # in the owner of a new archive:
     if getattr(args, "new_owner", False):
-        log = owner_init(args)
+        log = owner_init(args, done=False)
     else:
         if not getattr(args, "key_log", None):
-            sys.exit("init --owner NAME needs --key-log DIR, the folder of its owner object")
+            stop("init --owner NAME needs --key-log DIR, the folder of its owner object")
         try:
             log = owners.load_key_log(Path(args.key_log))
         except owners.OwnerError as e:
-            sys.exit(str(e))
+            stop(str(e))
         errors, _ = log.check()
         if log.owner != args.owner or errors:
-            sys.exit(f"{args.key_log} is not a valid key log of {args.owner}: " + "; ".join(errors))
+            stop(f"{args.key_log} is not a valid key log of {names.short(args.owner)}: " + "; ".join(errors))
         if log.ended:
-            sys.exit(f"the owner {log.owner} has ended (section 6.3)")
+            stop(f"the owner {names.short(log.owner)} has ended (section 6.3)")
         owners.write_key_log(obj_dir(log.id), log)
 
 `init` and the commands of owners call other commands directly, which

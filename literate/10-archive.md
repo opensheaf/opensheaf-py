@@ -928,27 +928,28 @@ all, which these tools do not yet organise otherwise.
     # in the keys that sign for an owner on this device:
     def signing_keys(owner):
         """(the key log of OWNER, its latest version, the current keys of this device that sign)."""
+        who = names.short(owner)
         log = key_log(owner)
         if log is None:
-            sys.exit(f"the key log of {owner} is not in the storage root (section 6.5)")
+            stop(f"the key log of {who} is not in the storage root (section 6.5)")
         errors, _ = log.check()
         if errors:
-            sys.exit(f"the key log of {owner} has errors: " + "; ".join(errors))
+            stop(f"the key log of {who} has errors: " + "; ".join(errors))
         latest = log.latest()
         if latest is None:
-            sys.exit(f"the owner {owner} has ended (section 6.3): nothing is signed for it")
+            stop(f"the owner {who} has ended (section 6.3): nothing is signed for it")
         try:
             found = keys.current_keys(owner, latest.keys["keys"])
         except keys.KeyStoreError as e:
-            sys.exit(str(e))
+            stop(str(e))
         need = latest.keys["threshold"]
         if len(found) < need and not os.environ.get(keys.SIGNING_KEY):
             found = pull_from_wallet(owner, latest, found)
         if len(found) < need:
             hint = ("configure a key wallet, from which each command opens them" if not keys.kept_on_device()
-                    else "osheaf key new makes one for this device")
-            sys.exit(f"this device holds {len(found)} of the current keys of {owner}, and v{latest.number} "
-                     f"of its key log needs {need} to sign ({hint})")
+                    else "osheaf key new makes one for this computer")
+            stop(f"this computer holds {len(found)} of the current keys of {who}, and v{latest.number} "
+                 f"of its key log needs {need} to sign ({hint})")
         return log, latest, found
 
 The witness files of a version, by name: the signature files and anything

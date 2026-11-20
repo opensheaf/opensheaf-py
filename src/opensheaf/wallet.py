@@ -38,12 +38,12 @@ OFFLINE = "offline"
 
 def risk(where, owner):
     """The risk of keeping the keys of OWNER in the wallet named WHERE (section 6.2)."""
-    return (f"security level {where}: the rotation keys and the current keys of {owner} are kept in "
-            f"{where}, encrypted under your passphrase. Whoever controls {where} and knows the passphrase "
+    return (f"The rotation keys and the current keys of {names.short(owner)} are kept in {where} (security "
+            f"level {where}), locked with your passphrase. Whoever controls {where} and knows the passphrase "
             "controls the owner: they can sign in its name and change its keys (sections 6.2 and 15.1), and "
-            "a current key pulled from the wallet is on every device that pulls it. The maximum level keeps "
-            "the rotation keys offline, apart from each other. To move up later, run once "
-            "`osheaf owner rotate --keys offline --export DIR`: the rotation keys in the wallet are then "
+            "a current key pulled from the wallet is on every computer that pulls it. The maximum security "
+            "level keeps the rotation keys offline, apart from each other. To move up later, run once "
+            "osheaf owner rotate --keys offline --export DIR: the rotation keys in the wallet are then "
             "used up, and the new ones are kept offline only.")
 
 
@@ -317,7 +317,7 @@ def put_key(wallet, owner, key, kind, version, passphrase, passkeys=()):
     """Keep KEY of OWNER, of KIND, committed in VERSION (or None), in WALLET, encrypted under PASSPHRASE
     (None: in clear, for a current key only) and the unlocked PASSKEYS."""
     if passphrase is None and kind == keys.ROTATION:
-        raise WalletError("a rotation key is kept in a wallet only encrypted under a passphrase")
+        raise WalletError("a rotation key is kept in a wallet only locked with a passphrase")
     text = keys.key_file_text(key, owner, kind, version, passphrase, passkeys=passkeys)
     wallet.write(owner, key.id, kind, text)
     if (wallet.read(owner, key.id, kind) or "").strip() != text.strip():
@@ -361,7 +361,7 @@ def add_passkey(wallet, owner, kid, passphrase, passkey):
     except keys.KeyStoreError as e:
         raise WalletError(f"{where}: {e}") from None
     if after.key.did != before.key.did or after.kind != before.kind:
-        raise WalletError(f"{where}: the key changed when the passkey was added")
+        raise WalletError(f"{where}: the key changed when the passkey lock was added")
     wallet.write(owner, kid, before.kind, new)
     if (wallet.read(owner, kid, before.kind) or "").strip() != new.strip():
         raise WalletError(f"{wallet.name} did not keep the {before.kind} key {before.key.did}")
@@ -384,12 +384,33 @@ def describe(text):
     return fields
 
 
+def locks(text):
+    """The locks of the key file TEXT, for a person: "passphrase", "passkey (RP)" for each relying
+    party of its passkeys, or none."""
+    enc = next((x.split()[1:2] for x in text.splitlines() if x.startswith("encryption ")), [])
+    if enc in ([], ["none"]):
+        return []
+    if enc != [keys.ENVELOPE]:
+        return ["passphrase"]
+    out = []
+    for line in keys.wraps_of(text):
+        parts = line.split()
+        method = parts[1] if len(parts) > 1 else "?"
+        if method == "passkey":
+            rp = next((p[3:] for p in parts if p.startswith("rp=")), keys.PASSKEY_RP)
+            method = f"passkey ({rp})"
+        if method not in out:
+            out.append(method)
+    return out
+
+
 def listing(wallet, owner=None):
-    """[(owner, kid, kind, did:key, version)] of the keys WALLET holds."""
+    """[(owner, kid, kind, did:key, version, locks)] of the keys WALLET holds."""
     out = []
     for o, kid in wallet.entries(owner):
-        f = describe(read_any(wallet, o, kid))
-        out.append((o, kid, f.get("kind", "?"), f.get("key", "?"), f.get("version", "")))
+        text = read_any(wallet, o, kid)
+        f = describe(text)
+        out.append((o, kid, f.get("kind", "?"), f.get("key", "?"), f.get("version", ""), locks(text)))
     return out
 
 

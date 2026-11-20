@@ -241,9 +241,9 @@ def _write(store, owner, kid, text):
     fd = os.open(folder / f"{kid}.key", os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
     with os.fdopen(fd, "w", encoding="ascii") as f:
         f.write(text + "\n")
-    print(f"warning: the key {kid} of {owner} is kept in {folder / f'{kid}.key'}, protected only by the "
-          "permissions of your files; install the package keyring to keep it in your system's "
-          "credential store", file=sys.stderr)
+    print(f"Warning: A current key of {names.short(owner)} is kept in "
+          f"{folder / f'{kid}.key'}, protected only by the permissions of your files; install the package "
+          "keyring to keep it in your system's credential store.", file=sys.stderr)
     return True
 
 
@@ -394,14 +394,14 @@ def parse_wrap(line):
     """{method, kind, box, and the parameters} of a wrap line."""
     parts = line.split()
     if len(parts) < 4 or parts[0] != "wrap":
-        raise KeyStoreError(f"not a wrap line: {line!r}")
+        raise KeyStoreError(f"a damaged lock of the key: {line!r}")
     out = dict(p.partition("=")[::2] for p in parts[3:-1])
     try:
         out.update(method=parts[1], kind=parts[2], box=base64.b64decode(parts[-1], validate=True))
         if "salt" in out:
             out["salt"] = base64.b64decode(out["salt"], validate=True)
     except (binascii.Error, ValueError):
-        raise KeyStoreError("a wrap of the key is damaged") from None
+        raise KeyStoreError("a lock of the key is damaged") from None
     return out
 
 
@@ -487,11 +487,11 @@ def remove_passkeys(text, cred=None, rp=None):
         w = parse_wrap(line)
         return (cred is None or w.get("cred") == cred) and (rp is None or w.get("rp", PASSKEY_RP) == rp)
     if cred is None and rp is None:
-        raise KeyStoreError("name the passkey wraps to remove, by credential or relying party")
+        raise KeyStoreError("name the passkey locks to remove, by credential or relying party")
     lines = text.splitlines()
     kept = [x for x in lines if not gone(x.strip())]
     if not any(x.strip().startswith("wrap passphrase ") for x in kept):
-        raise KeyStoreError("the key would have no passphrase wrap left")
+        raise KeyStoreError("the key would have no passphrase lock left")
     return "\n".join(kept) + "\n"
 
 

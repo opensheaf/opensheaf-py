@@ -312,16 +312,16 @@ def build_parser():
     kp.add_argument("did", nargs="*", metavar="DID", help="the keys (default: the current keys of the owner)")
     kp.add_argument("--plain-current", action="store_true", help="keep them unencrypted in the wallet")
     kl = ksub.add_parser("pull", help="keep on this device the owner's current keys that the wallet holds")
-    kls = ksub.add_parser("list", help="what the key wallet holds: owner, key, kind, did:key (no secrets)")
+    kls = ksub.add_parser("list", help="what the key wallet holds, as a table: owner, kind, key, version, locks (no secrets)")
     kf = ksub.add_parser("forget", help="remove keys from this device, and with --from-wallet from the wallet; "
-                         "or passkey wraps (--passkey, --rp)")
+                         "or passkey locks (--passkey, --rp)")
     kf.add_argument("did", nargs="*", metavar="DID", help="the keys to forget")
     kf.add_argument("--from-wallet", action="store_true", help="also remove them from the key wallet")
     kf.add_argument("--used", action="store_true",
                     help="with --from-wallet: remove the keys the latest version of the key log no longer needs")
     kf.add_argument("--passkey", metavar="CRED",
-                    help="remove instead the passkey wraps of this credential from the keys in the wallet")
-    kf.add_argument("--rp", metavar="RP", help="remove instead the passkey wraps of this relying party "
+                    help="remove instead the passkey locks of this credential from the keys in the wallet")
+    kf.add_argument("--rp", metavar="RP", help="remove instead the passkey locks of this relying party "
                     "(e.g. opensheaf.org) from the keys in the wallet")
     kf.add_argument("--force", action="store_true", help="also remove rotation keys still committed")
     kf.add_argument("--yes", action="store_true", help="do not ask to confirm the removal (scripts)")
