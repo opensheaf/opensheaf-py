@@ -182,6 +182,47 @@ manager through the clipboard: `osheaf key export --clipboard` (paste it
 into a note of the Passwords app; `--encrypt` encrypts it under the
 passphrase) and, on another machine, `osheaf key import --clipboard`.
 
+### Passkey unlock
+
+Instead of typing the passphrase on every machine, let a **passkey** open
+the keys of a wallet, with Touch ID:
+
+```
+osheaf key enroll        # once: asks the passphrase, then creates the passkey in the browser
+osheaf key unlock        # on another Mac: Touch ID, and the current keys are pulled
+```
+
+`osheaf key enroll` asks the passphrase once, then opens the page
+<https://opensheaf.org/manager/unlock.html> in the browser, which creates a
+passkey for `opensheaf.org` ("OpenSheaf owner …") and derives a secret from
+it (the WebAuthn PRF extension; Safari, Chrome and Firefox, with iCloud
+Keychain, Google Password Manager, 1Password or a security key that
+supports it). The page hands the secret to `osheaf` on your own computer
+(a form posted to `http://127.0.0.1:<port>`, a listener that answers once,
+to the one page it opened), and every key of the owner in the wallet gets
+a second lock, under that secret, besides the passphrase. From then on,
+whenever `osheaf` needs a key of the wallet, it opens the page, which asks
+you to click *Unlock* and then for Touch ID; a passkey in iCloud Keychain
+is on all your Macs. Run `osheaf key enroll` again after a rotation that
+did not unlock with the passkey, so that it opens the new keys too.
+
+The passphrase stays the way back: `osheaf` asks for it when the page
+reports an error, after two minutes without an answer, when you press
+Ctrl-C at "waiting for the browser", and always with
+`OPENSHEAF_UNLOCK=passphrase` or `OPENSHEAF_PASSPHRASE` set (scripts).
+`OPENSHEAF_PASSPHRASE_COMMAND` names a command that prints it, run before
+it is asked, e.g. `security find-generic-password -w -s
+opensheaf-passphrase` (the macOS keychain) or `op read
+op://Private/opensheaf/password`. Writing new keys into the wallet still
+needs the passphrase.
+
+What you trust: the page at opensheaf.org (served by GitHub Pages from
+[opensheaf/manager](https://github.com/opensheaf/manager), plain
+JavaScript, no other server), which sees the secret, and the browser. The
+secret opens the wallet only together with the wallet's files, which stay
+behind your GitHub sign-in; it is never stored, by the page or by
+`osheaf`.
+
 ## An archive
 
 The quickest start is the template

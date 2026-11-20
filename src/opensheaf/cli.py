@@ -11,6 +11,7 @@ Commands:
   key new                a new current key for this device
   key push|pull|list|forget   current keys to and from a key wallet (--keys)
   key export|import --clipboard   a key to and from a password manager
+  key enroll|unlock      a passkey (Touch ID) opens the keys of the wallet
   deposit LABEL [SOURCE] deposit a document (TeXmacs, or any source with --pdf);
                          --new seals a new work under a new label
   relicense LABEL        description-only version with a new licence
@@ -332,6 +333,15 @@ def build_parser():
     ki.add_argument("--clipboard", action="store_true", help="read the key from the clipboard")
     ki.add_argument("--stdin", action="store_true", help="read the key from the standard input")
     ki.add_argument("--owner", help="the owner, if the text does not say")
+    ken = ksub.add_parser("enroll", help="let a passkey (Touch ID, in the browser) open the keys of the wallet")
+    ken.add_argument("--new-passkey", action="store_true",
+                     help="create another passkey, even if one opens some of the keys already")
+    ku = ksub.add_parser("unlock", help="open the keys of the wallet with the passkey; pull the current keys")
+    for x in (ken, ku):
+        x.add_argument("--owner", help="the owner (default: the archive's)")
+        x.add_argument("--keys", metavar="WALLET", help="the key wallet, github:OWNER/REPO or command "
+                       "(default: the one configured)")
+        x.add_argument("--no-browser", action="store_true", help="print the address of the page, do not open it")
     k.set_defaults(func=None)
     sub.add_parser("help-config", help="describe osheaf.json").set_defaults(func=None)
     return p
@@ -474,7 +484,8 @@ def main(argv=None):
 OWNER_ACTIONS = {"init": "owner_init_command", "rotate": "owner_rotate", "expose": "owner_expose",
                  "end": "owner_end", "show": "owner_show"}
 KEY_ACTIONS = {"new": "key_new", "push": "key_push", "pull": "key_pull", "list": "key_list",
-               "export": "key_export", "import": "key_import", "forget": "key_forget"}
+               "export": "key_export", "import": "key_import", "forget": "key_forget",
+               "enroll": "key_enroll", "unlock": "key_unlock"}
 LAZY = {"collection": ("collections", None), "mirror": ("mirror", "main"), "branch": ("branch", "main"),
         "accept": ("branch", "accept"), "draft": ("drafts", None), "seal": ("drafts", "seal"),
         "takedown": ("takedown", "main")}
@@ -504,7 +515,7 @@ def dispatch(p, args):
             if args.root:
                 raise
         return remote.main(args)
-    if args.cmd == "key" and args.action in ("list", "import", "export"):
+    if args.cmd == "key" and args.action in ("list", "import", "export", "enroll", "unlock"):
         try:
             configure(args)
         except SystemExit:

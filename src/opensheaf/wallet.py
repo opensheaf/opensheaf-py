@@ -3,7 +3,8 @@
 maximum security keeps its keys, current and rotation keys, each encrypted
 under a passphrase as a file <owner>/<k>.key.enc: a private GitHub
 repository, read and written through the GitHub CLI (`gh api`), or a command
-of the user's (1Password's op, Bitwarden's bw, pass, ...). Also the clipboard,
+of the user's (1Password's op, Bitwarden's bw, pass, ...); passkeys may
+unlock them too (osheaf key enroll, module passkey). Also the clipboard,
 through which a key goes to and from a password manager such as the
 Passwords app of macOS.
 
@@ -257,34 +258,59 @@ class CommandWallet:
             raise WalletError(f"the forget command of the wallet failed: {r.stderr.strip()}")
 
 
-def put_key(wallet, owner, key, kind, version, passphrase):
+def put_key(wallet, owner, key, kind, version, passphrase, passkeys=()):
     """Keep KEY of OWNER, of KIND, committed in VERSION (or None), in WALLET, encrypted under PASSPHRASE
-    (None: in clear, for a current key only)."""
+    (None: in clear, for a current key only) and the unlocked PASSKEYS."""
     if passphrase is None and kind == keys.ROTATION:
         raise WalletError("a rotation key is kept in a wallet only encrypted under a passphrase")
-    text = keys.key_file_text(key, owner, kind, version, passphrase)
+    text = keys.key_file_text(key, owner, kind, version, passphrase, passkeys=passkeys)
     wallet.write(owner, key.id, kind, text)
     if (wallet.read(owner, key.id, kind) or "").strip() != text.strip():
         raise WalletError(f"{wallet.name} did not keep the {kind} key {key.did}")
 
 
-def get_key(wallet, owner, kid, kind, passphrase):
-    """The key KID of OWNER, of KIND, from WALLET, or None if it holds none; PASSPHRASE() gives the
-    passphrase when needed."""
+def get_key(wallet, owner, kid, kind, passphrase, passkey=None):
+    """The key KID of OWNER, of KIND, from WALLET, or None if it holds none; PASSKEY(owner, passkeys)
+    gives the keys of passkeys unlocked, PASSPHRASE() the passphrase, when needed."""
     text = wallet.read(owner, kid, kind)
     if text is None:
         return None
     try:
         try:
             rk = keys.read_key(text)
-        except keys.PassphraseNeeded:
-            rk = keys.read_key(text, passphrase())
+        except keys.PassphraseNeeded as e:
+            keks = passkey(owner, e.passkeys) if passkey is not None and e.passkeys else None
+            try:
+                rk = keys.read_key(text, keks=keks) if keks else None
+            except keys.PassphraseNeeded:
+                rk = None
+            if rk is None:
+                rk = keys.read_key(text, passphrase())
     except keys.KeyStoreError as e:
         raise WalletError(f"{wallet.name} {entry_path(owner, kid)}: {e}") from None
     if rk.owner != owner or rk.kind != kind or rk.key.id != kid:
         raise WalletError(f"{wallet.name} {entry_path(owner, kid)} holds another key: {rk.kind} key "
                           f"{rk.key.did} of {rk.owner}")
     return rk.key
+
+
+def add_passkey(wallet, owner, kid, passphrase, passkey):
+    """Add the unlocked PASSKEY to the key KID of OWNER in WALLET, opened with PASSPHRASE; returns its
+    (kind, did:key)."""
+    text = read_any(wallet, owner, kid)
+    where = f"{wallet.name} {entry_path(owner, kid)}"
+    try:
+        before = keys.read_key(text, passphrase)
+        new = keys.add_passkey(text, passphrase, passkey)
+        after = keys.read_key(new, keks={passkey.cred: passkey.kek})
+    except keys.KeyStoreError as e:
+        raise WalletError(f"{where}: {e}") from None
+    if after.key.did != before.key.did or after.kind != before.kind:
+        raise WalletError(f"{where}: the key changed when the passkey was added")
+    wallet.write(owner, kid, before.kind, new)
+    if (wallet.read(owner, kid, before.kind) or "").strip() != new.strip():
+        raise WalletError(f"{wallet.name} did not keep the {before.kind} key {before.key.did}")
+    return before.kind, before.key.did
 
 
 def read_any(wallet, owner, kid):
@@ -297,7 +323,7 @@ def describe(text):
     fields = {}
     for line in text.splitlines():
         name, _, value = line.strip().partition(" ")
-        if name in ("encryption", "seed"):
+        if name in ("encryption", "wrap", "seed"):
             break
         fields.setdefault(name, value.strip())
     return fields

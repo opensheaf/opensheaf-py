@@ -67,6 +67,7 @@ core.
       key new                a new current key for this device
       key push|pull|list|forget   current keys to and from a key wallet (--keys)
       key export|import --clipboard   a key to and from a password manager
+      key enroll|unlock      a passkey (Touch ID) opens the keys of the wallet
       deposit LABEL [SOURCE] deposit a document (TeXmacs, or any source with --pdf);
                              --new seals a new work under a new label
       relicense LABEL        description-only version with a new licence
@@ -776,7 +777,20 @@ osheaf owner rotate --keys offline --export /Volumes/USB/keys   # move up: new r
 osheaf key forget --wallet --used                         # remove the used keys from the wallet
 osheaf key export --clipboard                             # paste into a note of the Passwords app
 osheaf key import --clipboard                             # on another machine, after copying the note
+osheaf key enroll                                         # once: a passkey opens the keys of the wallet
+osheaf key unlock                                         # on another Mac: Touch ID, the current keys pulled
 ```
+
+`key enroll` creates a passkey for `opensheaf.org` in the browser (the
+page `https://opensheaf.org/manager/unlock.html`), after the passphrase
+has opened the keys of the wallet once, and lets it open them; from then
+on, a command that needs a key of the wallet asks the browser (Touch ID)
+rather than the passphrase, which stays the way back: on an error of the
+page, after two minutes without an answer, on Ctrl-C, or always with
+`OPENSHEAF_UNLOCK=passphrase` or `OPENSHEAF_PASSPHRASE` set
+([chapter 19](19-owner-commands.md)). `--no-browser` prints the address of
+the page without opening it. `OPENSHEAF_PASSPHRASE_COMMAND` names a
+command that prints the passphrase, run before it is asked.
 
 `owner pull` meets the archive's copy of a key log with the copy at
 another place, an archive or the folder of the owner object, as section
@@ -849,6 +863,15 @@ The options of making an owner are shared by `owner init` and
     ki.add_argument("--clipboard", action="store_true", help="read the key from the clipboard")
     ki.add_argument("--stdin", action="store_true", help="read the key from the standard input")
     ki.add_argument("--owner", help="the owner, if the text does not say")
+    ken = ksub.add_parser("enroll", help="let a passkey (Touch ID, in the browser) open the keys of the wallet")
+    ken.add_argument("--new-passkey", action="store_true",
+                     help="create another passkey, even if one opens some of the keys already")
+    ku = ksub.add_parser("unlock", help="open the keys of the wallet with the passkey; pull the current keys")
+    for x in (ken, ku):
+        x.add_argument("--owner", help="the owner (default: the archive's)")
+        x.add_argument("--keys", metavar="WALLET", help="the key wallet, github:OWNER/REPO or command "
+                       "(default: the one configured)")
+        x.add_argument("--no-browser", action="store_true", help="print the address of the page, do not open it")
     k.set_defaults(func=None)
 
 Two helpers add the options shared by several of these commands: those of
@@ -956,7 +979,8 @@ paths of the core), and a few must not:
 - `arxiv fetch` only downloads into a folder, and needs no archive;
 - `resolve` works in an archive, whose storage root and locations it then
   uses, or anywhere else;
-- `key list`, `key import` and `key export` work in an archive or outside
+- `key list`, `key import`, `key export`, `key enroll` and `key unlock`
+  work in an archive or outside
   one, as `resolve` does: a wallet or a key may be needed on a machine that
   has no copy of the archive;
 - every other command configures the archive. An archive of specification
@@ -1007,7 +1031,8 @@ when it ends.
     OWNER_ACTIONS = {"init": "owner_init_command", "rotate": "owner_rotate", "expose": "owner_expose",
                      "end": "owner_end", "show": "owner_show"}
     KEY_ACTIONS = {"new": "key_new", "push": "key_push", "pull": "key_pull", "list": "key_list",
-                   "export": "key_export", "import": "key_import", "forget": "key_forget"}
+                   "export": "key_export", "import": "key_import", "forget": "key_forget",
+                   "enroll": "key_enroll", "unlock": "key_unlock"}
     LAZY = {"collection": ("collections", None), "mirror": ("mirror", "main"), "branch": ("branch", "main"),
             "accept": ("branch", "accept"), "draft": ("drafts", None), "seal": ("drafts", "seal"),
             "takedown": ("takedown", "main")}
@@ -1037,7 +1062,7 @@ when it ends.
                 if args.root:
                     raise
             return remote.main(args)
-        if args.cmd == "key" and args.action in ("list", "import", "export"):
+        if args.cmd == "key" and args.action in ("list", "import", "export", "enroll", "unlock"):
             try:
                 configure(args)
             except SystemExit:

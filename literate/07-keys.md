@@ -14,7 +14,7 @@ keeps current keys in the system's credential store, or failing that in a
 file of the user's configuration; exports rotation keys once, when they are
 made, to files outside the archive, encrypted under a passphrase, and to a
 sheet to print; writes keys as the encrypted files that a key wallet keeps
-([key wallets](09-wallets.md)) and as a short text for a password manager;
+([key wallets](09-wallets.md)), which passkeys can also unlock, and as a short text for a password manager;
 reads them back when they are needed; and, for the tests only, makes
 predictable keys.
 
@@ -32,6 +32,9 @@ predictable keys.
 
 
     <<keys: encrypting a seed>>
+
+
+    <<keys: a seed unlocked in several ways>>
 
 
     <<keys: exporting rotation keys>>
@@ -57,8 +60,9 @@ optional package keyring, as for the tokens of [Zenodo](50-zenodo.md).
     as RFC 8032 says; current keys kept in the system's credential store (or a
     file of the user's configuration); rotation keys exported once, to files
     outside the archive (encrypted under a passphrase) and to a printed sheet,
-    and read back; keys as the encrypted files of a key wallet and as a text for
-    a password manager; predictable keys for the tests only.
+    and read back; keys as the encrypted files of a key wallet (an envelope that
+    the passphrase and passkeys unlock) and as a text for a password manager;
+    predictable keys for the tests only.
 
     Current keys are found, in this order: the environment variable
     OPENSHEAF_SIGNING_KEY (the base64 seed of one key, for continuous
@@ -70,6 +74,8 @@ optional package keyring, as for the tokens of [Zenodo](50-zenodo.md).
 
     import base64
     import binascii
+    import hashlib
+    import hmac
     import os
     import shutil
     import subprocess
@@ -366,7 +372,12 @@ means a seed kept as it is.
 
 
     class PassphraseNeeded(KeyStoreError):
-        """A key encrypted under a passphrase, read without one."""
+        """A key encrypted under a passphrase, read without one; PASSKEYS, the passkeys that could unlock it
+        instead."""
+
+        def __init__(self, message, passkeys=()):
+            super().__init__(message)
+            self.passkeys = list(passkeys)
 
 
     def encrypt_seed(seed, passphrase, *, opslimit=None, memlimit=None):
@@ -402,6 +413,207 @@ means a seed kept as it is.
             raise KeyStoreError("the encryption of the key is damaged") from None
         except CryptoError:
             raise KeyStoreError("wrong passphrase, or a damaged key") from None
+
+A seed unlocked in several ways
+------------------------------
+
+A key kept in a wallet is read back on every device that pulls it, and
+typing a long passphrase on each is the price of the wallet's security.
+A *passkey* (WebAuthn, the sign-in of the browser and of the operating
+system, synchronised by iCloud Keychain or another provider) can stand in
+for the passphrase, with Touch ID or another check of the user, through
+its PRF extension, which derives a stable 32-byte secret from the passkey
+and a salt, never leaving the authenticator otherwise. The way from the
+command line to a passkey is a page in the browser, at
+`https://opensheaf.org/manager/unlock.html` ([chapter 9](09-wallets.md)).
+
+So that one key can be opened by the passphrase and by one passkey or
+more, its file holds the seed encrypted by *envelope encryption*: the seed
+is encrypted (SecretBox, as above) under a random 32-byte *data key*, and
+the data key is *wrapped*, encrypted again, once per way of unlocking,
+each on a line of its own, under a key-encryption key:
+
+- `wrap passphrase argon2id opslimit=N memlimit=N salt=S BOX`: the
+  key-encryption key is derived from the passphrase by Argon2id, as above;
+- `wrap passkey prf rp=opensheaf.org cred=C salt=S BOX`: the passkey of
+  the relying party `rp`, whose credential identifier is `C` (base64url),
+  gives the PRF secret for the salt `S` (base64); the key-encryption key
+  is HKDF-SHA256 of that secret (RFC 5869, no salt, info `opensheaf wallet
+  passkey v1`, 32 bytes).
+
+`BOX` is the data key in a SecretBox (its nonce first), in base64. The
+field `encryption` is `envelope-secretbox`, followed by the `wrap` lines,
+then the `seed`. A file always keeps its passphrase wrap: the passkey is a
+convenience, and the passphrase the way back when a browser or a passkey
+is missing. The PRF salt is the same for every key of an owner, the
+SHA-256 digest of `opensheaf wallet unlock v1 ` followed by the owner
+name, so that one check of the user unlocks all of them.
+
+    # in keys: a seed unlocked in several ways:
+    ENVELOPE = "envelope-secretbox"
+    PASSKEY_RP = "opensheaf.org"
+    PASSKEY_INFO = b"opensheaf wallet passkey v1"
+    PASSKEY_SALT = "opensheaf wallet unlock v1 "
+
+
+    def passkey_salt(owner):
+        """The PRF salt of the passkeys that unlock the keys of OWNER."""
+        return names.sha256((PASSKEY_SALT + owner).encode("utf-8"))
+
+
+    def passkey_kek(prf_secret):
+        """The key-encryption key of a passkey wrap: HKDF-SHA256 (RFC 5869) of its PRF secret."""
+        prk = hmac.new(b"\0" * 32, bytes(prf_secret), hashlib.sha256).digest()
+        return hmac.new(prk, PASSKEY_INFO + b"\x01", hashlib.sha256).digest()
+
+A passkey of an owner is its credential identifier and its salt, and, once
+the user has unlocked it in this command, its key-encryption key, held in
+memory only: the PRF secret and the key derived from it are never stored.
+
+    # in keys: a seed unlocked in several ways:
+    def _b64(data):
+        return base64.b64encode(data).decode("ascii")
+
+
+    class Passkey:
+        """A passkey that unlocks keys: credential CRED (base64url), PRF SALT (bytes), relying party RP,
+        and KEK, its key-encryption key, once unlocked."""
+
+        def __init__(self, cred, salt, rp=PASSKEY_RP, kek=None):
+            self.cred, self.salt, self.rp, self.kek = cred, bytes(salt), rp, kek
+
+        def wrap(self, data_key):
+            """The wrap line of DATA_KEY under this passkey."""
+            return (f"wrap passkey prf rp={self.rp} cred={self.cred} salt={_b64(self.salt)} "
+                    + _b64(secret.SecretBox(self.kek).encrypt(data_key)))
+
+        def __repr__(self):
+            return f"Passkey({self.rp} {self.cred})"
+
+The data key is wrapped under the passphrase as the seed was before,
+Argon2id with a fresh salt.
+
+    # in keys: a seed unlocked in several ways:
+    def _argon2id(passphrase, salt, opslimit, memlimit):
+        return pwhash.argon2id.kdf(secret.SecretBox.KEY_SIZE, passphrase.encode("utf-8"), salt,
+                                   opslimit=opslimit, memlimit=memlimit)
+
+
+    def envelope(seed, passphrase, passkeys=(), *, opslimit=None, memlimit=None):
+        """(the wrap lines, the encrypted seed): SEED under a new data key, wrapped under PASSPHRASE and
+        under each of PASSKEYS (unlocked)."""
+        opslimit = OPSLIMIT if opslimit is None else opslimit
+        memlimit = MEMLIMIT if memlimit is None else memlimit
+        data_key = utils.random(secret.SecretBox.KEY_SIZE)
+        return _wraps(data_key, passphrase, passkeys, opslimit, memlimit), secret.SecretBox(data_key).encrypt(seed)
+
+
+    def _wraps(data_key, passphrase, passkeys, opslimit, memlimit):
+        salt = utils.random(pwhash.argon2id.SALTBYTES)
+        box = secret.SecretBox(_argon2id(passphrase, salt, opslimit, memlimit)).encrypt(data_key)
+        return ([f"wrap passphrase argon2id opslimit={opslimit} memlimit={memlimit} salt={_b64(salt)} {_b64(box)}"]
+                + [p.wrap(data_key) for p in passkeys])
+
+Reading a wrap line gives its method, its parameters and its box; the
+passkeys of a file are those of its `passkey` lines, which tell the
+command line what to ask the browser for.
+
+    # in keys: a seed unlocked in several ways:
+    def parse_wrap(line):
+        """{method, kind, box, and the parameters} of a wrap line."""
+        parts = line.split()
+        if len(parts) < 4 or parts[0] != "wrap":
+            raise KeyStoreError(f"not a wrap line: {line!r}")
+        out = dict(p.partition("=")[::2] for p in parts[3:-1])
+        try:
+            out.update(method=parts[1], kind=parts[2], box=base64.b64decode(parts[-1], validate=True))
+            if "salt" in out:
+                out["salt"] = base64.b64decode(out["salt"], validate=True)
+        except (binascii.Error, ValueError):
+            raise KeyStoreError("a wrap of the key is damaged") from None
+        return out
+
+
+    def wraps_of(text):
+        """The wrap lines of the key file TEXT."""
+        return [line.strip() for line in text.splitlines() if line.strip().startswith("wrap ")]
+
+
+    def passkeys_of(text):
+        """The passkeys (not unlocked) that can unlock the key file TEXT."""
+        out = []
+        for line in wraps_of(text):
+            w = parse_wrap(line)
+            if w["method"] == "passkey" and w["kind"] == "prf" and w.get("cred"):
+                out.append(Passkey(w["cred"], w.get("salt", b""), w.get("rp", PASSKEY_RP)))
+        return out
+
+Opening the envelope unwraps the data key with a passkey whose
+key-encryption key is known (`keks`, by credential), or else with the
+passphrase; without either, it says which passkeys could unlock it, so
+that the caller can ask the browser for one, or the passphrase.
+
+    # in keys: a seed unlocked in several ways:
+    def data_key(wraps, passphrase=None, keks=None):
+        """The data key of the wrap lines WRAPS, unwrapped with KEKS ({cred: key}) or PASSPHRASE."""
+        parsed = [parse_wrap(w) for w in wraps]
+        for w in parsed:
+            if w["method"] == "passkey" and keks and w.get("cred") in keks:
+                try:
+                    return secret.SecretBox(keks[w["cred"]]).decrypt(w["box"])
+                except CryptoError:
+                    pass
+        if passphrase is None:
+            raise PassphraseNeeded("this key is encrypted: a passphrase is needed",
+                                   [Passkey(w["cred"], w.get("salt", b""), w.get("rp", PASSKEY_RP))
+                                    for w in parsed if w["method"] == "passkey" and w.get("cred")])
+        for w in parsed:
+            if w["method"] == "passphrase" and w["kind"] == "argon2id":
+                try:
+                    kek = _argon2id(passphrase, w["salt"], int(w["opslimit"]), int(w["memlimit"]))
+                except (KeyError, ValueError):
+                    raise KeyStoreError("the encryption of the key is damaged") from None
+                try:
+                    return secret.SecretBox(kek).decrypt(w["box"])
+                except CryptoError:
+                    pass
+        raise KeyStoreError("wrong passphrase, or a damaged key")
+
+
+    def open_envelope(wraps, data, passphrase=None, keks=None):
+        """The seed encrypted as DATA under the data key of the wrap lines WRAPS."""
+        try:
+            return secret.SecretBox(data_key(wraps, passphrase, keks)).decrypt(data)
+        except CryptoError:
+            raise KeyStoreError("the seed of the key is damaged") from None
+
+A passkey is added to a key file already written, by `osheaf key enroll`:
+the data key, unwrapped with the passphrase, is wrapped once more, and
+the line added after the other wraps; the seed and the other wraps stay as
+they are. A file written before envelopes, its seed encrypted directly
+under the passphrase (`encryption argon2id-secretbox`), is read as before,
+and rewritten as an envelope when a passkey is added to it.
+
+    # in keys: a seed unlocked in several ways:
+    def add_passkey(text, passphrase, passkey, *, opslimit=None, memlimit=None):
+        """The key file TEXT with one more wrap, under PASSKEY (unlocked); PASSPHRASE opens it."""
+        lines = text.splitlines()
+        enc = next((i for i, x in enumerate(lines) if x.startswith("encryption ")), None)
+        seed_at = next((i for i, x in enumerate(lines) if x.startswith("seed ")), None)
+        if enc is None or seed_at is None or seed_at < enc:
+            raise KeyStoreError("not a key file")
+        method = lines[enc].split()[1:2]
+        if method == [ENVELOPE]:
+            key = data_key(wraps_of(text), passphrase)
+            last = max(i for i, x in enumerate(lines) if x.startswith("wrap "))
+            lines.insert(last + 1, passkey.wrap(key))
+        elif method == ["none"]:
+            raise KeyStoreError("this key is kept unencrypted: there is nothing to unlock")
+        else:
+            seed = decrypt_seed(lines[enc][len("encryption "):], base64.b64decode(lines[seed_at][5:]), passphrase)
+            wraps, data = envelope(seed, passphrase, [passkey], opslimit=opslimit, memlimit=memlimit)
+            lines[enc:seed_at + 1] = [f"encryption {ENVELOPE}", *wraps, "seed " + _b64(data)]
+        return "\n".join(lines) + "\n"
 
 Exporting rotation keys
 -----------------------
@@ -536,7 +748,11 @@ field, `kind`, `current` or `rotation`, so that a key read back from a
 wallet cannot be used as the other kind. The `version` is that of the key
 log which commits the key (in `keys` for a current key, in `next` for a
 rotation key), when it is known: a current key made with `osheaf key new`
-is pushed before any version lists it.
+is pushed before any version lists it. Encrypted, the seed is in an
+envelope (above): a passphrase wrap always, and a passkey wrap for each
+passkey given, unlocked, or added later by `osheaf key enroll`; files
+written before envelopes, with one `encryption argon2id-secretbox`, are
+still read. Unencrypted (`--plain-current`), it is `encryption none`.
 
 ```
 opensheaf-key/0.2
@@ -545,7 +761,9 @@ owner 56wo6cdpjsxk7ddgnqfp2quipfghukhtmvjuahvwzko7m4tkz3pa
 version v1
 key did:key:z6Mkh5i2epG9LsWNnYbBHG7ctEiNLZPjsBNXxNUcsaYgEtNm
 digest oxthfb6b4q3sqathmcpnciqggfxlr3aekgfg2tpm2lgrm2qnalha
-encryption argon2id-secretbox opslimit=3 memlimit=268435456 salt=...
+encryption envelope-secretbox
+wrap passphrase argon2id opslimit=3 memlimit=268435456 salt=... ...
+wrap passkey prf rp=opensheaf.org cred=... salt=... ...
 seed ...
 ```
 
@@ -555,11 +773,19 @@ seed ...
     KINDS = (CURRENT, ROTATION)
 
 
-    def key_file_text(key, owner, kind, version=None, passphrase=None, *, opslimit=None, memlimit=None):
-        """The text of the wallet file of the key KEY of OWNER, of KIND, committed in VERSION (or None)."""
+    def key_file_text(key, owner, kind, version=None, passphrase=None, *, passkeys=(), opslimit=None,
+                      memlimit=None):
+        """The text of the wallet file of the key KEY of OWNER, of KIND, committed in VERSION (or None),
+        encrypted under PASSPHRASE and the unlocked PASSKEYS (or in clear if PASSPHRASE is None)."""
         if kind not in KINDS:
             raise KeyStoreError(f"a key is {' or '.join(KINDS)}")
-        return _file_text([KEY_FORMAT, f"kind {kind}"], key, owner, version, passphrase, opslimit, memlimit)
+        head = [KEY_FORMAT, f"kind {kind}"]
+        if passphrase is None:
+            return _file_text(head, key, owner, version, None, opslimit, memlimit)
+        wraps, data = envelope(key.seed, passphrase, passkeys, opslimit=opslimit, memlimit=memlimit)
+        lines = head + [f"owner {owner}"] + ([f"version v{version}"] if version else [])
+        lines += [f"key {key.did}", f"digest {key.digest}", f"encryption {ENVELOPE}", *wraps, "seed " + _b64(data)]
+        return "\n".join(lines) + "\n"
 
 A key as text, for a password manager
 -------------------------------------
@@ -611,7 +837,9 @@ format line. Either way the key is rebuilt from the seed and compared with
 the fields that come with it, so that a wrong passphrase, a damaged file or
 a mistyped seed is found here, not by a verifier later. A key without a
 `kind` field is a rotation key: the exported files and the sheets hold
-rotation keys only.
+rotation keys only. A seed in an envelope is opened with the
+key-encryption keys of passkeys unlocked (`keks`, by credential), or with
+the passphrase.
 
     # in keys: reading a key back:
     class ReadKey:
@@ -621,8 +849,9 @@ rotation keys only.
             self.key, self.owner, self.version, self.kind = key, owner, version, kind
 
 
-    def read_key(source, passphrase=None):
-        """The key of a file, a sheet or a text (a path, or its text), checked against its fields."""
+    def read_key(source, passphrase=None, keks=None):
+        """The key of a file, a sheet or a text (a path, or its text), checked against its fields; KEKS
+        ({cred: key}) or PASSPHRASE open its seed if it is encrypted."""
         text = Path(source).read_text(encoding="utf-8") if isinstance(source, Path) else source
         lines = text.splitlines()
         formats = (ROTATION_FORMAT, KEY_FORMAT, TEXT_FORMAT)
@@ -645,7 +874,10 @@ rotation keys only.
                 data = b""
             if not data or fields.get("check", "").upper() != sheet_check(data):
                 raise KeyStoreError("the seed does not match its check: a character is mistyped")
-        seed = decrypt_seed(fields.get("encryption", "none"), data, passphrase)
+        if fields.get("encryption", "").split()[:1] == [ENVELOPE]:
+            seed = open_envelope(wraps_of("\n".join(lines[start or 0:])), data, passphrase, keks)
+        else:
+            seed = decrypt_seed(fields.get("encryption", "none"), data, passphrase)
         if len(seed) != 32:
             raise KeyStoreError("not the seed of an Ed25519 key")
         key = Key(seed)

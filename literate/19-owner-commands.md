@@ -20,7 +20,8 @@ pull`, which meets two copies of a key log as section 6.3 says
 default and the maximum, or in a key wallet, kept by the module of
 [chapter 9](09-wallets.md); `osheaf key push`, `pull`, `list`, `export`,
 `import` and `forget` move them between this device, a wallet and a
-password manager. The last command of this chapter, `osheaf sign`, signs a
+password manager, and `osheaf key enroll` and `unlock` open those of a
+wallet with a passkey. The last command of this chapter, `osheaf sign`, signs a
 version of a line again after an exposure.
 
     # in the commands of owners and their keys:
@@ -58,6 +59,9 @@ version of a line again after an exposure.
 
 
     <<the commands of key wallets>>
+
+
+    <<unlock the keys of a wallet with a passkey>>
 
 
     <<a key to and from a password manager>>
@@ -202,8 +206,14 @@ keys there.
         return {"wallet": spec} if spec.startswith("github:") else None
 
 A passphrase is asked twice, without echo, or taken from the environment
-variable `OPENSHEAF_PASSPHRASE`, for scripts. An empty passphrase is
-refused: an owner who wants plain files says so, with `--no-passphrase`.
+variable `OPENSHEAF_PASSPHRASE`, for scripts, or printed by the command of
+`OPENSHEAF_PASSPHRASE_COMMAND`, run by the shell, whose standard output,
+stripped, is the passphrase: `security find-generic-password -w -s
+opensheaf-passphrase` reads it from the macOS keychain, `op read
+op://Private/opensheaf/password` from 1Password. A command that fails or
+prints nothing is said so, and the passphrase is asked. An empty
+passphrase is refused: an owner who wants plain files says so, with
+`--no-passphrase`.
 It is asked once per command, however many keys it encrypts or decrypts:
 a rotation that reads the rotation keys from a wallet and keeps new ones
 there asks once. The command line forgets it when the command ends
@@ -213,6 +223,7 @@ neither alone gives the keys.
 
     # in a passphrase, asked or from the environment:
     PASSPHRASE = "OPENSHEAF_PASSPHRASE"
+    PASSPHRASE_COMMAND = "OPENSHEAF_PASSPHRASE_COMMAND"
     _ASKED = {}
 
 
@@ -222,6 +233,13 @@ neither alone gives the keys.
             return os.environ[PASSPHRASE]
         if "passphrase" in _ASKED:
             return _ASKED["passphrase"]
+        command = os.environ.get(PASSPHRASE_COMMAND, "").strip()
+        if command:
+            r = subprocess.run(command, shell=True, capture_output=True, text=True)
+            if r.returncode == 0 and r.stdout.strip():
+                _ASKED["passphrase"] = r.stdout.strip()
+                return _ASKED["passphrase"]
+            print(f"warning: {PASSPHRASE_COMMAND} gave no passphrase: {r.stderr.strip()}", file=sys.stderr)
         import getpass
         first = getpass.getpass("passphrase of the keys: ")
         if not first:
@@ -332,19 +350,21 @@ then the passphrase is asked (once, if an export asked it already).
         ([(key, version listing it)]) in the wallet W; stops if it fails."""
         from . import wallet
         print("warning: " + wallet.risk(w.name, owner), file=sys.stderr)
-        secret = passphrase()
+        unlocked = unlocked_passkeys(owner)
+        secret = wallet_passphrase(w, owner) if unlocked else passphrase()
         try:
             w.check_writable()
             for key in rotation:
-                wallet.put_key(w, owner, key, keys.ROTATION, version, secret)
+                wallet.put_key(w, owner, key, keys.ROTATION, version, secret, unlocked)
                 print(f"rotation key {key.did}\n  kept in {w.name}")
             for key, v in current:
                 if w.read(owner, key.id, keys.CURRENT) is None:
                     wallet.put_key(w, owner, key, keys.CURRENT, v,
-                                   None if getattr(args, "plain_current", False) else secret)
+                                   None if getattr(args, "plain_current", False) else secret, unlocked)
                     print(f"current key {key.did}\n  kept in {w.name}")
         except wallet.WalletError as e:
             sys.exit(f"{e}: nothing was written to the key log")
+        enroll_hint(owner, unlocked)
 
 
     def version_listing(log, did):
@@ -397,7 +417,7 @@ that a rotation can tell the owner that it has used them up.
         need, out = prev.keys["nextThreshold"], []
         try:
             for digest in prev.keys["next"]:
-                key = wallet.get_key(w, owner, digest[:16], keys.ROTATION, lambda: passphrase(confirm=False))
+                key = unlock_key(w, owner, digest[:16], keys.ROTATION)
                 if key is not None and key.digest == digest:
                     out.append(key)
                 if len(out) == need:
@@ -591,14 +611,16 @@ stated.
         if not here:
             sys.exit(f"this device holds none of the keys {', '.join(dids)} of {owner}")
         print("warning: " + wallet.risk(w.name, owner), file=sys.stderr)
-        secret = None if getattr(args, "plain_current", False) else passphrase()
+        unlocked = [] if getattr(args, "plain_current", False) else unlocked_passkeys(owner)
+        secret = None if getattr(args, "plain_current", False) else \
+            wallet_passphrase(w, owner) if unlocked else passphrase()
         try:
             w.check_writable()
             for key in here:
                 if w.read(owner, key.id, keys.CURRENT) is not None:
                     print(f"current key {key.did}: in {w.name} already")
                     continue
-                wallet.put_key(w, owner, key, keys.CURRENT, version_listing(log, key.did), secret)
+                wallet.put_key(w, owner, key, keys.CURRENT, version_listing(log, key.did), secret, unlocked)
                 print(f"current key {key.did}: pushed to {w.name}")
         except wallet.WalletError as e:
             sys.exit(str(e))
@@ -634,7 +656,7 @@ asking for the passphrase once.
         out = []
         try:
             for did in dids:
-                key = wallet.get_key(w, owner, names.key_id(did), keys.CURRENT, lambda: passphrase(confirm=False))
+                key = unlock_key(w, owner, names.key_id(did), keys.CURRENT)
                 if key is None:
                     continue
                 if key.did != did:
@@ -670,6 +692,220 @@ it, as the files say, without decrypting them. No secret is shown.
             sys.exit(str(e))
         for owner, kid, kind, did, version in rows:
             print(f"{owner} {kid} {kind:8} {did} {version}".rstrip())
+
+Unlocking with a passkey
+------------------------
+
+The passphrase of a wallet can be left to a passkey ([chapter 7](07-keys.md),
+[chapter 9](09-wallets.md)): enrolled once, it opens the keys of the owner
+with Touch ID, on every device the passkey reaches (all the Macs of one
+iCloud Keychain), through the page `https://opensheaf.org/manager/unlock.html`.
+
+Whenever a command reads a key of the wallet that a passkey can unlock
+(`unlock_key`, which pulling current keys and reading rotation keys call),
+`passkey_keks` asks the browser, once per command and owner, and keeps the
+key-encryption key in memory until the command ends; the PRF secret is
+never stored, and the key read is then kept on this device as before. The
+passphrase is asked instead when the browser gives nothing: an error of
+the page, no answer in two minutes, or Ctrl-C at the prompt; or never,
+when `OPENSHEAF_UNLOCK` is `passphrase`, or when `OPENSHEAF_PASSPHRASE`
+holds the passphrase (a script, continuous integration: no browser there).
+
+    # in unlock the keys of a wallet with a passkey:
+    def passkey_keks(owner, wraps, force=False):
+        """{cred: key-encryption key} of the passkeys among WRAPS of OWNER unlocked in this command,
+        asking the browser if none is; None to use the passphrase."""
+        from . import passkey
+        cache = _ASKED.setdefault("passkeys", {})
+        _ASKED.setdefault("seen", set()).add(owner)
+        failed = _ASKED.setdefault("failed", set())
+        salt = keys.passkey_salt(owner)
+        wraps = [p for p in wraps if p.salt == salt]
+        if not wraps:
+            return None
+        if any(p.cred in cache for p in wraps):
+            return {c: p.kek for c, p in cache.items()}
+        if not force and (os.environ.get(PASSPHRASE) or os.environ.get(passkey.UNLOCK, "") == "passphrase"
+                          or owner in failed):
+            return None
+        creds = list(dict.fromkeys(p.cred for p in wraps))
+        try:
+            cred, prf = passkey.unlock(owner, creds, no_browser=_ASKED.get("no_browser", False))
+        except passkey.UnlockFailed as e:
+            failed.add(owner)
+            if force:
+                sys.exit(f"the passkey did not unlock the keys of {owner}: {e}")
+            print(f"passkey unlock: {e}; the passphrase instead", file=sys.stderr)
+            return None
+        kek = keys.passkey_kek(prf)
+        for c in ([cred] if cred else creds):
+            cache[c] = keys.Passkey(c, salt, kek=kek)
+        return {c: p.kek for c, p in cache.items()}
+
+
+    def unlock_key(w, owner, kid, kind):
+        """The key KID of OWNER, of KIND, from the wallet W, unlocked by a passkey or the passphrase."""
+        from . import wallet
+        return wallet.get_key(w, owner, kid, kind, lambda: passphrase(confirm=False), passkey_keks)
+
+A key put into the wallet by a command that has unlocked a passkey of the
+owner gets a wrap under that passkey as well as under the passphrase
+(which a key written always needs: it is the way back); the passphrase is
+then asked once, and checked against a key of the wallet rather than
+typed twice. A command that
+met a passkey of the owner without unlocking it says how to add it to the
+new keys: `osheaf key enroll` again, which uses the same passkey.
+
+    # in unlock the keys of a wallet with a passkey:
+    def unlocked_passkeys(owner):
+        """The passkeys of OWNER unlocked in this command."""
+        salt = keys.passkey_salt(owner)
+        return [p for p in _ASKED.get("passkeys", {}).values() if p.salt == salt]
+
+
+    def wallet_passphrase(w, owner):
+        """The passphrase, for keys written after a passkey has opened others: asked once, and checked
+        against a key of OWNER in the wallet W, so that the new keys are under the same passphrase."""
+        from . import wallet
+        if os.environ.get(PASSPHRASE) or "passphrase" in _ASKED:
+            return passphrase()
+        try:
+            texts = [t for _, t in wallet_entries(w, owner) if keys.wraps_of(t)]
+        except SystemExit:
+            texts = []
+        if not texts:
+            return passphrase()
+        secret = passphrase(confirm=False)
+        try:
+            keys.read_key(texts[0], secret)
+        except keys.KeyStoreError as e:
+            sys.exit(f"{e}: this is not the passphrase of the keys of {owner} in {w.name}")
+        return secret
+
+
+    def enroll_hint(owner, unlocked):
+        if not unlocked and owner in _ASKED.get("seen", set()):
+            print(f"the new keys of {owner} open with the passphrase only: run osheaf key enroll to "
+                  "let your passkey open them too", file=sys.stderr)
+
+`osheaf key enroll` adds a passkey to the keys of the owner in the wallet.
+It reads them all, and asks the passphrase once, which must open every
+encrypted one, before the browser is opened. The first time, the page
+creates a passkey for `opensheaf.org`, named after the owner, and derives
+its secret; later, it is the passkey already there that opens the keys
+added since (`--new-passkey` creates another, for another provider or a
+hardware key, which then opens them too). Every key that this passkey does
+not open yet gets a wrap under it, keeping its passphrase wrap, and is
+written back to the wallet (with the GitHub wallet, one commit per file).
+A key kept unencrypted (`--plain-current`) is left as it is.
+
+    # in unlock the keys of a wallet with a passkey:
+    def wallet_entries(w, owner):
+        """[(kid, text)] of the keys of OWNER in the wallet W."""
+        from . import wallet
+        try:
+            return [(kid, wallet.read_any(w, o, kid)) for o, kid in w.entries(owner)]
+        except wallet.WalletError as e:
+            sys.exit(str(e))
+
+
+    def encrypted_entries(w, owner):
+        out = [(kid, t) for kid, t in wallet_entries(w, owner)
+               if any(x.startswith("encryption ") and x.split()[1:2] != ["none"] for x in t.splitlines())]
+        if not out:
+            sys.exit(f"{w.name} holds no encrypted key of {owner}")
+        return out
+
+
+    def key_owner(args):
+        owner = getattr(args, "owner", None) or ARCHIVE.get("owner")
+        if not owner or not names.OWNER_NAME.match(owner):
+            sys.exit("give --owner NAME, or run the command in an archive")
+        return owner
+
+
+    def key_enroll(args):
+        """Let a passkey open the keys of the owner in the wallet."""
+        from . import passkey, wallet
+        owner, w = key_owner(args), wallet_for(args)
+        _ASKED["no_browser"] = bool(getattr(args, "no_browser", False))
+        try:
+            w.check_writable()
+        except wallet.WalletError as e:
+            sys.exit(str(e))
+        entries = encrypted_entries(w, owner)
+        salt = keys.passkey_salt(owner)
+        known = list(dict.fromkeys(p.cred for _, t in entries for p in keys.passkeys_of(t) if p.salt == salt))
+        new = bool(getattr(args, "new_passkey", False)) or not known
+        todo = entries if new else [(kid, t) for kid, t in entries
+                                    if not {p.cred for p in keys.passkeys_of(t)} & set(known)]
+        if not todo:
+            print(f"every encrypted key of {owner} in {w.name} opens with your passkey already")
+            return
+        secret = passphrase(confirm=False)
+        for kid, t in todo:
+            try:
+                keys.read_key(t, secret)
+            except keys.KeyStoreError as e:
+                sys.exit(f"{w.name} {kid}: {e}: nothing was changed")
+        try:
+            cred, prf = passkey.enroll(owner, no_browser=_ASKED["no_browser"]) if new else \
+                passkey.unlock(owner, known, no_browser=_ASKED["no_browser"])
+        except passkey.UnlockFailed as e:
+            sys.exit(f"no passkey: {e}; nothing was changed")
+        kek = keys.passkey_kek(prf)
+        if not new:
+            opened = [c for c in ([cred] if cred else known)
+                      if any(_opens(t, c, kek) for _, t in entries if c in {p.cred for p in keys.passkeys_of(t)})]
+            if not opened:
+                sys.exit("the passkey used does not open the keys it is enrolled for: nothing was changed")
+            cred = opened[0]
+        unlocked = keys.Passkey(cred, salt, kek=kek)
+        try:
+            for kid, _ in todo:
+                kind, did = wallet.add_passkey(w, owner, kid, secret, unlocked)
+                print(f"{kind} key {did}: opens with your passkey")
+        except wallet.WalletError as e:
+            sys.exit(str(e))
+        print(f"{len(todo)} key(s) of {owner} in {w.name} open with your passkey (Touch ID), and still "
+              "with the passphrase; osheaf asks the browser for it whenever it needs one of them")
+
+
+    def _opens(text, cred, kek):
+        try:
+            keys.read_key(text, keks={cred: kek})
+            return True
+        except keys.KeyStoreError:
+            return False
+
+`osheaf key unlock` opens with the passkey the keys of the owner that it
+can open, which checks that the enrollment works, and, in an archive,
+keeps on this device the current keys of the latest version of the key
+log that it does not hold, as `osheaf key pull` does, with one Touch ID.
+It never falls back to the passphrase: it is the passkey that it tries.
+
+    # in unlock the keys of a wallet with a passkey:
+    def key_unlock(args):
+        """Open with the passkey the keys of the owner in the wallet; in an archive, pull its current keys."""
+        owner, w = key_owner(args), wallet_for(args)
+        _ASKED["no_browser"] = bool(getattr(args, "no_browser", False))
+        entries = [(kid, t) for kid, t in wallet_entries(w, owner) if keys.passkeys_of(t)]
+        if not entries:
+            sys.exit(f"no key of {owner} in {w.name} opens with a passkey: run osheaf key enroll")
+        keks = passkey_keks(owner, [p for _, t in entries for p in keys.passkeys_of(t)], force=True)
+        if not keks:
+            sys.exit(f"no passkey of {owner} to unlock")
+        opened = sum(1 for _, t in entries if any(_opens(t, c, k) for c, k in keks.items()))
+        print(f"{opened} of the {len(entries)} key(s) of {owner} that a passkey opens opened with yours")
+        log = key_log(owner) if ROOT is not None else None
+        latest = log.latest() if log is not None else None
+        if latest is not None:
+            try:
+                have = {k.did for k in keys.current_keys(owner, latest.keys["keys"])}
+            except keys.KeyStoreError as e:
+                sys.exit(str(e))
+            pulled = pull_current_keys(w, owner, [d for d in latest.keys["keys"] if d not in have])
+            print(f"{len(pulled)} current key(s) of {owner} pulled from {w.name}")
 
 A key to and from a password manager
 ------------------------------------

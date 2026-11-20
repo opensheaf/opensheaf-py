@@ -62,7 +62,7 @@ Identity
 3. [Keys: making them, keeping them, exporting them](07-keys.md).
 4. [Signatures and the statuses of versions](08-signatures.md).
 5. [Key wallets: keys kept for convenience](09-wallets.md): security
-   levels, a private GitHub repository, a password manager.
+   levels, a private GitHub repository, a password manager, passkey unlock.
 
 The archive
 -----------
