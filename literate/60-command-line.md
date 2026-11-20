@@ -65,6 +65,8 @@ core.
       init                   create an archive (osheaf.json, storage root, owner, main catalogue)
       owner init|rotate|expose|end|show   make an owner, change its keys, end it, show it
       key new                a new current key for this device
+      key push|pull|list|forget   current keys to and from a key wallet (--keys)
+      key export|import --clipboard   a key to and from a password manager
       deposit LABEL [SOURCE] deposit a document (TeXmacs, or any source with --pdf);
                              --new seals a new work under a new label
       relicense LABEL        description-only version with a new licence
@@ -758,6 +760,24 @@ osheaf owner pull https://example.org/other-archive/   # a fresher copy of the k
 osheaf sign kpz-uniqueness --version v2                # again, after an exposure
 ```
 
+The keys are kept at the security level of `--keys`: `offline` (the
+default and the maximum, as above), or a key wallet, `github:OWNER/REPO`
+(a private repository, reached through the GitHub CLI) or `command` (a
+password manager, through commands configured in `osheaf.json`), where
+the rotation keys and the current keys are kept encrypted under the
+passphrase, with the risk stated ([chapter 9](09-wallets.md)). Without
+`--rotation-key`, the rotation keys that sign come from the wallet.
+
+```
+osheaf owner init --keys github:mgubi/opensheaf-keys     # rotation and current keys in the wallet
+osheaf key pull                                           # on another machine: the current keys
+osheaf key list                                           # what the wallet holds (no secrets)
+osheaf owner rotate --keys offline --export /Volumes/USB/keys   # move up: new rotation keys offline
+osheaf key forget --wallet --used                         # remove the used keys from the wallet
+osheaf key export --clipboard                             # paste into a note of the Passwords app
+osheaf key import --clipboard                             # on another machine, after copying the note
+```
+
 `owner pull` meets the archive's copy of a key log with the copy at
 another place, an archive or the folder of the owner object, as section
 6.3 says ([copies](22-mirrors.md)); `sign` signs again, with current keys
@@ -799,10 +819,36 @@ The options of making an owner are shared by `owner init` and
     sg.add_argument("--version", required=True, help="the object version, e.g. v2")
     sg.add_argument("--yes", action="store_true", help="do not ask to confirm that the owner made it")
     sg.set_defaults(func=core.sign_again)
-    k = sub.add_parser("key", help="current keys of this device")
+    k = sub.add_parser("key", help="current keys of this device, key wallets, password managers")
     ksub = k.add_subparsers(dest="action", required=True)
     kn = ksub.add_parser("new", help="a new current key for this device; prints its did:key")
     kn.add_argument("--owner", help="an owner the archive hosts (default: the archive's)")
+    kp = ksub.add_parser("push", help="put the current keys of this device into the key wallet")
+    kp.add_argument("did", nargs="*", metavar="DID", help="the keys (default: the current keys of the owner)")
+    kp.add_argument("--plain-current", action="store_true", help="keep them unencrypted in the wallet")
+    kl = ksub.add_parser("pull", help="keep on this device the owner's current keys that the wallet holds")
+    kls = ksub.add_parser("list", help="what the key wallet holds: owner, key, kind, did:key (no secrets)")
+    kf = ksub.add_parser("forget", help="remove keys from this device, and with --wallet from the wallet")
+    kf.add_argument("did", nargs="*", metavar="DID", help="the keys to forget")
+    kf.add_argument("--wallet", action="store_true", help="also remove them from the key wallet")
+    kf.add_argument("--used", action="store_true",
+                    help="with --wallet: remove the keys the latest version of the key log no longer needs")
+    kf.add_argument("--force", action="store_true", help="also remove rotation keys still committed")
+    kf.add_argument("--yes", action="store_true", help="do not ask to confirm the removal (scripts)")
+    for x in (kp, kl, kls, kf):
+        x.add_argument("--owner", help="an owner the archive hosts (default: the archive's)")
+        x.add_argument("--keys", metavar="WALLET", help="the key wallet, github:OWNER/REPO or command "
+                       "(default: the one configured)")
+    ke = ksub.add_parser("export", help="copy a current key to the clipboard, for a password manager")
+    ke.add_argument("did", nargs="?", metavar="DID", help="the key (default: the owner's one key on this device)")
+    ke.add_argument("--owner", help="the owner (default: the archive's)")
+    ke.add_argument("--clipboard", action="store_true", help="copy the key to the clipboard")
+    ke.add_argument("--stdout", action="store_true", help="print the key (a secret) instead")
+    ke.add_argument("--encrypt", action="store_true", help="encrypt it under the passphrase")
+    ki = ksub.add_parser("import", help="keep on this device a key copied from a password manager")
+    ki.add_argument("--clipboard", action="store_true", help="read the key from the clipboard")
+    ki.add_argument("--stdin", action="store_true", help="read the key from the standard input")
+    ki.add_argument("--owner", help="the owner, if the text does not say")
     k.set_defaults(func=None)
 
 Two helpers add the options shared by several of these commands: those of
@@ -821,6 +867,17 @@ rotation keys and committing new ones.
                        help="one rotation key, nextThreshold 1: the minimal setup, with its risk (section 6.2)")
         p.add_argument("--keeper", help="who answers for the owner: an ORCID iD or https://<domain>/ (section 6.6)")
         export_options(p)
+        level_options(p)
+
+
+    def level_options(p, new_keys=True):
+        p.add_argument("--keys", metavar="LEVEL",
+                       help="the security level: offline (default: the rotation keys to --export only), or a "
+                       "key wallet, github:OWNER/REPO or command, which keeps the keys encrypted (a lower level)"
+                       if new_keys else "the key wallet that keeps the rotation keys (default: the one configured)")
+        if new_keys:
+            p.add_argument("--plain-current", action="store_true",
+                           help="in a wallet, keep the current keys unencrypted")
 
 
     def export_options(p):
@@ -838,6 +895,7 @@ rotation keys and committing new ones.
         p.add_argument("--message")
         if export:
             export_options(p)
+        level_options(p, new_keys=export)
 
 Running a command
 -----------------
@@ -898,10 +956,14 @@ paths of the core), and a few must not:
 - `arxiv fetch` only downloads into a folder, and needs no archive;
 - `resolve` works in an archive, whose storage root and locations it then
   uses, or anywhere else;
+- `key list`, `key import` and `key export` work in an archive or outside
+  one, as `resolve` does: a wallet or a key may be needed on a machine that
+  has no copy of the archive;
 - every other command configures the archive. An archive of specification
   0.1 is told apart then, and every command but `verify` stops, saying that
   it must be rebuilt (section 16.1); `verify` reports it as its one error.
-  Then come `owner` and `key`, dispatched by their action, the commands of
+  Then come `owner` and `key`, dispatched by their action (`KEY_ACTIONS`
+  names the functions of `key`), the commands of
   the modules imported lazily, and the function recorded by the
   sub-parser of the others.
 
@@ -913,6 +975,8 @@ read (`verify`, `resolve`, `owner show`, `collection status`, `key new`,
 `arxiv fetch`, a trial of `zenodo` on the sandbox, which works on a copy)
 and those that write the pages themselves (`index`, `init`) are left out. A
 command that fails stops before, and changes nothing that the pages show.
+The passphrase of the keys, asked at most once by a command, is forgotten
+when it ends.
 
     # in the main function of osheaf:
     READ_ONLY = {"help-config", "verify", "resolve", "index", "init", "key"}
@@ -930,7 +994,11 @@ command that fails stops before, and changes nothing that the pages show.
         argv = sys.argv[1:] if argv is None else argv
         p = build_parser()
         args = p.parse_args(argv)
-        result = dispatch(p, args)
+        core.forget_passphrase()
+        try:
+            result = dispatch(p, args)
+        finally:
+            core.forget_passphrase()
         if changes_archive(args) and core.ROOT is not None:
             core.present()
         return result
@@ -938,6 +1006,8 @@ command that fails stops before, and changes nothing that the pages show.
 
     OWNER_ACTIONS = {"init": "owner_init_command", "rotate": "owner_rotate", "expose": "owner_expose",
                      "end": "owner_end", "show": "owner_show"}
+    KEY_ACTIONS = {"new": "key_new", "push": "key_push", "pull": "key_pull", "list": "key_list",
+                   "export": "key_export", "import": "key_import", "forget": "key_forget"}
     LAZY = {"collection": ("collections", None), "mirror": ("mirror", "main"), "branch": ("branch", "main"),
             "accept": ("branch", "accept"), "draft": ("drafts", None), "seal": ("drafts", "seal"),
             "takedown": ("takedown", "main")}
@@ -967,6 +1037,14 @@ command that fails stops before, and changes nothing that the pages show.
                 if args.root:
                     raise
             return remote.main(args)
+        if args.cmd == "key" and args.action in ("list", "import", "export"):
+            try:
+                configure(args)
+            except SystemExit:
+                if args.root:
+                    raise
+            getattr(core, KEY_ACTIONS[args.action])(args)
+            return
         configure(args)
         if args.cmd == "owner" and args.action == "pull":
             from . import mirror
@@ -975,7 +1053,7 @@ command that fails stops before, and changes nothing that the pages show.
             getattr(core, OWNER_ACTIONS[args.action])(args)
             return
         if args.cmd == "key":
-            core.key_new(args)
+            getattr(core, KEY_ACTIONS[args.action])(args)
             return
         if args.cmd == "arxiv":
             from . import arxiv

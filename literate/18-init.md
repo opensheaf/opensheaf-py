@@ -43,7 +43,10 @@ is also the depositor, by default, with the contact as address; both can be
 changed in the file afterwards. The main catalogue is labelled `main`. An
 existing configuration is never overwritten. Version 0.1 asked for an
 archive identifier, which version 0.2 has dropped: an archive is named by
-no file (section 3).
+no file (section 3). A new owner whose keys are kept in a GitHub wallet
+(`--keys github:OWNER/REPO`, [chapter 9](09-wallets.md)) names it in the
+configuration, `"keys": {"wallet": "github:OWNER/REPO"}`, so that the
+commands of owners and of signing find its keys there.
 
 The main catalogue is sealed and signed at once, empty, kept by `collect`
 (newest first). A curated main collection (`--curated`), whose members of
@@ -121,6 +124,8 @@ have to be rebuilt when the specification changes, as it has (section 16.1).
         init_storage_root()
         <<the owner of a new archive>>
         cfg["owner"] = log.owner
+        if getattr(args, "new_owner", False) and wallet_config(args):
+            cfg["keys"] = wallet_config(args)
         (root / CONFIG_NAME).write_text(json.dumps(cfg, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
         if kind == "website":
             from . import html

@@ -167,7 +167,9 @@ too.
             "htmlPackage": "paper-html.ts",             style package of HTML versions
             "htmlResources": ["max-html/resources/max-html.css", ...]   from the plugins
           },
-          "index": {"template": "index-template.tm"}    optional: the readable index
+          "index": {"template": "index-template.tm"},   optional: the readable index
+          "keys": {"wallet": "github:OWNER/REPO"}       optional: the key wallet (or "command",
+                                             with "read" and "write" commands; see osheaf key)
         }
 
     and, next to it, `ocfl/` (the OCFL 1.1 storage root), `opensheaf.json` (the
@@ -179,7 +181,10 @@ too.
     The private keys of the owner are never in the archive (section 15.4): the
     current key of this device is kept in the system's credential store (or in
     ~/.config/opensheaf/keys/), the rotation keys in files exported once to a
-    folder outside the archive (`osheaf owner init --export DIR`).
+    folder outside the archive (`osheaf owner init --export DIR`), unless the owner
+    chooses a lower security level, a key wallet, which keeps them encrypted
+    under a passphrase (`--keys github:OWNER/REPO`, a private repository, or
+    `--keys command`); OPENSHEAF_WALLET overrides "keys".
 
     The index is either a TeXmacs document made from a template, as above, which
     osheaf init --index texmacs sets up, or the website (the profile website,
@@ -910,7 +915,10 @@ owner that has ended, by an ending version or a fork of its key log
 (section 6.3), nor against a key log with errors. The current keys are
 found by `keys.current_keys`, among those of the latest version of the key
 log: in `OPENSHEAF_SIGNING_KEY`, in the credential store, or in a file of
-the user's configuration ([chapter 7](07-keys.md)). A device holding fewer
+the user's configuration ([chapter 7](07-keys.md)). A device that holds
+fewer than `threshold` of them, in an archive with a key wallet, pulls the
+others from the wallet ([chapter 19](19-owner-commands.md)), and keeps them,
+so that it calls the wallet once. A device holding fewer
 than `threshold` of them cannot sign alone: an owner whose threshold needs
 the keys of several members (section 6.2) signs on one device holding them
 all, which these tools do not yet organise otherwise.
@@ -932,6 +940,8 @@ all, which these tools do not yet organise otherwise.
         except keys.KeyStoreError as e:
             sys.exit(str(e))
         need = latest.keys["threshold"]
+        if len(found) < need and not os.environ.get(keys.SIGNING_KEY):
+            found = pull_from_wallet(owner, latest, found)
         if len(found) < need:
             sys.exit(f"this device holds {len(found)} of the current keys of {owner}, and v{latest.number} "
                      f"of its key log needs {need} to sign (osheaf key new makes one for this device)")

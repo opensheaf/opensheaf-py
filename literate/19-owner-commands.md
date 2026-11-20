@@ -16,8 +16,12 @@ and a new version of the key log, written there, is at once beside every
 line. An owner that also writes in other archives copies its owner object
 there, and brings each copy up to date from another with `osheaf owner
 pull`, which meets two copies of a key log as section 6.3 says
-([copies](22-mirrors.md)). The last command of this chapter, `osheaf
-sign`, signs a version of a line again after an exposure.
+([copies](22-mirrors.md)). The keys go where the owner's *security level* says: offline, the
+default and the maximum, or in a key wallet, kept by the module of
+[chapter 9](09-wallets.md); `osheaf key push`, `pull`, `list`, `export`,
+`import` and `forget` move them between this device, a wallet and a
+password manager. The last command of this chapter, `osheaf sign`, signs a
+version of a line again after an exposure.
 
     # in the commands of owners and their keys:
     <<the owner a command is about>>
@@ -26,7 +30,13 @@ sign`, signs a version of a line again after an exposure.
     <<a passphrase, asked or from the environment>>
 
 
+    <<the security level and the wallet of a command>>
+
+
     <<export rotation keys and confirm that they are kept>>
+
+
+    <<keep keys in a wallet>>
 
 
     <<read the rotation keys that sign a version of the key log>>
@@ -47,6 +57,15 @@ sign`, signs a version of a line again after an exposure.
     <<a new current key for this device>>
 
 
+    <<the commands of key wallets>>
+
+
+    <<a key to and from a password manager>>
+
+
+    <<forget a key>>
+
+
     <<sign again a version contested by an exposed key>>
 
 The owner a command is about is the archive's, unless `--owner` names
@@ -55,6 +74,8 @@ another owner it hosts. Its key log must be in the storage root.
     # in the owner a command is about:
     def owner_of(args):
         """The owner name a command is about, and its key log in the storage root."""
+        if ROOT is None:
+            sys.exit("no archive here (no osheaf.json in this folder or above it): give --root")
         owner = getattr(args, "owner", None) or ARCHIVE["owner"]
         log = key_log(owner)
         if log is None:
@@ -78,14 +99,20 @@ choose others, and `--single-rotation-key` the minimal setup, one key with
 a `nextThreshold` of 1, whose risk the tool states, as section 6.2 requires.
 A keeper, an ORCID iD or a domain, may be named (section 6.6).
 
-The rotation keys are never kept on the device: they are exported, before
-anything is written, to a folder outside the archive (`--export DIR`, a USB
-key for instance), one file each, encrypted under a passphrase unless
-`--no-passphrase`, and printed as sheets with `--print`. The owner then
-confirms, by typing the check of each key, that the files and sheets are
-kept; only then is the key log written. A key log whose rotation keys were
-lost before they were put away would be an owner that can never change its
-keys (section 6.2).
+At the security level `offline`, the default, the rotation keys are never
+kept on the device: they are exported, before anything is written, to a
+folder outside the archive (`--export DIR`, a USB key for instance), one
+file each, encrypted under a passphrase unless `--no-passphrase`, and
+printed as sheets with `--print`. The owner then confirms, by typing the
+check of each key, that the files and sheets are kept; only then is the key
+log written. A key log whose rotation keys were lost before they were put
+away would be an owner that can never change its keys (section 6.2). At a
+wallet level (`--keys github:OWNER/REPO` or `--keys command`,
+[chapter 9](09-wallets.md)) the rotation keys and the current key are kept
+in the wallet instead, encrypted under the passphrase (the current key in
+clear with `--plain-current`), and read back from it before the key log is
+written; the risk is stated; `--export` may be given too, for an offline
+copy of the rotation keys.
 
 The genesis record gives the owner name, the name of algorithm 0 of the
 record (section 6.2); if it is taken in the archive, a new nonce is drawn
@@ -107,8 +134,12 @@ current key is kept in the system's credential store, under the owner name.
         keeper = getattr(args, "keeper", None)
         if keeper and not names.keeper_valid(keeper):
             sys.exit(f"a keeper is an ORCID iD (with its check digit) or https://<domain>/: {keeper}")
-        if not getattr(args, "export", None):
-            sys.exit("give --export DIR, a folder outside the archive where the rotation keys are written")
+        w = level_wallet(args)
+        if w is None and not getattr(args, "export", None):
+            sys.exit("give --export DIR, a folder outside the archive where the rotation keys are written "
+                     "(or keep them in a wallet, a lower security level: --keys github:OWNER/REPO|command)")
+        if w is not None and getattr(args, "no_passphrase", False):
+            sys.exit("--no-passphrase: the keys in a wallet are always encrypted")
         for did in others:
             try:
                 names.did_key_public(did)
@@ -126,7 +157,10 @@ current key is kept in the system's credential store, under the owner name.
                 break
         if next_threshold == 1:
             print("warning: " + owners.SINGLE_ROTATION_RISK, file=sys.stderr)
-        export_and_confirm(rotation, log.owner, 1, args)
+        if getattr(args, "export", None):
+            export_and_confirm(rotation, log.owner, 1, args)
+        if w is not None:
+            keep_in_wallet(w, log.owner, rotation, 1, args, current=[(current, 1)])
         try:
             store = keys.store_current_key(log.owner, current)
         except (keys.KeyStoreError, OSError) as e:
@@ -139,7 +173,9 @@ current key is kept in the system's credential store, under the owner name.
 
 `osheaf owner init` makes an owner in an existing archive, which then hosts
 it: its owner name joins `owners` in the configuration, and the discovery
-document lists it.
+document lists it. A GitHub wallet chosen for it becomes the wallet of the
+archive, if it has none (`wallet_config`), so that later commands find the
+keys there.
 
     # in create an owner:
     def owner_init_command(args):
@@ -147,31 +183,103 @@ document lists it.
         cfg_path = ROOT / CONFIG_NAME
         if cfg_path.exists():
             cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+            changed = False
             if log.owner not in [cfg.get("owner")] + cfg.get("owners", []):
                 cfg["owners"] = cfg.get("owners", []) + [log.owner]
-                cfg_path.write_text(json.dumps(cfg, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
                 ARCHIVE.setdefault("owners", []).append(log.owner)
+                changed = True
+            if wallet_config(args) and "keys" not in cfg:
+                cfg["keys"] = ARCHIVE["keys"] = wallet_config(args)
+                changed = True
+            if changed:
+                cfg_path.write_text(json.dumps(cfg, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
         write_discovery()
+
+
+    def wallet_config(args):
+        """The `keys` of osheaf.json naming the GitHub wallet of --keys, or None."""
+        spec = getattr(args, "keys", None) or ""
+        return {"wallet": spec} if spec.startswith("github:") else None
 
 A passphrase is asked twice, without echo, or taken from the environment
 variable `OPENSHEAF_PASSPHRASE`, for scripts. An empty passphrase is
 refused: an owner who wants plain files says so, with `--no-passphrase`.
+It is asked once per command, however many keys it encrypts or decrypts:
+a rotation that reads the rotation keys from a wallet and keeps new ones
+there asks once. The command line forgets it when the command ends
+(`forget_passphrase`). A good place for it is a password manager, such as
+the Passwords app of macOS: a different provider from the wallet, so that
+neither alone gives the keys.
 
     # in a passphrase, asked or from the environment:
     PASSPHRASE = "OPENSHEAF_PASSPHRASE"
+    _ASKED = {}
 
 
     def passphrase(confirm=True):
-        """The passphrase of exported rotation keys."""
+        """The passphrase of the keys, asked once per command."""
         if os.environ.get(PASSPHRASE):
             return os.environ[PASSPHRASE]
+        if "passphrase" in _ASKED:
+            return _ASKED["passphrase"]
         import getpass
-        first = getpass.getpass("passphrase of the rotation keys: ")
+        first = getpass.getpass("passphrase of the keys: ")
         if not first:
             sys.exit("an empty passphrase: give --no-passphrase to export the keys unencrypted")
         if confirm and getpass.getpass("the passphrase again: ") != first:
             sys.exit("the two passphrases differ")
+        _ASKED["passphrase"] = first
         return first
+
+
+    def forget_passphrase():
+        _ASKED.clear()
+
+### The security level and the wallet
+
+A command that makes keys keeps them at the security level of `--keys`:
+`offline` (the default) gives no wallet, `github:OWNER/REPO` the GitHub
+wallet, `command` the command wallet configured in `osheaf.json` or in
+`OPENSHEAF_WALLET` ([chapter 9](09-wallets.md)). A command that reads
+keys from a wallet, or moves them, uses the wallet of `--keys`, or else the
+one configured. Either way, the repositories of the archive are given to
+the wallet, which refuses them.
+
+    # in the security level and the wallet of a command:
+    def archive_repositories():
+        from . import wallet
+        return wallet.archive_repositories(ROOT, ARCHIVE.get("baseUrl"))
+
+
+    def configured_wallet():
+        """The wallet configured for the archive (OPENSHEAF_WALLET, or "keys" of osheaf.json), or None."""
+        from . import wallet
+        try:
+            return wallet.configured(ARCHIVE.get("keys"), forbidden=archive_repositories())
+        except wallet.WalletError as e:
+            sys.exit(str(e))
+
+
+    def level_wallet(args):
+        """The wallet of the security level --keys, or None for offline (the default)."""
+        from . import wallet
+        spec = getattr(args, "keys", None) or wallet.OFFLINE
+        try:
+            if spec == "command":
+                w = configured_wallet()
+                return w if isinstance(w, wallet.CommandWallet) else wallet.parse(spec, ARCHIVE.get("keys"))
+            return wallet.parse(spec, forbidden=archive_repositories())
+        except wallet.WalletError as e:
+            sys.exit(str(e))
+
+
+    def wallet_for(args):
+        """The wallet a command reads or moves keys with: that of --keys, or the configured one."""
+        w = level_wallet(args) or configured_wallet()
+        if w is None:
+            sys.exit("no key wallet: give --keys github:OWNER/REPO (or command), or configure one in "
+                     'osheaf.json ("keys": {"wallet": ...}) or in OPENSHEAF_WALLET')
+        return w
 
 ### Exporting and confirming
 
@@ -210,6 +318,39 @@ committed, and can be deleted.
             if typed != keys.sheet_check(key.seed):
                 sys.exit("not confirmed: nothing was written to the key log (the files exported may be deleted)")
 
+### Keeping keys in a wallet
+
+At a wallet level, the rotation keys committed by a version, and the
+current keys of this device that the version lists and the wallet does not
+hold yet, are put into the wallet, each read back at once, before the
+version is written. The risk is stated first, on the standard error, and
+then the passphrase is asked (once, if an export asked it already).
+
+    # in keep keys in a wallet:
+    def keep_in_wallet(w, owner, rotation, version, args, current=()):
+        """Keep the rotation keys ROTATION of OWNER, committed in VERSION, and the current keys CURRENT
+        ([(key, version listing it)]) in the wallet W; stops if it fails."""
+        from . import wallet
+        print("warning: " + wallet.risk(w.name, owner), file=sys.stderr)
+        secret = passphrase()
+        try:
+            w.check_writable()
+            for key in rotation:
+                wallet.put_key(w, owner, key, keys.ROTATION, version, secret)
+                print(f"rotation key {key.did}\n  kept in {w.name}")
+            for key, v in current:
+                if w.read(owner, key.id, keys.CURRENT) is None:
+                    wallet.put_key(w, owner, key, keys.CURRENT, v,
+                                   None if getattr(args, "plain_current", False) else secret)
+                    print(f"current key {key.did}\n  kept in {w.name}")
+        except wallet.WalletError as e:
+            sys.exit(f"{e}: nothing was written to the key log")
+
+
+    def version_listing(log, did):
+        """The number of the first version of LOG whose current keys list DID, or None."""
+        return next((v.number for v in log.side() if v.keys and did in v.keys.get("keys", [])), None)
+
 ### Reading the rotation keys
 
 The rotation keys that sign the next version of the key log are read from
@@ -221,24 +362,53 @@ passphrase once, for all of them.
     # in read the rotation keys that sign a version of the key log:
     def rotation_keys(files, owner):
         """The rotation keys of OWNER read from FILES."""
-        if not files:
-            sys.exit("give the rotation keys that sign the new version of the key log (--rotation-key FILE)")
-        out, secret = [], None
+        out = []
         for f in files:
             try:
                 try:
-                    rk = keys.read_rotation_key(Path(f), secret)
-                except keys.KeyStoreError as e:
-                    if secret is not None or "passphrase is needed" not in str(e):
-                        raise
-                    secret = passphrase(confirm=False)
-                    rk = keys.read_rotation_key(Path(f), secret)
+                    rk = keys.read_rotation_key(Path(f))
+                except keys.PassphraseNeeded:
+                    rk = keys.read_rotation_key(Path(f), passphrase(confirm=False))
             except (keys.KeyStoreError, OSError) as e:
                 sys.exit(f"{f}: {e}")
             if rk.owner not in (None, owner):
                 sys.exit(f"{f} is a rotation key of {rk.owner}, not of {owner}")
             out.append(rk.key)
         return out
+
+Without `--rotation-key`, the rotation keys come from a wallet: the one
+configured, or else that of `--keys`. The keys needed are those whose
+digests are in `next` of the latest version of the key log, filed in the
+wallet under their first 16 characters; `nextThreshold` of them are read,
+with the passphrase asked once. The wallet is returned with the keys, so
+that a rotation can tell the owner that it has used them up.
+
+    # in read the rotation keys that sign a version of the key log:
+    def rotation_signers(args, owner, prev):
+        """(the rotation keys that sign the version after PREV, the wallet they come from or None)."""
+        files = getattr(args, "rotation_key", None)
+        if files:
+            return rotation_keys(files, owner), None
+        from . import wallet
+        w = configured_wallet() or level_wallet(args)
+        if w is None:
+            sys.exit("give the rotation keys that sign the new version of the key log (--rotation-key FILE), "
+                     "or the wallet that keeps them (--keys github:OWNER/REPO)")
+        need, out = prev.keys["nextThreshold"], []
+        try:
+            for digest in prev.keys["next"]:
+                key = wallet.get_key(w, owner, digest[:16], keys.ROTATION, lambda: passphrase(confirm=False))
+                if key is not None and key.digest == digest:
+                    out.append(key)
+                if len(out) == need:
+                    break
+        except wallet.WalletError as e:
+            sys.exit(str(e))
+        if len(out) < need:
+            sys.exit(f"{w.name} holds {len(out)} of the rotation keys of v{prev.number} of the key log of {owner}, "
+                     f"and {need} sign the next version: give them with --rotation-key FILE")
+        print(f"{len(out)} rotation key(s) of v{prev.number} read from {w.name}", file=sys.stderr)
+        return out, w
 
 Changing keys
 -------------
@@ -247,9 +417,15 @@ Changing keys
 `nextThreshold` rotation keys of the latest version: it adds current keys
 (`--add did:key`, made on their devices with `osheaf key new`), retires
 others (`--retire did:key`, section 6.2), may change the `threshold`, and
-commits new rotation keys, made now and exported as for a new owner, as many
-as before with the same `nextThreshold` unless `--rotation` and
-`--next-threshold` say otherwise. `owner expose` does the same and declares
+commits new rotation keys, made now and kept as for a new owner, at the
+security level of `--keys`, as many as before with the same
+`nextThreshold` unless `--rotation` and `--next-threshold` say otherwise.
+The rotation keys that sign come from their files, or from the wallet.
+Signing with the rotation keys of a wallet and keeping the new ones
+offline (`--keys offline --export DIR`) *moves the owner up* to the
+maximum level: the keys left in the wallet are used up (section 6.2), and
+the command says so, and what remains to do about the current keys kept
+there. `owner expose` does the same and declares
 keys exposed (section 6.3): stolen, leaked or copied current keys, which an
 owner MUST expose at once when they could together reach a threshold. The
 data of extensions in force is kept. The version is made in memory and
@@ -264,9 +440,13 @@ rotation keys are exported and confirmed, and only then is it written.
         prev = log.latest()
         if prev is None:
             sys.exit(f"the owner {owner} has ended (section 6.3): its key log takes no new version")
-        signers = rotation_keys(getattr(args, "rotation_key", None), owner)
-        if not getattr(args, "export", None):
-            sys.exit("give --export DIR, a folder outside the archive where the new rotation keys are written")
+        w = level_wallet(args)
+        if w is None and not getattr(args, "export", None):
+            sys.exit("give --export DIR, a folder outside the archive where the new rotation keys are written "
+                     "(or keep them in a wallet, a lower security level: --keys github:OWNER/REPO|command)")
+        if w is not None and getattr(args, "no_passphrase", False):
+            sys.exit("--no-passphrase: the keys in a wallet are always encrypted")
+        signers, source = rotation_signers(args, owner, prev)
         n_rot = int(getattr(args, "rotation", None) or len(prev.keys["next"]))
         next_threshold = int(getattr(args, "next_threshold", None) or min(prev.keys["nextThreshold"], n_rot))
         for did in list(getattr(args, "add", None) or []) + list(getattr(args, "retire", None) or []) + list(exposed):
@@ -285,10 +465,22 @@ rotation keys are exported and confirmed, and only then is it written.
             sys.exit(str(e))
         if next_threshold == 1:
             print("warning: " + owners.SINGLE_ROTATION_RISK, file=sys.stderr)
-        export_and_confirm(new, owner, v.number, args)
+        if getattr(args, "export", None):
+            export_and_confirm(new, owner, v.number, args)
+        if w is not None:
+            try:
+                here = keys.current_keys(owner, v.keys["keys"])
+            except keys.KeyStoreError:
+                here = []
+            keep_in_wallet(w, owner, new, v.number, args, current=[(k, version_listing(log, k.did)) for k in here])
         owners.write_key_log(obj_dir(log.id), log)
         write_discovery()
         print(f"{owner}: v{v.number} of the key log, current keys: {', '.join(v.keys['keys'])}")
+        if source is not None and w is None:
+            print(f"moved up: the rotation keys kept in {source.name} are used up and sign nothing more "
+                  "(section 6.2); the new ones are kept offline only. osheaf key forget --wallet --used removes "
+                  f"the used ones; current keys kept in {source.name} still sign until a version retires them "
+                  "(osheaf owner rotate --retire) and osheaf key forget --wallet removes them", file=sys.stderr)
         for did in exposed:
             print(f"exposed {did}: what it alone signed is contested (section 7.3)")
 
@@ -303,7 +495,8 @@ Ending
 optionally, the successor that continues the owner's work (section 6.3):
 another owner name. Nothing is signed for the owner afterwards; the
 ending version has no keys, so no rotation keys are made. It may also
-expose keys (`--expose`).
+expose keys (`--expose`). The rotation keys come from their files or from
+the wallet, as for a rotation.
 
     # in end an owner:
     def owner_end(args):
@@ -312,7 +505,9 @@ expose keys (`--expose`).
         successor = getattr(args, "successor", None)
         if successor is not None and not names.OWNER_NAME.match(successor):
             sys.exit(f"the successor is an owner name: {successor}")
-        signers = rotation_keys(getattr(args, "rotation_key", None), owner)
+        if log.latest() is None:
+            sys.exit(f"the owner {owner} has ended (section 6.3): its key log takes no new version")
+        signers, _ = rotation_signers(args, owner, log.latest())
         try:
             v = log.end(signers, successor=successor, exposed=getattr(args, "expose", None) or (),
                         message=getattr(args, "message", None) or "Owner ended", user=depositor())
@@ -365,6 +560,278 @@ rotation keys kept apart. Until then it signs nothing.
         print(f"kept in {store}; it signs once a version of the key log adds it: "
               f"osheaf owner rotate --add {key.did} --rotation-key FILE ... --export DIR")
         return key
+
+Key wallets
+-----------
+
+Four commands move current keys between this device and a wallet
+([chapter 9](09-wallets.md)), and show what a wallet holds.
+
+`osheaf key push` puts the current keys of this device into the wallet:
+those of the latest version of the key log, or those named. A key made on
+a new device with `osheaf key new`, and not yet listed, is pushed by name.
+A key the wallet holds already is left as it is. The current keys are
+encrypted under the passphrase unless `--plain-current`; the risk is
+stated.
+
+    # in the commands of key wallets:
+    def key_push(args):
+        """Put the current keys of this device into the wallet."""
+        from . import wallet
+        owner, log = owner_of(args)
+        latest = log.latest()
+        if latest is None:
+            sys.exit(f"the owner {owner} has ended (section 6.3)")
+        w = wallet_for(args)
+        dids = list(getattr(args, "did", None) or latest.keys["keys"])
+        try:
+            here = keys.current_keys(owner, dids)
+        except keys.KeyStoreError as e:
+            sys.exit(str(e))
+        if not here:
+            sys.exit(f"this device holds none of the keys {', '.join(dids)} of {owner}")
+        print("warning: " + wallet.risk(w.name, owner), file=sys.stderr)
+        secret = None if getattr(args, "plain_current", False) else passphrase()
+        try:
+            w.check_writable()
+            for key in here:
+                if w.read(owner, key.id, keys.CURRENT) is not None:
+                    print(f"current key {key.did}: in {w.name} already")
+                    continue
+                wallet.put_key(w, owner, key, keys.CURRENT, version_listing(log, key.did), secret)
+                print(f"current key {key.did}: pushed to {w.name}")
+        except wallet.WalletError as e:
+            sys.exit(str(e))
+
+`osheaf key pull` is the other way: the current keys of the latest version
+of the key log that this device does not hold are read from the wallet,
+and kept in the device's store, which serves as a cache: signing then
+reads them there, without calling the wallet. Signing pulls them itself
+when this device holds too few current keys and a wallet is configured
+(`pull_from_wallet`, called by `signing_keys`): a new laptop signs at once,
+asking for the passphrase once.
+
+    # in the commands of key wallets:
+    def key_pull(args):
+        """Keep on this device the current keys of the owner that the wallet holds."""
+        owner, log = owner_of(args)
+        latest = log.latest()
+        if latest is None:
+            sys.exit(f"the owner {owner} has ended (section 6.3)")
+        w = wallet_for(args)
+        try:
+            have = {k.did for k in keys.current_keys(owner, latest.keys["keys"])}
+        except keys.KeyStoreError as e:
+            sys.exit(str(e))
+        pulled = pull_current_keys(w, owner, [d for d in latest.keys["keys"] if d not in have])
+        print(f"{len(pulled)} current key(s) of {owner} pulled from {w.name}; this device holds "
+              f"{len(have) + len(pulled)} of the {len(latest.keys['keys'])} current keys")
+
+
+    def pull_current_keys(w, owner, dids):
+        """The keys DIDS of OWNER that the wallet W holds, kept on this device."""
+        from . import wallet
+        out = []
+        try:
+            for did in dids:
+                key = wallet.get_key(w, owner, names.key_id(did), keys.CURRENT, lambda: passphrase(confirm=False))
+                if key is None:
+                    continue
+                if key.did != did:
+                    sys.exit(f"{w.name} holds another key than {did} under its name")
+                store = keys.store_current_key(owner, key)
+                print(f"current key {did}: pulled from {w.name}, kept in {store}", file=sys.stderr)
+                out.append(key)
+        except (wallet.WalletError, keys.KeyStoreError, OSError) as e:
+            sys.exit(str(e))
+        return out
+
+
+    def pull_from_wallet(owner, latest, found):
+        """FOUND, the current keys of OWNER on this device, with those the configured wallet adds."""
+        w = configured_wallet()
+        if w is None:
+            return found
+        held = {k.did for k in found}
+        return found + pull_current_keys(w, owner, [d for d in latest.keys["keys"] if d not in held])
+
+`osheaf key list` shows what the wallet holds: for each key, its owner, its
+name, its kind, its `did:key` and the version of the key log that commits
+it, as the files say, without decrypting them. No secret is shown.
+
+    # in the commands of key wallets:
+    def key_list(args):
+        """What the wallet holds: owner, key, kind, did:key, version."""
+        from . import wallet
+        w = wallet_for(args)
+        try:
+            rows = wallet.listing(w, getattr(args, "owner", None))
+        except wallet.WalletError as e:
+            sys.exit(str(e))
+        for owner, kid, kind, did, version in rows:
+            print(f"{owner} {kid} {kind:8} {did} {version}".rstrip())
+
+A key to and from a password manager
+------------------------------------
+
+`osheaf key export --clipboard` copies a current key of this device, as the
+text of [chapter 7](07-keys.md), to the clipboard, to be pasted into a note
+of a password manager such as the Passwords app of macOS, which keeps it
+in the user's iCloud keychain; `--stdout` prints it instead, the one case
+in which a command prints a secret on its standard output, since it is
+asked for. `--encrypt` encrypts the seed under the passphrase. The key is
+the one named, or the one current key of the latest version of the key log
+that this device holds.
+
+    # in a key to and from a password manager:
+    def key_export(args):
+        """Copy a current key of this device to the clipboard (or print it, --stdout)."""
+        from . import wallet
+        if not getattr(args, "clipboard", False) and not getattr(args, "stdout", False):
+            sys.exit("give --clipboard, or --stdout to print the key")
+        owner = getattr(args, "owner", None) or ARCHIVE.get("owner")
+        if not owner:
+            sys.exit("give --owner NAME, or run the command in an archive")
+        if getattr(args, "did", None):
+            dids = [args.did]
+        else:
+            latest = key_log(owner).latest() if ROOT is not None and key_log(owner) else None
+            if latest is None:
+                sys.exit(f"name the key to export, by its did:key (no key log of {owner} here)")
+            dids = latest.keys["keys"]
+        try:
+            here = keys.current_keys(owner, dids)
+        except keys.KeyStoreError as e:
+            sys.exit(str(e))
+        if len(here) != 1:
+            sys.exit(f"this device holds {len(here)} of the keys {', '.join(dids)} of {owner}: name one by its did:key")
+        key = here[0]
+        text = keys.key_text(key, owner, keys.CURRENT, passphrase() if getattr(args, "encrypt", False) else None)
+        if getattr(args, "stdout", False):
+            sys.stdout.write(text)
+        else:
+            try:
+                wallet.to_clipboard(text)
+            except wallet.WalletError as e:
+                sys.exit(str(e))
+            print(f"the current key {key.did} of {owner} is on the clipboard: paste it into a note of your "
+                  "password manager (the Passwords app), then copy something else", file=sys.stderr)
+        print("warning: a current key kept in a password manager is on every device that it syncs with; "
+              "section 6.2 has one key per device", file=sys.stderr)
+
+`osheaf key import --clipboard` (or `--stdin`) reads such a text back, asks
+for the passphrase if it is encrypted, and keeps the key on this device. A
+rotation key is refused: it is never kept on a device, but read from its
+file or its wallet when it signs. A key that the latest version of the key
+log does not list is kept with a warning: it signs nothing until a version
+adds it.
+
+    # in a key to and from a password manager:
+    def key_import(args):
+        """Keep on this device a key copied from a password manager (the clipboard, or the standard input)."""
+        from . import wallet
+        if bool(getattr(args, "clipboard", False)) == bool(getattr(args, "stdin", False)):
+            sys.exit("give --clipboard or --stdin")
+        try:
+            text = wallet.from_clipboard() if args.clipboard else sys.stdin.read()
+        except wallet.WalletError as e:
+            sys.exit(str(e))
+        try:
+            try:
+                rk = keys.read_key(text)
+            except keys.PassphraseNeeded:
+                rk = keys.read_key(text, passphrase(confirm=False))
+        except keys.KeyStoreError as e:
+            sys.exit(str(e))
+        if rk.kind != keys.CURRENT:
+            sys.exit("a rotation key is never kept on a device: give its file to the command it signs "
+                     "(--rotation-key FILE), or keep it in a wallet")
+        owner = rk.owner or getattr(args, "owner", None) or ARCHIVE.get("owner")
+        if getattr(args, "owner", None) and rk.owner and args.owner != rk.owner:
+            sys.exit(f"the key is one of {rk.owner}, not of {args.owner}")
+        if not owner or not names.OWNER_NAME.match(owner):
+            sys.exit("the text names no owner: give --owner NAME")
+        log = key_log(owner) if ROOT is not None else None
+        latest = log.latest() if log is not None else None
+        if latest is not None and rk.key.did not in latest.keys["keys"]:
+            print(f"warning: {rk.key.did} is not a current key of v{latest.number} of the key log of {owner}: "
+                  "it signs nothing until a version adds it", file=sys.stderr)
+        try:
+            if keys.current_keys(owner, [rk.key.did]):
+                print(f"{rk.key.did}: on this device already")
+                return
+            store = keys.store_current_key(owner, rk.key)
+        except (keys.KeyStoreError, OSError) as e:
+            sys.exit(str(e))
+        print(f"{rk.key.did}\nkept in {store}")
+
+Forgetting a key
+----------------
+
+`osheaf key forget DID...` removes current keys from the stores of this
+device, a retired key for instance. With `--wallet`, they are removed from
+the wallet too, the one case in which the tools delete anything there;
+`--wallet --used` removes from the wallet the keys of the owner that the
+latest version of its key log no longer needs: current keys it does not
+list, and rotation keys it does not commit, used up (section 6.2 asks
+that they be destroyed). A rotation key the latest version commits is kept
+unless `--force`: without `nextThreshold` of them the owner can never
+change its keys (section 6.2). Removing from a wallet is confirmed by
+typing `forget`, unless `--yes`.
+
+    # in forget a key:
+    def key_forget(args):
+        """Remove keys from this device, and with --wallet from the wallet."""
+        from . import wallet
+        owner, log = owner_of(args)
+        latest = log.latest()
+        listed = set(latest.keys["keys"]) if latest else set()
+        committed = {d[:16] for d in latest.keys["next"]} if latest else set()
+        dids = list(getattr(args, "did", None) or [])
+        if getattr(args, "used", False):
+            if not getattr(args, "wallet", False) or dids:
+                sys.exit("--used goes with --wallet, and names no key")
+        elif not dids:
+            sys.exit("name the keys to forget, by their did:key")
+        for did in dids:
+            try:
+                names.did_key_public(did)
+            except ValueError:
+                sys.exit(f"not a did:key URI of an Ed25519 key: {did}")
+        if not getattr(args, "wallet", False):
+            for did in dids:
+                keys.forget_current_key(owner, did)
+                print(f"{did}: forgotten on this device")
+            return
+        w = wallet_for(args)
+        try:
+            rows = wallet.listing(w, owner)
+        except wallet.WalletError as e:
+            sys.exit(str(e))
+        if getattr(args, "used", False):
+            gone = [r for r in rows if r[3] not in listed and r[1] not in committed]
+        else:
+            gone = [r for r in rows if r[3] in dids]
+        needed = [r for r in gone if r[1] in committed]
+        if needed and not getattr(args, "force", False):
+            sys.exit(f"{', '.join(r[3] for r in needed)}: rotation keys of the latest version of the key log, "
+                     "kept (an owner without nextThreshold of them can never change its keys, section 6.2); "
+                     "--force removes them")
+        for r in gone:
+            print(f"to remove from {w.name}: {r[2]} key {r[3]}")
+        if gone and not getattr(args, "yes", False) and input("type forget to remove them: ").strip() != "forget":
+            sys.exit("not confirmed: nothing was removed")
+        for did in dids:
+            keys.forget_current_key(owner, did)
+            print(f"{did}: forgotten on this device")
+        if not gone:
+            print(f"{w.name} holds none of these keys")
+        try:
+            for o, kid, kind, did, _ in gone:
+                w.forget(o, kid, kind)
+                print(f"{did}: removed from {w.name}")
+        except wallet.WalletError as e:
+            sys.exit(str(e))
 
 Signing again
 -------------
