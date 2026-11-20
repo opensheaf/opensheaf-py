@@ -193,8 +193,9 @@ def version_block(line, ver, shown, notices, root, vetted=None):
         out.append(f'<div class="changes">{esc(P.changes_note(obj))}</div>')
     out.append(f'<div class="files">{" · ".join(f for f in files if f)}</div>')
     uri = pin_uri(line, ver)
-    out.append(f'<div class="pin" title="{esc(uri)}">{ver} · pin <a href="{root}ocfl/{P.path_of(line.id)}/'
-               f'{ver}/inventory.json"><code>{line.digest(ver)[:32]}…</code></a></div>')
+    out.append(f'<div class="pin" title="{esc(uri)}">{ver} · pin <code class="copy" data-copy="{esc(uri)}">'
+               f'{line.digest(ver)[:32]}…</code> (<a href="{root}ocfl/{P.path_of(line.id)}/'
+               f'{ver}/inventory.json">inventory</a>)</div>')
     for x in notices:
         if x["documentVersion"] == n:
             src = line.signed or line.inv["head"]
@@ -588,9 +589,9 @@ def owner_page(owner, lines):
     side = log.side()
     last = side[-1] if side else None
     keys = (last.keys or {}) if last else {}
-    facts = [f"<li>Key log <code>sheaf:{esc(owner)}</code>, {len(log.versions)} version"
+    facts = [f"<li>Key log <code class=\"copy\">sheaf:{esc(owner)}</code>, {len(log.versions)} version"
              f"{'s' if len(log.versions) != 1 else ''}"
-             + (f"; latest <code>sheaf:{esc(owner)}/v{last.number}?sha512={last.digest}</code>" if last else "")
+             + (f"; latest <code class=\"copy\">sheaf:{esc(owner)}/v{last.number}?sha512={last.digest}</code>" if last else "")
              + "</li>"]
     keeper = keeper_of(log)
     if keeper:

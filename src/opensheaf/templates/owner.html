@@ -5,12 +5,22 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Owner {{owner}} · {{archive_name}}</title>
 <link rel="stylesheet" href="{{root}}style.css">
+<script>
+document.addEventListener('click', function (e) {
+  var el = e.target.closest && e.target.closest('code.copy');
+  if (!el || !navigator.clipboard) return;
+  navigator.clipboard.writeText(el.getAttribute('data-copy') || el.textContent).then(function () {
+    el.classList.add('copied');
+    setTimeout(function () { el.classList.remove('copied'); }, 1200);
+  });
+});
+</script>
 </head>
 <body>
 <nav><a href="{{root}}">{{archive_name}}</a></nav>
 <main class="paper-page owner-page">
   <h1>Owner</h1>
-  <p class="paper-meta"><code>{{owner}}</code></p>
+  <p class="paper-meta"><code class="copy">{{owner}}</code></p>
   <p class="small">An owner is the keyed identity that signs the versions of its lines
   (section 6 of the specification); its name identifies no one. What it signs is checked
   against its key log, summarised here as this archive holds it.</p>

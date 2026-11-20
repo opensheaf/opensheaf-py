@@ -619,9 +619,10 @@ TeXmacs index (`changes_note`): `arXiv comments: 61 pages` for a version
 imported from arXiv, whose comments are not always about a change,
 `changes: ...` otherwise. The version presented, the document version
 `shown`, is marked, and has an anchor `#vN` like the others. The pin of a
-version is shown as on the home page, by the beginning of the digest,
-linked to the inventory; the `sheaf:` URI naming exactly that object
-version is its title, shown when the pointer rests on it. For a member
+version is shown by the beginning of the digest, followed by a link to
+the inventory; the `sheaf:` URI naming exactly that object version is its
+title, shown when the pointer rests on it, and is what a click on the
+digest copies ([the templates](31-templates.md)). For a member
 of a selection, `vetted` is the set of the document versions vetted, each
 marked as such; the version presented is then the selection's, not
 necessarily the document's current version, and is not called current.
@@ -643,8 +644,9 @@ necessarily the document's current version, and is not called current.
             out.append(f'<div class="changes">{esc(P.changes_note(obj))}</div>')
         out.append(f'<div class="files">{" · ".join(f for f in files if f)}</div>')
         uri = pin_uri(line, ver)
-        out.append(f'<div class="pin" title="{esc(uri)}">{ver} · pin <a href="{root}ocfl/{P.path_of(line.id)}/'
-                   f'{ver}/inventory.json"><code>{line.digest(ver)[:32]}…</code></a></div>')
+        out.append(f'<div class="pin" title="{esc(uri)}">{ver} · pin <code class="copy" data-copy="{esc(uri)}">'
+                   f'{line.digest(ver)[:32]}…</code> (<a href="{root}ocfl/{P.path_of(line.id)}/'
+                   f'{ver}/inventory.json">inventory</a>)</div>')
         <<the notices about a version>>
         out.append("</li>")
         return "\n".join(out)
@@ -1167,9 +1169,9 @@ page here. It shows the key log; it does not judge the person.
         side = log.side()
         last = side[-1] if side else None
         keys = (last.keys or {}) if last else {}
-        facts = [f"<li>Key log <code>sheaf:{esc(owner)}</code>, {len(log.versions)} version"
+        facts = [f"<li>Key log <code class=\"copy\">sheaf:{esc(owner)}</code>, {len(log.versions)} version"
                  f"{'s' if len(log.versions) != 1 else ''}"
-                 + (f"; latest <code>sheaf:{esc(owner)}/v{last.number}?sha512={last.digest}</code>" if last else "")
+                 + (f"; latest <code class=\"copy\">sheaf:{esc(owner)}/v{last.number}?sha512={last.digest}</code>" if last else "")
                  + "</li>"]
         keeper = keeper_of(log)
         if keeper:

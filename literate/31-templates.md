@@ -43,6 +43,26 @@ typeset.
     <script>window.MathJax = {tex: {inlineMath: [['$', '$']], processEscapes: true}};</script>
     <script defer src="https://cdn.jsdelivr.net/npm/mathjax@3.2.2/es5/tex-mml-chtml.js"></script>
 
+Identifiers a reader pastes elsewhere, `sheaf:` URIs, pins and owner
+names, are marked `<code class="copy">`, and a click on one copies it to
+the clipboard; `data-copy` holds the whole identifier when the page shows
+less of it (the pin of a version, shown by the start of its digest). The
+script is inline, so that an archive's page needs no other file, and does
+nothing where the browser has no clipboard: the identifier can still be
+selected and copied by hand.
+
+    <!-- in copying identifiers on a click: -->
+    <script>
+    document.addEventListener('click', function (e) {
+      var el = e.target.closest && e.target.closest('code.copy');
+      if (!el || !navigator.clipboard) return;
+      navigator.clipboard.writeText(el.getAttribute('data-copy') || el.textContent).then(function () {
+        el.classList.add('copied');
+        setTimeout(function () { el.classList.remove('copied'); }, 1200);
+      });
+    });
+    </script>
+
 The home page
 -------------
 
@@ -148,6 +168,7 @@ The landing page of a document receives, besides `{{archive_name}}`,
     {{head}}
     <link rel="stylesheet" href="{{root}}style.css">
     <<MathJax for the mathematics of a page>>
+    <<copying identifiers on a click>>
     </head>
     <body>
     <nav><a href="{{root}}">{{archive_name}}</a></nav>
@@ -191,18 +212,18 @@ that last: the `sheaf:` URI of the line, in full and short, and its owner.
       {{abstract}}
     </section>
 
-The `sheaf:` URI is in a `<code>` element, so that it can be selected
-and copied whole; the short form follows, in the small sans.
+The `sheaf:` URI is in a `<code>` element, copied with a click; the short
+form follows, in the small sans, copied the same way.
 
     <!-- in the names of a line on its landing page: -->
     <dl class="identifiers">
-      <dt>Line</dt><dd><code>{{sheaf_uri}}</code> <span class="small">(short: <code>{{sheaf_short}}</code>)</span></dd>
+      <dt>Line</dt><dd><code class="copy">{{sheaf_uri}}</code> <span class="small">(short: <code class="copy">{{sheaf_short}}</code>)</span></dd>
       <dt>Owner</dt><dd>{{owner}}</dd>
     </dl>
 
 The last section is for those who cite or check: the citation, the
-licence, and the pin by which the collection fixes the document, linked
-to the inventory whose digest it is. Anyone can download the inventory, compute its SHA-512,
+licence, and the pin by which the collection fixes the document, copied
+with a click, followed by a link to the inventory whose digest it is. Anyone can download the inventory, compute its SHA-512,
 and compare.
 
     <!-- in the citation on a landing page: -->
@@ -211,7 +232,7 @@ and compare.
       <p class="cite">{{cite}}</p>
       <p class="small">Licence: {{licence}}</p>
       <p class="small">Pin in the collection (SHA-512 of the inventory it fixes):
-      <a href="{{pin_url}}"><code>{{pin}}</code></a></p>
+      <code class="copy">{{pin}}</code> (<a href="{{pin_url}}">the inventory</a>)</p>
     </section>
 
 The landing page of a collection
@@ -243,6 +264,7 @@ receives the placeholders of a landing page that a collection has
     {{head}}
     <link rel="stylesheet" href="{{root}}style.css">
     <<MathJax for the mathematics of a page>>
+    <<copying identifiers on a click>>
     </head>
     <body>
     <nav><a href="{{root}}">{{archive_name}}</a></nav>
@@ -298,12 +320,13 @@ The page of an owner, at `owner/<owner>/`, receives `{{root}}` (here
     <<the character set and viewport of a page>>
     <title>Owner {{owner}} · {{archive_name}}</title>
     <link rel="stylesheet" href="{{root}}style.css">
+    <<copying identifiers on a click>>
     </head>
     <body>
     <nav><a href="{{root}}">{{archive_name}}</a></nav>
     <main class="paper-page owner-page">
       <h1>Owner</h1>
-      <p class="paper-meta"><code>{{owner}}</code></p>
+      <p class="paper-meta"><code class="copy">{{owner}}</code></p>
       <p class="small">An owner is the keyed identity that signs the versions of its lines
       (section 6 of the specification); its name identifies no one. What it signs is checked
       against its key log, summarised here as this archive holds it.</p>
@@ -561,3 +584,6 @@ string of hexadecimal digits, and may be broken anywhere.
     .cite { background: var(--os-surface); border-radius: 4px; padding: 0.7rem 1rem; font-size: 0.92rem; }
     code { font-family: var(--os-mono); font-size: 0.75em; word-break: break-all;
            font-variant-ligatures: none; }
+    code.copy { cursor: copy; border-bottom: 1px dotted var(--os-faint); }
+    code.copy:hover { border-bottom-color: var(--os-ink); }
+    code.copy.copied::after { content: " copied"; font-family: var(--os-sans); color: var(--os-ok); }

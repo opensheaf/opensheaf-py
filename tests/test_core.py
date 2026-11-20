@@ -1049,7 +1049,7 @@ def test_landing_page_of_a_line(tmp_path):
     _, nm, owner = obj_id.split(":")
     d = P.obj_dir(obj_id)
     page = (root / "paper" / "p" / "index.html").read_text()
-    assert f"<code>{obj_id}</code>" in page and f"sheaf:{nm[:16]}:{owner[:16]}" in page
+    assert f"<code class=\"copy\">{obj_id}</code>" in page and f"sheaf:{nm[:16]}:{owner[:16]}" in page
     assert f'href="../../owner/{owner}/"' in page
     assert "Version 2" in page and "Version 1" in page and "Lemma 2 is wrong as stated." in page
     assert f"{obj_id}/v2?sha512={P.digest(d / 'v3' / 'inventory.json')}" in page

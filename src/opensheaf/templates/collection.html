@@ -8,6 +8,16 @@
 <link rel="stylesheet" href="{{root}}style.css">
 <script>window.MathJax = {tex: {inlineMath: [['$', '$']], processEscapes: true}};</script>
 <script defer src="https://cdn.jsdelivr.net/npm/mathjax@3.2.2/es5/tex-mml-chtml.js"></script>
+<script>
+document.addEventListener('click', function (e) {
+  var el = e.target.closest && e.target.closest('code.copy');
+  if (!el || !navigator.clipboard) return;
+  navigator.clipboard.writeText(el.getAttribute('data-copy') || el.textContent).then(function () {
+    el.classList.add('copied');
+    setTimeout(function () { el.classList.remove('copied'); }, 1200);
+  });
+});
+</script>
 </head>
 <body>
 <nav><a href="{{root}}">{{archive_name}}</a></nav>
@@ -18,7 +28,7 @@
   {{withdrawn}}
   {{contested}}
   <dl class="identifiers">
-    <dt>Line</dt><dd><code>{{sheaf_uri}}</code> <span class="small">(short: <code>{{sheaf_short}}</code>)</span></dd>
+    <dt>Line</dt><dd><code class="copy">{{sheaf_uri}}</code> <span class="small">(short: <code class="copy">{{sheaf_short}}</code>)</span></dd>
     <dt>Owner</dt><dd>{{owner}}</dd>
   </dl>
   <section class="abstract">
@@ -41,7 +51,7 @@
     <p class="cite">{{cite}}</p>
     <p class="small">Licence: {{licence}}</p>
     <p class="small">Pin in the collection (SHA-512 of the inventory it fixes):
-    <a href="{{pin_url}}"><code>{{pin}}</code></a></p>
+    <code class="copy">{{pin}}</code> (<a href="{{pin_url}}">the inventory</a>)</p>
   </section>
 </main>
 <footer>
