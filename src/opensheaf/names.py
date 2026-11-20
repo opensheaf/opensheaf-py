@@ -195,14 +195,40 @@ def write_genesis(path, data):
         f.write(data)
 
 
+MAX_INTEGER = 2 ** 53 - 1
+
+
+def _exact_integer(text):
+    n = int(text)
+    if abs(n) > MAX_INTEGER:
+        raise ValueError(f"the number {text} is beyond 2^53 - 1 (section 2)")
+    return n
+
+
+def _not_an_integer(text):
+    raise ValueError(f"the number {text} is not an integer written without a fraction or an exponent "
+                     "(section 2)")
+
+
+def loads_exact(text):
+    """The JSON value of TEXT (str or UTF-8 bytes), every number of which is an exact integer of
+    absolute value at most 2^53 - 1 (section 2); ValueError otherwise."""
+    if isinstance(text, bytes):
+        text = text.decode("utf-8")
+    return json.loads(text, parse_int=_exact_integer, parse_float=_not_an_integer,
+                      parse_constant=_not_an_integer)
+
+
 def read_genesis(data):
     """The fields of a genesis record, from its bytes (ValueError if it is not one)."""
     if data.startswith(b"\xef\xbb\xbf"):
         raise ValueError("a genesis record has no byte order mark")
     try:
-        rec = json.loads(data.decode("utf-8"))
+        text = data.decode("utf-8")
+        json.loads(text)
     except (UnicodeDecodeError, ValueError) as e:
         raise ValueError(f"a genesis record is JSON in UTF-8 ({e})") from None
+    rec = loads_exact(text)
     if not isinstance(rec, dict) or rec.get("format") != GENESIS_FORMAT:
         raise ValueError(f"not a genesis record of format {GENESIS_FORMAT}")
     if rec.get("kind") not in KINDS:

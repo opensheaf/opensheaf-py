@@ -232,7 +232,7 @@ class Version:
 
     @property
     def keys(self):
-        return _json_or_none(self.files.get(KEYS))
+        return _exact_or_none(self.files.get(KEYS))
 
     @property
     def fork_record(self):
@@ -252,6 +252,13 @@ class Version:
 def _json_or_none(data):
     try:
         return json.loads(data) if data is not None else None
+    except ValueError:
+        return None
+
+
+def _exact_or_none(data):
+    try:
+        return names.loads_exact(data) if data is not None else None
     except ValueError:
         return None
 
@@ -287,7 +294,7 @@ class Carried:
 
     @property
     def keys(self):
-        return _json_or_none(self.files.get("keys.json"))
+        return _exact_or_none(self.files.get("keys.json"))
 
     @property
     def witnesses(self):
@@ -414,7 +421,8 @@ class KeyLog:
             if v.fork_record:
                 problems += self._fork_record_problems(v, side)
             elif v.keys is None:
-                problems.append("no keys.json, and not a fork record")
+                problems.append("keys.json is not JSON with exact integers only (section 2)" if KEYS in v.files
+                                else "no keys.json, and not a fork record")
             else:
                 problems += key_rules(v.keys, [x.keys for x in side], self.owner)
                 if not problems:

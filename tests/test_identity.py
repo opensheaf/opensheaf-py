@@ -136,6 +136,24 @@ def test_genesis_records_are_checked(tmp_path):
         names.write_genesis(tmp_path / "genesis.json", g)
 
 
+def test_numbers_are_exact_integers():
+    assert names.loads_exact(b'{"a": [1, -2, 9007199254740991]}') == {"a": [1, -2, 9007199254740991]}
+    for bad in ('{"a": 1.0}', '{"a": 1e0}', '{"a": 9007199254740992}', '{"a": NaN}', '{"a": -Infinity}'):
+        with pytest.raises(ValueError, match="number|section 2"):
+            names.loads_exact(bad)
+    ok = names.genesis_record("owner", keys=[K1.did], threshold=1, next_digests=[R[1].digest],
+                              next_threshold=1, extensions={"x": {"n": 3}})
+    assert names.read_genesis(ok)["extensions"] == {"x": {"n": 3}}
+    for number in (b"3.0", b"3e0", b"9007199254740993"):
+        with pytest.raises(ValueError, match="section 2"):
+            names.read_genesis(ok.replace(b'"n": 3', b'"n": ' + number))
+    log = authors_log(2)
+    v2 = log.versions[1]
+    v2.files["keys.json"] = v2.files["keys.json"].replace(b'"threshold": 1', b'"threshold": 1.0')
+    log = owners.KeyLog(log.genesis, log.versions)
+    assert any("exact integers" in e for e in log.check()[0]) and not log.versions[1].is_version
+
+
 def test_did_keys_of_appendix_c():
     expected = {
         K1: ("did:key:z6MksKLDefPeXwhL6SJCLqpW1dGZcvBjfsv9mxGCFpMkMuVW", "w7htq42yt7tllefi"),

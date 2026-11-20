@@ -231,6 +231,31 @@ no byte order mark; and a record, once written, is never replaced.
         with pytest.raises(FileExistsError):
             names.write_genesis(tmp_path / "genesis.json", g)
 
+Numbers are exact integers (section 2): in a genesis record and in
+`keys.json` every number, in the data of extensions included, is an
+integer written without a fraction or an exponent, of absolute value at
+most 2^53 - 1. A record with `1.0`, `1e0` or `2^53` anywhere is malformed,
+and so is a key-log version whose `keys.json` has one: it is not a version
+of the key log.
+
+    # in identity tests: names:
+    def test_numbers_are_exact_integers():
+        assert names.loads_exact(b'{"a": [1, -2, 9007199254740991]}') == {"a": [1, -2, 9007199254740991]}
+        for bad in ('{"a": 1.0}', '{"a": 1e0}', '{"a": 9007199254740992}', '{"a": NaN}', '{"a": -Infinity}'):
+            with pytest.raises(ValueError, match="number|section 2"):
+                names.loads_exact(bad)
+        ok = names.genesis_record("owner", keys=[K1.did], threshold=1, next_digests=[R[1].digest],
+                                  next_threshold=1, extensions={"x": {"n": 3}})
+        assert names.read_genesis(ok)["extensions"] == {"x": {"n": 3}}
+        for number in (b"3.0", b"3e0", b"9007199254740993"):
+            with pytest.raises(ValueError, match="section 2"):
+                names.read_genesis(ok.replace(b'"n": 3', b'"n": ' + number))
+        log = authors_log(2)
+        v2 = log.versions[1]
+        v2.files["keys.json"] = v2.files["keys.json"].replace(b'"threshold": 1', b'"threshold": 1.0')
+        log = owners.KeyLog(log.genesis, log.versions)
+        assert any("exact integers" in e for e in log.check()[0]) and not log.versions[1].is_version
+
 Keys are `did:key` URIs, base58btc of the multicodec prefix and the public
 key; their digests begin the names of their signature files. The URIs and
 the 16-character names are those of the appendix. A URI of another key

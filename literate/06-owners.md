@@ -349,7 +349,8 @@ the bytes of its inventory file and of the checksum file, and the files of
 its witness folder (section 7.2), by name: its signature files. Everything
 else is derived from these bytes, so that what is checked is what is
 stored: the digest of the inventory, which pins the version; `keys.json`,
-parsed; and whether it is a fork record, a version without `keys.json`
+parsed with exact integers only (section 2, as the genesis record), a
+`keys.json` that breaks the rule reading as none; and whether it is a fork record, a version without `keys.json`
 holding `forked/`. The checks set `is_version` to false on a version that
 section 6 does not admit as a version of the key log.
 
@@ -370,7 +371,7 @@ section 6 does not admit as a version of the key log.
 
         @property
         def keys(self):
-            return _json_or_none(self.files.get(KEYS))
+            return _exact_or_none(self.files.get(KEYS))
 
         @property
         def fork_record(self):
@@ -390,6 +391,13 @@ section 6 does not admit as a version of the key log.
     def _json_or_none(data):
         try:
             return json.loads(data) if data is not None else None
+        except ValueError:
+            return None
+
+
+    def _exact_or_none(data):
+        try:
+            return names.loads_exact(data) if data is not None else None
         except ValueError:
             return None
 
@@ -433,7 +441,7 @@ judged in the same way.
 
         @property
         def keys(self):
-            return _json_or_none(self.files.get("keys.json"))
+            return _exact_or_none(self.files.get("keys.json"))
 
         @property
         def witnesses(self):
@@ -624,7 +632,8 @@ pair of lists, errors and warnings, kept until the key log changes.
             if v.fork_record:
                 problems += self._fork_record_problems(v, side)
             elif v.keys is None:
-                problems.append("no keys.json, and not a fork record")
+                problems.append("keys.json is not JSON with exact integers only (section 2)" if KEYS in v.files
+                                else "no keys.json, and not a fork record")
             else:
                 problems += key_rules(v.keys, [x.keys for x in side], self.owner)
                 if not problems:
