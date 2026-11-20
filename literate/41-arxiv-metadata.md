@@ -2,7 +2,7 @@ Importing from arXiv: the metadata
 ==================================
 
 The description of an OpenSheaf document version is a `datacite.json`
-(section 8 of the specification). For a paper imported from arXiv it is
+(section 4.4 of the specification). For a paper imported from arXiv it is
 made from arXiv's OAI record and from the abstract page of each version,
 both downloaded as described in [the previous chapter](40-arxiv.md). This
 chapter reads the record and converts its fields: the names of the authors,
@@ -153,10 +153,10 @@ itself.
 
     # in arXiv: titles and abstracts as plain text:
     def clean_text(s, macros=None):
-        """Plain text with mathematics in $...$ (section 8): TeX accents and quotes
+        """Plain text with mathematics in $...$ (section 4.4): TeX accents and quotes
         outside mathematics become Unicode; inside mathematics, the authors'
         macros without arguments are replaced by their definitions when known."""
-        # mathematics is written between single dollar signs only (section 8)
+        # mathematics is written between single dollar signs only (section 4.4)
         s = re.sub(r"\$\$(.+?)\$\$", r"$\1$", s, flags=re.S)
         s = re.sub(r"\\\[(.+?)\\\]", lambda m: "$" + m.group(1).strip() + "$", s, flags=re.S)
         s = re.sub(r"\\\((.+?)\\\)", lambda m: "$" + m.group(1).strip() + "$", s, flags=re.S)
@@ -179,7 +179,7 @@ itself.
             out.append(("$" + part + "$") if is_math else part)
         return "".join(out)
 
-A description is plain text (section 8): emphasis and other changes of
+A description is plain text (section 4.4): emphasis and other changes of
 font cannot be kept, so they give their argument. Both forms of LaTeX are
 recognised, the commands with an argument (`\emph{x}`, `\textit{x}`,
 `\textbf{x}`, ..., and those of TeXmacs' LaTeX export, `\tmtextit{x}`,
@@ -314,7 +314,7 @@ Licences
 
 Every arXiv version carries a licence, chosen by the authors when they
 submit it, and named by a URI: one of arXiv's own licences or a Creative
-Commons licence. Section 8 of the specification records a licence with an
+Commons licence. Section 4.4 of the specification records a licence with an
 SPDX identifier by that identifier, in lower case, and the URL; a licence
 without one, such as arXiv's, by its name and the URI arXiv uses for it,
 so that all archives record the same licence the same way. The table below

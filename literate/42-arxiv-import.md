@@ -1,11 +1,13 @@
-Importing from arXiv: the object versions
+Importing from arXiv: the signed versions
 =========================================
 
 This chapter describes `osheaf arxiv import`, which turns the downloads of
-[the first arXiv chapter](40-arxiv.md) into documents of the archive, using
-the metadata of [the second](41-arxiv-metadata.md). Each arXiv version
-becomes one object version, deposited as the chapter on deposits
-describes; this chapter is about what goes into it.
+[the first arXiv chapter](40-arxiv.md) into lines of the archive, using
+the metadata of [the second](41-arxiv-metadata.md). Each paper becomes one
+line of the archive's owner, sealed at its first import as a deposit with
+`--new` seals one (section 10.2), and each arXiv version one object version
+of that line, added and signed as the chapter on deposits describes
+(sections 7.1 and 7.5); this chapter is about what goes into it.
 
 The rules
 ---------
@@ -15,42 +17,57 @@ The specification fixes the main choices.
 - **Byte for byte.** The PDF and the sources are those served by arXiv,
   unchanged; nothing is typeset. The files received from arXiv, before
   unpacking, are named in `object.json` under `external`, with role
-  `source`, with their digests (section 9), so that anyone can check the
+  `source`, with their digests (section 4.3), so that anyone can check the
   import against arXiv.
-- **Numbering.** Document versions are numbered by the archive, without
-  gaps (section 7.3): if arXiv cannot provide version 2 of a paper, its
-  versions 1, 3 and 4 become document versions 1, 2 and 3, and arXiv's
+- **Numbering.** Document versions are numbered by the owner of the line,
+  without gaps (section 4.2): if arXiv cannot provide version 2 of a paper,
+  its versions 1, 3 and 4 become document versions 1, 2 and 3, and arXiv's
   label `v3` is recorded in `external`.
 - **Missing sources.** A version for which arXiv has only a PDF is a
   document version without sources, with `sourcesMissing` in `object.json`
-  saying why, and the PDF as its only rendition (section 9). Its sources
-  may be added later, by completion (section 7.3).
-- **Identity.** The object identifier is chosen by the depositor
-  (section 6.3); the tool only proposes one.
+  saying why, and the PDF as its only rendition (section 4.3). Its sources
+  may be added later, by completion (section 4.2).
+- **Identity.** The line is named by the genesis record sealed at the first
+  import (section 5) and owned by the archive's owner, who signs every
+  version (section 7.1); each version after the first records the digest of
+  the inventory before it, `previous` (section 4.3). Its label is chosen by
+  the depositor (section 3.1); the tool only proposes one.
 - **Relations.** Each version `IsIdenticalTo` its arXiv version and
   `IsVersionOf` the DOI that arXiv registers for the paper, `10.48550/arXiv.ID`
-  (section 8.1).
+  (section 4.4).
 
 Papers already in the archive
 -----------------------------
 
-A paper is in the archive when some version of some document is related to
-it, by its arXiv identifier or by its arXiv DOI, with or without a version
-number. This finds the papers imported before, and also those deposited by
-hand with a link to arXiv, so that a paper is never imported twice under
-two identifiers. The answer maps arXiv identifiers to objects.
+A paper is in the archive when some version of a document line of the
+archive's owners is related to it, by its arXiv identifier or by its arXiv
+DOI, with or without a version number, or was imported from it (an
+`external` record of arXiv, role `source`). This finds the papers imported
+before, and also those deposited by hand with a link to arXiv, so that a
+paper is never imported twice as two lines. Copies of other owners' lines
+(mirrors, accepted copies) are not the archive's own, and do not count;
+nor do drafts. The answer maps arXiv identifiers to the identifiers of
+lines. A paper whose label in `identifiers.json` is already the label of a
+line is in the archive too, and the command checks that the two agree
+(below).
 
     # in arXiv: papers already in the archive:
     def already_archived():
-        """arXiv identifier -> object, from the arXiv identifiers and arXiv DOIs
-        (10.48550/arXiv.ID) related to any version of a document."""
-        out = {}
+        """arXiv identifier -> line, from the arXiv identifiers and arXiv DOIs related to any
+        version of a document of the archive's owners, and its arXiv records (external)."""
+        out, mine = {}, set(P.archive_owners())
         for obj_id, d, inv in P.objects():
+            if not obj_id or inv is None or obj_id.startswith("sheaf:draft:") or obj_id.split(":")[2] not in mine:
+                continue
             for ver in inv["versions"]:
-                dc = P.read_logical(d, inv, "datacite.json", ver)
-                if not dc:
-                    continue
-                for r in json.loads(dc.read_text()).get("relatedIdentifiers", []):
+                obj = P.read_json(d, inv, P.OBJ, ver) or {}
+                if obj.get("kind") != "document":
+                    break
+                for e in obj.get("external", []):
+                    if e.get("service") == "arXiv" and "/abs/" in e.get("record", ""):
+                        out[re.sub(r"v\d+$", "", e["record"].rsplit("/abs/", 1)[1])] = obj_id
+                dc = P.read_json(d, inv, "datacite.json", ver) or {}
+                for r in dc.get("relatedIdentifiers", []):
                     v = r["relatedIdentifier"]
                     if r["relatedIdentifierType"] == "arXiv":
                         out[re.sub(r"v\d+$", "", v.split(":", 1)[1])] = obj_id
@@ -64,23 +81,24 @@ versions already present are those named, with their arXiv label, by the
 
     # in arXiv: versions already in an object:
     def archived_versions(obj_id):
-        """The arXiv versions (e.g. 2303.18112v4) already in object OBJ_ID."""
-        d = P.OCFL / obj_id
+        """The arXiv versions (e.g. 2303.18112v4) already in the line OBJ_ID."""
+        d = P.obj_dir(obj_id)
         inv = P.load_inventory(d)
         out = set()
         for ver, info in inv["versions"].items():
             obj = P.read_json(d, inv, P.OBJ, ver)
             for e in obj.get("external", []):
-                if e.get("service") == "arXiv":
+                if e.get("service") == "arXiv" and "/abs/" in e.get("record", ""):
                     out.add(e["record"].rsplit("/abs/", 1)[1])
         return out
 
-For a new paper without an identifier in `identifiers.json`, the import
-stops and proposes one, made of the first words of the title, at most 56
-characters, in lower case ASCII, with a number added if it is taken. The
-specification advises against identifiers derived mechanically from titles,
-and the depositor will usually choose something shorter; the proposal is
-there to save typing.
+For a new paper without a label in `identifiers.json`, the import stops
+and proposes one, made of the first words of the title, at most 56
+characters, in lower case ASCII, with a number added if it is taken: a
+label of section 3.1, at most 64 characters of lower case letters, digits
+and single hyphens. The specification advises against labels derived from
+titles (section 3.1), and the depositor will usually choose something
+shorter; the proposal is there to save typing.
 
     # in arXiv: proposing an identifier from the title:
     def slug(title, taken):
@@ -267,17 +285,18 @@ such as Zenodo report).
 Importing a paper
 -----------------
 
-`import_paper` imports the versions of one paper. It finds the object,
-then goes through arXiv's versions in order, and for each one gathers the
-files, writes `datacite.json` and `object.json`, and adds the object
-version. What it did is appended to a report, one entry per version, and
-summarised in one printed line per paper.
+`import_paper` imports the versions of one paper. It finds the line, or
+the label of a new one, then goes through arXiv's versions in order, and
+for each one gathers the files, writes `datacite.json` and `object.json`,
+and adds the object version, signed; the first seals the line. What it did
+is appended to a report, one entry per version, and summarised in one
+printed line per paper.
 
     # in arXiv: importing a paper:
     def import_paper(folder, taken, report, dry, texmacs=None, licences=None, existing=None, only=None, ids=None,
                      agreement=None):
         """Import the arXiv versions of a paper; with EXISTING (an object id), only
-        the versions not yet in that object are added, as new object versions."""
+        the versions not yet in that line are added, as new object versions."""
         texmacs = texmacs or {}
         licences = licences or {}
         rec = record(folder)
@@ -285,7 +304,8 @@ summarised in one printed line per paper.
         <<arXiv: the object of the paper, new or existing>>
         # the record gives only the current licence; each version's own licence
         # comes from its abstract page (version-licences.json, written by osheaf arxiv fetch)
-        info = {"arxiv": aid, "id": obj_id, "versions": [], "license": rights_of(rec["license"])["rights"]}
+        info = {"arxiv": aid, "label": label, "id": obj_id, "versions": [],
+                "license": rights_of(rec["license"])["rights"]}
         first_date = rec["versions"][0]["date"][:10]
         <<arXiv: the last document version deposited>>
         for n, v in enumerate(rec["versions"], 1):
@@ -299,31 +319,38 @@ summarised in one printed line per paper.
             <<arXiv: the object.json of a version>>
             <<arXiv: commit an imported version>>
             shutil.rmtree(tmp, ignore_errors=True)
+        info["id"] = obj_id
         report.append(info)
         kinds = ",".join(x.get("kind", "?") for x in info["versions"])
-        print(f"{aid:>18}  {obj_id}  [{kinds}]", flush=True)
+        print(f"{aid:>18}  {label}  {obj_id or '(a new line)'}  [{kinds}]", flush=True)
 
-### The object
+### The line
 
-A paper already archived (`existing`) continues its object, skipping the
-arXiv versions it holds. A new paper needs an identifier from the
-depositor, not already taken; `taken` collects the identifiers of the
-archive and of the papers imported in the same run.
+A paper already archived (`existing`) continues its line, skipping the
+arXiv versions it holds. A new paper needs a label from the depositor, of
+the form of section 3.1 and not already taken; `taken` collects the labels
+of the archive and of the papers imported in the same run. Its line is not
+sealed yet: the first version added seals it, so that a dry run, or a paper
+none of whose versions can be imported, seals nothing.
 
     # in arXiv: the object of the paper, new or existing:
+    genesis = None
     if existing:
         obj_id, present = existing, archived_versions(existing)
+        label = P.label_of(obj_id) or obj_id.split(":")[1]
     else:
         if aid not in (ids or {}):
-            sys.exit(f"{aid}: no identifier in identifiers.json (proposal: \"{aid}\": \"{slug(rec['title'], taken)}\");"
-                     " identifiers are chosen by the depositor (section 6.3)")
-        obj_id, present = ids[aid], set()
-        if obj_id in taken:
-            sys.exit(f"{aid}: identifier {obj_id} is taken")
-        taken.add(obj_id)
+            sys.exit(f"{aid}: no label in identifiers.json (proposal: \"{aid}\": \"{slug(rec['title'], taken)}\");"
+                     " labels are chosen by the depositor (section 3.1)")
+        obj_id, present, label = None, set(), ids[aid]
+        if not P.LABEL_RE.match(label) or len(label) > 64:
+            sys.exit(f"{aid}: {label} is not a label: ^[a-z0-9]+(-[a-z0-9]+)*$, at most 64 characters (section 3.1)")
+        if label in taken:
+            sys.exit(f"{aid}: label {label} is taken")
+        taken.add(label)
 
 Document versions are numbered in the order in which they are deposited.
-For a new object they start at 1; for an existing one, after the highest
+For a new line they start at 1; for an existing one, after the highest
 document version it has, which may come from versions deposited by hand
 between arXiv's.
 
@@ -332,7 +359,7 @@ between arXiv's.
     # match arXiv's numbers (missing arXiv versions, versions deposited by hand)
     docn = 0
     if existing:
-        d = P.OCFL / existing
+        d = P.obj_dir(existing)
         dinv = P.load_inventory(d)
         docn = max(P.doc_version_of(d, dinv, v) for v in dinv["versions"])
 
@@ -466,7 +493,7 @@ has one. The macros that remain unknown go into the report.
     if left:
         vinfo["notes"].append("macros in the abstract not defined in the source: " + ", ".join(left))
 
-`datacite.json` follows section 8. The resource type is `Preprint`: an
+`datacite.json` follows section 4.4. The resource type is `Preprint`: an
 author's version of a work, wherever it was published. The dates are those
 of arXiv: `Issued`, the first public appearance of the paper, is the date
 of its first arXiv version, and `Available`, when this version became
@@ -486,7 +513,7 @@ chapter on Zenodo gives it one).
         "publicationYear": int(first_date[:4]),
         "types": {"resourceTypeGeneral": "Preprint"},
         "version": str(docn),
-        "url": P.landing_url(obj_id),
+        "url": P.landing_url(label),
         "dates": [{"date": first_date, "dateType": "Issued"},
                   {"date": v["date"][:10], "dateType": "Available"}],
         "language": "en",
@@ -500,16 +527,20 @@ chapter on Zenodo gives it one).
         datacite["descriptions"].append({"description": f"Journal reference: {rec['journal']}",
                                          "descriptionType": "SeriesInformation"})
 
-`object.json` names the main source, or explains why there is none: arXiv
-either served a PDF as the e-print, or served no e-print at all. arXiv's
-comments on the version become its change note (section 9 compares the two
-explicitly). The `external` entry records where the version comes from,
-with arXiv's label and the files received.
+`object.json` names the line, by its name and owner (the name is filled in
+when the first version seals it), and the main source, or explains why
+there is none: arXiv either served a PDF as the e-print, or served no
+e-print at all. arXiv's comments on the version become its change note
+(section 4.3 compares the two explicitly). The `external` entry records
+where the version comes from, with arXiv's label and the files received.
+`previous`, the digest of the inventory before, is set when the version is
+added.
 
     # in arXiv: the object.json of a version:
+    owner = obj_id.split(":")[2] if obj_id else P.ARCHIVE["owner"]
     obj = {
         "format": P.OBJ_FORMAT, "specification": P.SPEC, "kind": "document",
-        "archiveId": P.ARCHIVE["archiveId"], "objectId": obj_id, "documentVersion": docn,
+        "name": obj_id.split(":")[1] if obj_id else None, "owner": owner, "documentVersion": docn,
     }
     if main:
         obj.update(mainSource=main, sourceFormat=fmt)
@@ -536,13 +567,20 @@ arXiv alone) does not give it. With `--agreement` the importer records on
 what grounds: the method (for instance "deposited by an author", "the
 authors gave permission by e-mail") and, with `--agreed-by`, who agreed
 (by default, all the authors). It becomes the `agreement` of each imported
-version (section 9), as for a deposit.
+version (section 4.3), as for a deposit.
 
-Unless the run is a dry run, the version is committed. The new
-`object.json` first carries forward what later object versions must keep
-(the history and the notices, as the chapter on deposits explains),
-together with their files. The deposit message says where the version comes
-from, and how a TeXmacs original was used. After the last version, the
+Unless the run is a dry run, the version is committed. The first version
+of a new paper seals its line: a new genesis record of a document of the
+archive's owner, whose name is not taken in this archive (`P.seal`, in the
+chapter on [deposits](13-deposit.md)); the line gets its label at once.
+Later versions carry the genesis record. The new `object.json` first carries
+forward what later object versions must keep (the history and the notices,
+as the chapter on deposits explains), together with their files. The
+deposit message says where the version comes from, and how a TeXmacs
+original was used. `add_version` signs the version with the owner's
+current keys on this device, after checking that the versions it extends
+are signed and not contested (section 7.5), and the discovery document is
+written at once, since it keeps the label. After the last version, the
 website gets the HTML version of the document if its head has a TeXmacs
 source, as for the archive's own TeXmacs deposits, and loses any HTML
 version left from before otherwise: an HTML version is made only from a
@@ -550,15 +588,19 @@ TeXmacs source.
 
     # in arXiv: commit an imported version:
     if not dry:
-        d = P.OCFL / obj_id
+        if obj_id is None:
+            genesis, obj_id = P.seal("document", owner)
+            obj["name"] = obj_id.split(":")[1]
+            P.LABELS[label] = obj_id
+        d = P.obj_dir(obj_id)
         inv0 = P.load_inventory(d)
+        if inv0 is not None:
+            genesis = P.read_logical(d, inv0, P.GENESIS).read_bytes()
+        content[P.GENESIS] = genesis
         P.carry_forward(P.read_json(d, inv0, P.OBJ) if inv0 else None, obj, inv0, P.next_object_version(inv0))
         for lp, f in P.carried_files(obj_id, inv0).items():
             content.setdefault(lp, f)
-        P.write_json(tmp / "datacite.json", datacite)
-        P.write_json(tmp / P.OBJ, obj)
-        content["datacite.json"] = tmp / "datacite.json"
-        content[P.OBJ] = tmp / P.OBJ
+        content["datacite.json"] = P.json_bytes(datacite)
         msg = f"Imported from arXiv: {aid}{vid} of {v['date'][:10]}"
         if tm_spec and alongside:
             msg += ("; with the TeXmacs original, from the authors' files, in texmacs/ (arXiv's"
@@ -568,15 +610,16 @@ TeXmacs source.
                     " has as source (the PDF is arXiv's)")
         if tm_spec and tm_spec.get("adjusted"):
             msg += "; the TeXmacs file was adjusted to match the submission: " + tm_spec["adjusted"]
-        inv = P.add_version(obj_id, content, msg)
+        inv = P.add_version(obj_id, content, obj, msg)
+        P.write_discovery()
         vinfo["object_version"] = inv["head"]
         if tm_spec and n == len(rec["versions"]):
             # the HTML version of the head, as for the archive's TeXmacs deposits
-            P.typeset(Path(tm_spec["tm"]), obj_id, tmp / "check.pdf", P.SITE / obj_id)
+            P.typeset(Path(tm_spec["tm"]), label, tmp / "check.pdf", P.SITE / label)
             vinfo["html"] = True
-        elif n == len(rec["versions"]) and (P.SITE / obj_id).exists():
+        elif n == len(rec["versions"]) and (P.SITE / label).exists():
             # the head has no TeXmacs source: no HTML version of it
-            shutil.rmtree(P.SITE / obj_id)
+            shutil.rmtree(P.SITE / label)
 
 The command
 -----------
@@ -587,14 +630,29 @@ are skipped, or, with `--update`, get their new versions. Papers are
 imported in the order of their first submission to arXiv, so that the
 deposits of the archive follow the history of the papers.
 
-`--rebuild` first deletes the objects of the named papers, and their HTML:
-useful while trying out an import, and only then. Once an archive is
-published, its objects are permanent, and a correction is a new version.
+A paper is found in the archive by its arXiv identifier (above), or by its
+label: a label of `identifiers.json` that is already the label of a line
+names that line, which must then be the paper's (a line related to the same
+arXiv paper); otherwise the import stops, rather than add a paper's versions
+to another work, or seal a second line under a label in use.
+
+`--rebuild` first deletes the lines of the named papers, their labels and
+their HTML: useful while trying out an import, and only then. Section 13.2
+counts every removal of a sealed object as a takedown, which leaves a
+tombstone; a rebuild leaves none, and is meant only for an archive not yet
+published, whose lines nobody can have pinned. Once an archive is
+published, its lines are permanent, and a correction is a new version. A
+rebuilt paper is sealed again, as a new line with a new name.
+
+The labels of the lines sealed are written into the discovery document as
+each version is added, so that an import interrupted half-way leaves an
+archive that knows them, and is completed by running it again with
+`--update`.
 
 The report, `import-report.json` (with `-dry` and `-partial` in its name
 for dry runs and runs on some papers), is written into the downloads
-folder: for each version, its kind of source, number of files, main
-source, notes and object version.
+folder: for each paper, its label and line, and for each version, its kind
+of source, number of files, main source, notes and object version.
 
     # in arXiv: the import command:
     def main(argv=None):
@@ -609,10 +667,10 @@ source, notes and object version.
                         " always appended in arXiv's order; deposit other versions in between by hand)")
         ap.add_argument("--update", action="store_true",
                         help="for papers already archived, add their new arXiv versions")
-        ap.add_argument("--identifiers", help="JSON: arXiv id -> object identifier, chosen by the depositor"
+        ap.add_argument("--identifiers", help="JSON: arXiv id -> label of its line, chosen by the depositor"
                         " (default: DOWNLOADS/identifiers.json)")
         ap.add_argument("--rebuild", action="store_true",
-                        help="delete the objects of the given papers first (only before publication)")
+                        help="delete the lines of the given papers first (only before publication: no tombstone)")
         ap.add_argument("--agreement", metavar="METHOD",
                         help="record in each imported version on what grounds it is deposited (object.json"
                              " agreement), e.g. 'deposited by an author'")
@@ -636,10 +694,23 @@ source, notes and object version.
             for i in a.ids:
                 obj = done.pop(i, None)
                 if obj:
-                    shutil.rmtree(P.OCFL / obj)
-                    shutil.rmtree(P.SITE / obj, ignore_errors=True)
+                    label = P.label_of(obj)
+                    shutil.rmtree(P.obj_dir(obj))
+                    if label:
+                        del P.LABELS[label]
+                        shutil.rmtree(P.SITE / label, ignore_errors=True)
                     print(f"{i:>18}  removed {obj}")
-        taken = {o[0] for o in P.objects()}
+            P.write_discovery()
+        for aid, label in sorted(ids.items()):
+            if label in P.LABELS and done.get(aid) not in (None, P.LABELS[label]):
+                sys.exit(f"{aid}: identifiers.json gives the label {label}, but the paper is in the archive as "
+                         f"{P.label_of(done[aid]) or done[aid]}")
+            if label in P.LABELS and aid not in done:
+                if a.ids and aid not in a.ids:
+                    continue
+                sys.exit(f"{aid}: the label {label} is that of a line not related to this arXiv paper; "
+                         "choose another label in identifiers.json")
+        taken = set(P.LABELS)
         folders = sorted((dl / "papers").iterdir()) if not a.ids else [dl / "papers" / i.replace("/", "_") for i in a.ids]
         recs = []
         for f in folders:
@@ -649,7 +720,8 @@ source, notes and object version.
                     if a.update:
                         recs.append((r["versions"][0]["date"], f, done[r["id"]]))
                     else:
-                        print(f"{r['id']:>18}  skipped: already archived as {done[r['id']]} (--update adds new versions)")
+                        print(f"{r['id']:>18}  skipped: already archived as "
+                              f"{P.label_of(done[r['id']]) or done[r['id']]} (--update adds new versions)")
                     continue
                 recs.append((r["versions"][0]["date"], f, None))
         report = []

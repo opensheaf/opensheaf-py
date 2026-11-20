@@ -5,7 +5,7 @@ After deposits and a new version of the [main collection](15-main-collection.md)
 `osheaf index` writes what the outside world reads: the *discovery
 document* `opensheaf.json`, the entry point of the archive for programs,
 and an index for people. The index is made in one of two ways. An archive
-with a website (the website profile, appendix C) has it written by the
+with a website (the website profile, appendix A.3) has it written by the
 [website](30-website.md) module, with a landing page per document. An
 archive kept inside a TeXmacs website (as the first OpenSheaf archive is)
 instead has an index written as a TeXmacs document, from a template, and
@@ -15,40 +15,226 @@ TeXmacs index.
 The discovery document
 ----------------------
 
-The discovery document (section 6.1) says what the archive is and where
-its objects are: its identifier, name and contact, the storage root and
-its layout, the main collection, the profiles, and a list of every object
-of the storage root with its kind, head version, the digest of its head
-inventory and its status. The list is a map, not a witness: a reader can
-check every entry against the storage root, and
-[verification](17-verify.md) does. The digest is read from the sidecar
-file, as the specification says ("as written in its checksum file").
+The discovery document (section 3.1) says what the archive is and where
+its objects are: its name and contact, the storage root and its layout,
+the main catalogue, the profiles, the owners it hosts, and a list of every
+object of the storage root but drafts, with its kind, its line (`name` and
+`owner`), its head version, the digest of its head inventory, its status
+and, if the archive gives it one, its label. The list is a map, not a
+witness: a reader can check every entry against the storage root, and
+[verification](17-verify.md) does. The digest is read from the checksum
+file, as the specification says ("as its checksum file states it").
+
+The status is the line's, read from its latest signed version, whatever
+document version that holds (section 13.1); a copy without a signed version
+gives that of its head. A key log is always `active`. Drafts
+([chapter 24](24-drafts.md)) are listed apart, in `drafts`, with their kind
+and head, as unfinished work on which nothing may rely (section 10.1).
 
 The discovery document is rewritten whole every time, from the storage
-root, so that it cannot drift. A [mirror](21-mirrors.md) of another
-archive's object is listed like the others, with `mirrorOf`, the
-identifier of the archive whose object it copies (sections 6.1 and 10.4),
-recognised as in the [main collection](15-main-collection.md) by the
-archive its head names. The optional parts (`mirrors`, `tombstones`,
-`keys`, `feed`) are not written: an archive that has them adds them by
-other means.
+root, so that it cannot drift, by every command that adds or changes an
+object (section 3.1: "rewritten whenever an object is added or changed").
+Two things in it are not in the storage root, and are carried from the
+document it replaces: the labels, which `LABELS` holds, and the tombstones
+of objects taken down (section 13.3), which `TOMBSTONES` holds, never
+removed but when the line returns ([takedowns](25-takedown.md)). Version
+0.1 had `archiveId`, `mirrorOf` and `mirrors`; version 0.2 names no
+archive, and a mirror is listed like any line (section 11). `indexes`
+declares the three indexes, which are written with the discovery document
+(below); `feed` is not written yet.
+
+`extensions` lists the extensions the objects use (section 2): the names
+of the data of extensions in the key logs, as of their latest version (or
+their genesis record), and in the `object.json` of the heads.
 
     # in write the discovery document of the archive:
+    def line_status(d, inv, head):
+        """The status of the object in D (section 13.1): that of its latest signed version, or
+        else of its head; always active for a key log."""
+        if head.get("kind") == "owner":
+            return "active"
+        signed = latest_signed(d, inv)
+        return (read_json(d, inv, OBJ, signed) if signed else head).get("status", "active")
+
+
     def discovery():
-        objs = []
+        objs, drafts, used = [], [], set()
         for obj_id, d, inv in objects():
-            obj = read_json(d, inv, OBJ)
-            entry = {"id": obj_id, "kind": obj["kind"], "head": inv["head"],
-                     "inventorySha512": (d / "inventory.json.sha512").read_text().split()[0],
-                     "status": obj["status"]}
-            if mirror_of(d, inv):
-                entry["mirrorOf"] = mirror_of(d, inv)
+            if inv is None or obj_id is None:
+                continue
+            head = read_json(d, inv, OBJ) or {}
+            used.update(head.get("extensions") or {})
+            if obj_id.startswith("sheaf:draft:"):
+                drafts.append({"id": obj_id, "kind": head.get("kind"), "head": inv["head"]})
+                continue
+            if head.get("kind") == "owner":
+                try:
+                    used.update(owners.load_key_log(d).extensions() or {})
+                except owners.OwnerError:
+                    pass
+            status = line_status(d, inv, head)
+            entry = {"id": obj_id, "kind": head.get("kind"), "name": head.get("name"),
+                     "owner": head.get("owner"), "head": inv["head"],
+                     "inventorySha512": owners.sidecar_digest((d / "inventory.json.sha512").read_bytes()),
+                     "status": status}
+            if label_of(obj_id):
+                entry["label"] = label_of(obj_id)
             objs.append(entry)
-        return {"format": "opensheaf-archive/0.1", "specification": SPEC,
-                "archiveId": ARCHIVE["archiveId"], "name": ARCHIVE["name"],
-                "contact": ARCHIVE["contact"], "storageRoot": "ocfl/", "storageLayout": LAYOUT,
-                "mainCollection": ARCHIVE["mainCollection"], "profiles": ARCHIVE["profiles"],
-                "objects": objs}
+        doc = {"format": "opensheaf-archive/0.2", "specification": SPEC, "name": ARCHIVE["name"],
+               "contact": ARCHIVE["contact"], "storageRoot": "ocfl/", "storageLayout": LAYOUT}
+        if ARCHIVE["mainCollection"] in LABELS:
+            doc["mainCollection"] = LABELS[ARCHIVE["mainCollection"]]
+        doc.update(profiles=ARCHIVE["profiles"], extensions=sorted(used), owners=archive_owners(),
+                   indexes=dict(INDEXES), objects=objs)
+        if drafts:
+            doc["drafts"] = drafts
+        if TOMBSTONES:
+            doc["tombstones"] = TOMBSTONES
+        return doc
+
+
+    def write_discovery():
+        """Write the discovery document opensheaf.json and the indexes from the storage root."""
+        write_indexes()
+        write_json(ROOT / "opensheaf.json", discovery())
+
+The indexes
+-----------
+
+An archive SHOULD keep three indexes of its objects, next to its discovery
+document (section 12.5): `names/`, by name, `owners/`, by owner name, and
+`sha512/`, by inventory digest. A resolver that knows a name, an owner or
+a pin finds what it looks for by fetching one small file, without reading
+the whole discovery document or any object; and since `names/` holds the
+text of every genesis record, the lines of a work can be searched for from
+the indexes alone (section 12.4). Each index is a folder of files
+`<p>.json`, one per prefix `<p>` of the keys, of the length the discovery
+document declares in `indexes`: these tools use two characters, so that
+`names/` and `owners/` (base32) have at most 1024 files and `sha512/`
+(hexadecimal) 256. A file without entries is omitted.
+
+The indexes are maps, like the discovery document, and are rewritten with
+it, whole, from the storage root, by every command that adds or changes an
+object. The entries:
+
+- in `names/`, for each object with a genesis record, its `name`, `owner`,
+  `id` and `status`, its `originator` (for a key log, the owner itself),
+  the text of its `genesis.json` and its label, if any;
+- in `owners/`, for each owner with lines in the storage root, its owner
+  name and the names of those lines, its key log among them;
+- in `sha512/`, for each sealed object version, and each key-log version
+  carried by a fork record (section 6.3), its `inventorySha512`, `id`,
+  `version` and `status`, a carried version having the identifier of its
+  key log and its own number.
+
+Drafts are never indexed. An object taken down
+([takedowns](25-takedown.md)) keeps its entries in `names/` and `sha512/`,
+with the status `removed`: since its files are gone, they are carried from
+the index files being replaced (the takedown writes them just before
+deleting), and the tombstone's own pin is added if it is missing. A
+takedown removes the name from `owners/`.
+
+    # in write the discovery document of the archive:
+    INDEXES = {"names": 2, "owners": 2, "sha512": 2}
+    INDEX_FORMAT = "opensheaf-index/0.2"
+    INDEX_KEY = {"names": "name", "owners": "owner", "sha512": "inventorySha512"}
+
+
+    def index_entries():
+        """{index: [entries]} of the storage root and of its tombstones (section 12.5)."""
+        out = {"names": [], "owners": [], "sha512": []}
+        lines = {}
+        for obj_id, d, inv in objects():
+            if inv is None or obj_id is None or obj_id.startswith("sheaf:draft:"):
+                continue
+            head = read_json(d, inv, OBJ) or {}
+            gpath = read_logical(d, inv, GENESIS)
+            if gpath is None or len(obj_id.split(":")) != 3:
+                continue
+            genesis = gpath.read_bytes()
+            try:
+                rec = names.read_genesis(genesis)
+            except ValueError:
+                continue
+            _, nm, owner = obj_id.split(":")
+            status = line_status(d, inv, head)
+            entry = {"name": nm, "owner": owner, "id": obj_id, "status": status,
+                     "originator": owner if rec["kind"] == "owner" else rec.get("originator"),
+                     "genesis": genesis.decode("utf-8")}
+            if label_of(obj_id):
+                entry["label"] = label_of(obj_id)
+            out["names"].append(entry)
+            lines.setdefault(owner, []).append(nm)
+            for n in range(1, int(inv["head"][1:]) + 1):
+                sc = d / f"v{n}" / "inventory.json.sha512"
+                if sc.exists():
+                    out["sha512"].append({"inventorySha512": owners.sidecar_digest(sc.read_bytes()),
+                                          "id": obj_id, "version": f"v{n}", "status": status})
+            if head.get("kind") == "owner":
+                try:
+                    log = owners.load_key_log(d)
+                except owners.OwnerError:
+                    continue
+                for v in log.versions:
+                    for c in (v.carried if v.fork_record else []):
+                        out["sha512"].append({"inventorySha512": c.digest, "id": obj_id,
+                                              "version": f"v{c.number}", "status": "active"})
+        out["owners"] = [{"owner": o, "names": sorted(ns)} for o, ns in sorted(lines.items())]
+        out["names"] += removed_entries("names")
+        out["sha512"] += removed_entries("sha512")
+        return out
+
+
+    def removed_entries(index):
+        """The entries of the lines taken down, kept from the index files of INDEX with the status
+        removed, and the tombstones' own entries when the files lack them (sections 12.5 and 13.3)."""
+        gone = {t["id"]: t for t in TOMBSTONES}
+        kept = [dict(e, status="removed") for e in read_index(index) if e.get("id") in gone]
+        for t in gone.values():
+            if index == "names" and not any(e["id"] == t["id"] for e in kept):
+                kept.append({"name": t["name"], "owner": t["owner"], "id": t["id"], "status": "removed"})
+            if index == "sha512" and not any(e["id"] == t["id"] and e["version"] == t["lastVersion"]
+                                             for e in kept):
+                kept.append({"inventorySha512": t["inventorySha512"], "id": t["id"],
+                             "version": t["lastVersion"], "status": "removed"})
+        return kept
+
+
+    def read_index(index):
+        """Every entry of the files of the index INDEX held next to the discovery document."""
+        out = []
+        for p in sorted((ROOT / index).glob("*.json")) if (ROOT / index).is_dir() else []:
+            try:
+                out += json.loads(p.read_text(encoding="utf-8")).get("entries", [])
+            except (ValueError, AttributeError):
+                pass
+        return out
+
+
+    def index_files(entries):
+        """{index: {prefix: file contents}} of ENTRIES, by the prefixes INDEXES declares."""
+        out = {}
+        for index, es in entries.items():
+            files = out.setdefault(index, {})
+            key = INDEX_KEY[index]
+            for e in sorted(es, key=lambda e: (e[key], e.get("id", ""), int(e.get("version", "v0")[1:]))):
+                p = e[key][:INDEXES[index]]
+                files.setdefault(p, {"format": INDEX_FORMAT, "index": index, "entries": []})["entries"].append(e)
+        return out
+
+
+    def write_indexes():
+        """Write the files of the three indexes, replacing those of the folders."""
+        files = index_files(index_entries())
+        for index in INDEXES:
+            folder = ROOT / index
+            want = files.get(index, {})
+            for p in sorted(folder.glob("*.json")) if folder.is_dir() else []:
+                if p.stem not in want:
+                    p.unlink()
+            for prefix, data in want.items():
+                write_json(folder / f"{prefix}.json", data)
+
 
 The TeXmacs index
 -----------------
@@ -66,7 +252,7 @@ that a reader can check what the collection pins.
 The landing pages, with the tags read by search engines, and the sitemap
 are those of the [website](30-website.md), written by the same code: a
 TeXmacs index is a home page, nothing more, and the website profile
-(appendix C) asks for the rest whatever makes the home page.
+(appendix A.3) asks for the rest whatever makes the home page.
 
     # in write the TeXmacs index of the archive:
     <<TeX accents and special letters as Unicode>>
@@ -103,67 +289,127 @@ TeXmacs index is a home page, nothing more, and the website profile
 
 ### The command
 
-`osheaf index` always writes the discovery document. Then, with a website
-configured, it hands the members to the [website](30-website.md); with a
-TeXmacs template, it has the website write the landing pages and the
-sitemap without a home page (`home=False`), writes `index.tm` and, unless
-`--no-html`, exports it to `index.html` with TeXmacs (the PDF export,
+`osheaf index` writes the discovery document and the indexes, and then the
+readable index, if one is configured. With a website, it hands the members
+of the main catalogue to the [website](30-website.md); with a TeXmacs
+template, it has the website write the landing pages, the owner pages and
+the sitemap without a home page (`home=False`), writes `index.tm` and,
+unless `--no-html`, exports it to `index.html` with TeXmacs (the PDF export,
 needed to typeset it, goes to a scratch folder). The landing pages are at
-`paper/<id>/`, apart from the HTML versions of TeXmacs documents in
-`site/<id>/`, and the `index.html` of TeXmacs is never overwritten. The
-empty file `.texmacs-noconvert` tells TeXmacs' website converter not to
-touch the archive's files (appendix B).
-
-With `index.html.featured` set to a collection of the archive, the home
-page lists that collection first (a reading list, a journal's issues),
-then the main collection; a setting that names something else stops the
-command.
-
-Only members of the archive itself can be shown this way: the entries are
-read from the local storage root. A curated main collection with members
-of other archives needs the website.
+`paper/<label>/`, apart from the HTML versions of TeXmacs documents in
+`site/<label>/`, and the `index.html` of TeXmacs is never overwritten by
+the website. The empty file `.texmacs-noconvert` tells TeXmacs' website
+converter not to touch the archive's files (appendix A.2).
 
     # in write the discovery document and the index:
     def index(args):
-        write_json(ROOT / "opensheaf.json", discovery())
-        coll_dir = OCFL / ARCHIVE["mainCollection"]
-        inv = load_inventory(coll_dir)
-        members = json.loads(read_logical(coll_dir, inv, "members.json").read_text())["members"]
-        if INDEX.get("html"):
-            from . import html
-            featured = INDEX["html"].get("featured") if isinstance(INDEX["html"], dict) else None
-            if featured and not (OCFL / featured / "inventory.json").exists():
-                sys.exit(f"osheaf.json: index.html.featured names {featured}, which is not an object of this archive")
-            if featured and read_json(OCFL / featured, load_inventory(OCFL / featured), OBJ).get("kind") != "collection":
-                sys.exit(f"osheaf.json: index.html.featured names {featured}, which is not a collection")
-            html.render(members, featured=featured)
-            local = sum(1 for m in members if m.get("archive") == ARCHIVE["archiveId"])
-            print(f"opensheaf.json, index.html, {local} landing pages and sitemap.xml written")
+        write_discovery()
+        if INDEX.get("html") or INDEX.get("template"):
+            readable_index(args)
             return
-        if not INDEX.get("template"):
-            print("opensheaf.json written (no index configured)")
+        print("opensheaf.json and the indexes written (no readable index configured)")
+
+The members presented are those of the latest signed version of the main
+catalogue (appendix A.3), not of its head: nothing relies on a version that
+is not signed (section 7.3). An archive whose main catalogue has no signed
+version (its owner's keys all exposed since) presents nothing, and says so.
+
+    # in write the discovery document and the index:
+    def main_members():
+        """The members of the latest signed version of the main catalogue, or None."""
+        main_id = LABELS.get(ARCHIVE["mainCollection"])
+        d = obj_dir(main_id) if main_id else None
+        inv = load_inventory(d) if d else None
+        if inv is None:
+            return None
+        ver = latest_signed(d, inv)
+        if ver is None:
+            print(f"warning: the main catalogue has no signed version (section 7.3): nothing is presented",
+                  file=sys.stderr)
+            return None
+        return read_json(d, inv, "members.json", ver)["members"]
+
+With `index.html.featured` set to the label of a collection of the
+archive, the home page lists that collection first (a reading list, a
+journal's issues), then the main catalogue; a setting that names something
+else stops the command.
+
+Only members held here can be shown in a TeXmacs index: its entries are
+read from the local storage root. A curated main catalogue with members of
+other archives needs the website, and the members held elsewhere are left
+out of `index.tm`, with a warning.
+
+    # in write the discovery document and the index:
+    def readable_index(args):
+        """The website, or the TeXmacs index with the landing pages of the website."""
+        from . import html
+        members = main_members()
+        if members is None:
+            return
+        if INDEX.get("html"):
+            featured = INDEX["html"].get("featured") if isinstance(INDEX["html"], dict) else None
+            fid = None
+            if featured:
+                fid = LABELS.get(featured)
+                if fid is None:
+                    sys.exit(f"osheaf.json: index.html.featured names {featured}, which is not a label of this "
+                             "archive")
+                fd = obj_dir(fid)
+                if (read_json(fd, load_inventory(fd), OBJ) or {}).get("kind") != "collection":
+                    sys.exit(f"osheaf.json: index.html.featured names {featured}, which is not a collection")
+            pages = html.render(members, featured=fid)
+            print(f"opensheaf.json, index.html, {pages} landing pages and sitemap.xml written")
             return
         template = (ROOT / INDEX["template"]).read_text(encoding="latin-1")
         line = "  <paper-index>\n"
         if template.count(line) != 1:
             sys.exit(f"{INDEX['template']} must contain one paragraph <paper-index>")
-        from . import html
         pages = html.render(members, home=False)
-        entries = "\n\n".join(index_entry(m) for m in members)
+        here = [m for m in members if html.held(m)]
+        if len(here) < len(members):
+            print(f"warning: {len(members) - len(here)} member(s) held in other archives are left out of index.tm "
+                  "(the website shows them)", file=sys.stderr)
+        entries = "\n\n".join(index_entry(m) for m in here)
         with open(ROOT / "index.tm", "w", encoding="latin-1", newline="") as f:
             f.write(template.replace(line, entries + "\n"))
         (ROOT / ".texmacs-noconvert").touch()
-        if not args.no_html:
+        if not getattr(args, "no_html", False):
             scratch = Path(tempfile.mkdtemp())
             run_texmacs(export_calls(ROOT / "index.tm", pdf=scratch / "index.pdf",
                                      html=ROOT / "index.html"))
             shutil.rmtree(scratch, ignore_errors=True)
-        print("opensheaf.json, index.tm" + ("" if args.no_html else ", index.html")
+        print("opensheaf.json, index.tm" + ("" if getattr(args, "no_html", False) else ", index.html")
               + f", {pages} landing pages and sitemap.xml written")
+
+The presentation files are regenerated after every change (appendix A.3),
+not only by `osheaf index`: the [command line](60-command-line.md) calls
+`present` after each command that changes the archive. It writes what is
+quick to write: the whole website, or, for a TeXmacs index, the landing
+pages, the owner pages and the sitemap, leaving `index.tm` and its export,
+which need TeXmacs, to `osheaf index`. A failure there does not undo the
+change, which is already made, and does not make the command fail: it is
+reported, and `osheaf index` writes the pages again.
+
+    # in write the discovery document and the index:
+    def present():
+        """Regenerate the presentation files after a change (appendix A.3), if any are configured."""
+        if not (INDEX.get("html") or INDEX.get("template")) or OLD:
+            return
+        from . import html
+        try:
+            members = main_members()
+            if members is None:
+                return
+            if INDEX.get("html"):
+                readable_index(argparse_namespace(no_html=True))
+            else:
+                html.render(members, home=False)
+        except (Exception, SystemExit) as e:  # noqa: BLE001 - the change is made; index writes the pages again
+            print(f"warning: the website was not regenerated ({e}); run osheaf index", file=sys.stderr)
 
 ### Text in TeXmacs
 
-Titles and abstracts are plain text with LaTeX mathematics (section 8), and
+Titles and abstracts are plain text with LaTeX mathematics (section 4.4), and
 some, imported from arXiv, still have TeX accents (`It\^o`). The accents
 become Unicode letters: an accent command is a combining character, and
 normalising to NFC composes it with its letter. A few letters are commands
@@ -237,7 +483,7 @@ escaped with a backslash are not delimiters.
 
 ### Dates and versions
 
-Dates are shown as people write them, also when approximate (section 8
+Dates are shown as people write them, also when approximate (section 4.4
 allows `2019-03`, or a range, of which the start is shown).
 
     # in a date as readers write it:
@@ -253,7 +499,7 @@ allows `2019-03`, or a range, of which the start is shown).
 
 The version line tells the reader which version this is: the document
 version, its label on the service it was imported from (arXiv's `v4` is
-often our version 3, section 7.3), and when it became public, or when it
+often our version 3, section 4.2), and when it became public, or when it
 was written if it was not public at the time; without either date, when it
 was deposited, from the inventory.
 
@@ -281,7 +527,7 @@ by the version line (`version 1 (arXiv v1)`), so the identifier needs no
 version of its own; before, the index showed `arXiv:2607.08385v1` for an
 imported paper next to `arXiv:2611.17119` for a related one. The
 identifier is that of the record the version was imported from, or else
-of a relation to arXiv (section 8.1), as for a paper deposited here and
+of a relation to arXiv (section 4.4), as for a paper deposited here and
 also posted on arXiv.
 
     # in the arXiv identifier of a document version:
@@ -295,7 +541,7 @@ also posted on arXiv.
                 return re.sub(r"v\d+$", "", r["relatedIdentifier"].split(":", 1)[1])
         return None
 
-The change note of a version (section 9, `changes`) is what the authors
+The change note of a version (section 4.3, `changes`) is what the authors
 wrote about it. For a version imported from arXiv it is arXiv's comments
 on the version, which are often not about a change at all (`61 pages`):
 shown bare, they read as a change note. So the note is labelled by what it
@@ -327,7 +573,7 @@ element, since the HTML export does not render folds.
 ### An entry
 
 An entry is made from the version the collection presents
-(section 10.2): the current version as of the pinned head, for a member of
+(section 8.2): the current version as of the pinned head, for a member of
 a catalogue, or the last revision, for a member of a selection.
 The pin shown is that of the presented version for a selection, and the
 member's own pin (the head) for a catalogue. The title links
@@ -346,22 +592,22 @@ change note of the version, labelled, follows the dates.
 
     # in the TeXmacs index entry of a member:
     def index_entry(member):
-        obj_id = member["id"]
-        d = OCFL / obj_id
+        obj_id = names.object_id(member["name"], member["owner"])
+        d, at, label = obj_dir(obj_id), path_of(obj_id), label_of(obj_id) or member["name"]
         inv = load_inventory(d)
         ver = presented_version(member, d, inv)
         pin_ver, pin = member_pins(member)[-1][:2]
         obj = read_json(d, inv, OBJ, ver)
         dc = read_json(d, inv, "datacite.json", ver)
         pdf = content_path(inv, ver, pdf_of(obj)) if pdf_of(obj) else None
-        src = f"ocfl/{obj_id}/" + content_path(inv, ver, obj["mainSource"]) if obj.get("mainSource") else None
-        html = f"site/{obj_id}/{obj_id}.html"
+        src = f"ocfl/{at}/" + content_path(inv, ver, obj["mainSource"]) if obj.get("mainSource") else None
+        html = f"site/{label}/{label}.html"
         texmacs = obj.get("sourceFormat") == "application/x-texmacs"
         title = tm_with_math(dc["titles"][0]["title"])
         authors = tm_escape(authors_of(dc))
         if not authors.endswith("."):
             authors += "."
-        links = [f"<hlink|PDF|ocfl/{obj_id}/{pdf}>"] if pdf else []
+        links = [f"<hlink|PDF|ocfl/{at}/{pdf}>"] if pdf else []
         if texmacs:
             # links to .tm files become .html links in the HTML export; the source
             # is linked once for TeXmacs and once (.texmacs, exported as .tm) for HTML
@@ -383,7 +629,7 @@ change note of the version, labelled, follows the dates.
         if changes_note(obj):
             when += f"<next-line>{tm_escape(changes_note(obj))}"
         sep = " \\<cdot\\> "
-        head = f"<hlink|{title}|paper/{obj_id}/>"
+        head = f"<hlink|{title}|paper/{label}/>"
         return f"""  <\\notes-news-item>
         <with|font-series|bold|{head}>
 
@@ -392,5 +638,5 @@ change note of the version, labelled, follows the dates.
         {sep.join(links)}
 
     {abstract}    <with|font-size|0.84|par-mode|left|{when}<next-line>pin:
-        <hlink|<verbatim|{pin[:32]}...>|ocfl/{obj_id}/{pin_ver}/inventory.json>>
+        <hlink|<verbatim|{pin[:32]}...>|ocfl/{at}/{pin_ver}/inventory.json>>
       </notes-news-item>"""

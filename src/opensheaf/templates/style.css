@@ -124,6 +124,16 @@ li.version { padding: 0.6rem 0; border-bottom: 1px solid var(--os-rule); }
                    border-radius: 999px; background: var(--os-surface); margin-left: 0.3rem;
                    vertical-align: 0.1em; }
 .current { background: var(--os-ok-bg); color: var(--os-ok); }
+.contested { font-family: var(--os-sans); font-size: 0.65rem; font-weight: 400; padding: 0.1rem 0.55rem;
+             border-radius: 999px; background: var(--os-warn-bg); color: var(--os-warn); margin-left: 0.3rem; }
+div.contested, li.contested { display: block; border-radius: 4px; padding: 0.7rem 1rem; margin: 0.6rem 0;
+                              font-size: 0.85rem; }
+dl.identifiers { font-family: var(--os-sans); font-size: 0.75rem; color: var(--os-muted);
+                 display: grid; grid-template-columns: max-content 1fr; gap: 0.2rem 0.8rem; margin: 1.2rem 0; }
+dl.identifiers dt { font-weight: 600; }
+dl.identifiers dd { margin: 0; min-width: 0; }
+ul.facts { padding-left: 1.2rem; }
+ul.facts li { margin: 0.3rem 0; }
 .changes { font-style: italic; }
 .files { font-size: 0.9rem; }
 .missing { color: var(--os-muted); }

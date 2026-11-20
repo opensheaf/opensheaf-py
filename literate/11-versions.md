@@ -5,7 +5,7 @@ OCFL, as used in the [previous chapter](10-archive.md), knows only object
 versions: `v1`, `v2`, ..., one for every change of an object. A reader of a
 scholarly archive wants something else: the versions of the *work*, the
 preprint, its correction, the version accepted by a journal. OpenSheaf calls
-them *document versions* (section 7.3) and keeps the two numberings apart.
+them *document versions* (section 4.2) and keeps the two numberings apart.
 This chapter defines the functions that read and maintain document versions
 inside the object versions; [depositing](13-deposit.md) and the
 [description-only versions](14-description.md) use them, and
@@ -15,14 +15,19 @@ Object versions and document versions
 -------------------------------------
 
 Every object version holds two descriptions, `datacite.json` (the
-description for readers and services, section 8) and `object.json`
-(OpenSheaf's record of the object: its kind, its document version, its
-sources, its state, section 9). `TODAY` is the date of the run, used as the
-default date of everything a command records.
+description for readers and services, section 4.4) and `object.json`
+(OpenSheaf's record of the object: its kind, its line, its document version,
+its sources, its state, section 4.3), and the genesis record `genesis.json`
+of the work, the same bytes in every version (section 5.1). The genesis
+record is an identity file, never a file of the document's own (section
+4.1). `TODAY` is the date of the run, used as the default date of
+everything a command records.
 
     # in the names of object.json and of its format:
     OBJ = "object.json"
-    OBJ_FORMAT = "opensheaf-object/0.1"
+    OBJ_FORMAT = "opensheaf-object/0.2"
+    GENESIS = names.GENESIS
+    IDENTITY = ("datacite.json", OBJ, GENESIS)
     TODAY = datetime.date.today().isoformat()
 
 The document version an object version holds is written in its
@@ -33,12 +38,12 @@ The document version an object version holds is written in its
         return read_json(obj_dir, inv, OBJ, version)["documentVersion"]
 
 `object.json` also names the renditions of a document version, with their
-media types (section 9). The PDF, which landing pages, the home page and
+media types (section 4.3). The PDF, which landing pages, the home page and
 the index link, is the first rendition of type `application/pdf`, or else
 the first whose logical path ends in `.pdf`; a document version may have
 none. Its logical path depends on how the version was deposited: these
-tools call it `paper.pdf`, but an [accepted copy](22-accepted-copies.md)
-or a mirror keeps the name its source gave it.
+tools call it `paper.pdf`, but a [branch](23-branches.md) or a
+[mirror](22-mirrors.md) keeps the name its parent or source gave it.
 
     # in the PDF of a document version:
     def pdf_of(obj):
@@ -71,7 +76,7 @@ The history and the current version
 ------------------------------------
 
 The *history* is the order of the document versions in the history of the
-work (section 7.3). Usually it is the order of their numbers, and
+work (section 4.2). Usually it is the order of their numbers, and
 `object.json` says nothing about it. When a version is found later,
 `object.json` gets a `history`: the list, in the order of the work, of the
 last object version holding each document version. The last one is used
@@ -82,14 +87,14 @@ later one keeps it.
 Without `history`, the default is computed from the inventory: for each
 document version, the last object version holding it, in the order of the
 numbers. The object versions considered are those up to `at`, by default
-the head: a collection pins an object version (section 10.2), and what it
+the head: a collection pins an object version (section 8.2), and what it
 shows is the history as known at that version.
 
     # in the history of a document without a history in object.json:
     def default_history(obj_dir, inv, at=None):
         """Without `history`: the last object version holding each document
         version, in the order of the numbers, among the object versions up to
-        AT (default: the head) (section 7.3)."""
+        AT (default: the head) (section 4.2)."""
         at = at or inv["head"]
         last = {}
         for ver in inv["versions"]:
@@ -97,9 +102,12 @@ shows is the history as known at that version.
                 last[doc_version_of(obj_dir, inv, ver)] = ver
         return [last[n] for n in sorted(last)]
 
-The history is read from the head version, the latest knowledge of the
-archive; earlier object versions keep the history as it was known when
-they were made, and `at` reads it from one of them instead.
+The history is read from an object version: by default the head; the
+[main catalogue](15-main-collection.md) and the discovery document read it
+from the latest signed version of the line, as section 4.2 says, which is
+the head whenever the archive's own tools made the line. Earlier object
+versions keep the history as it was known when they were made, and `at`
+reads it from one of them instead.
 
     # in the history of a document as its head states it:
     def history_of(obj_dir, inv, at=None):
@@ -111,7 +119,7 @@ The *current version* is the one readers are sent to: the last entry of the
 history. Landing pages, the index and citations use it rather than the
 head, since the head may hold an earlier document version (one found
 later, or one just described). The main collection pins the head of each
-document (section 10.2) and shows its current version, read from the
+document (section 8.2) and shows its current version, read from the
 history of the pinned version, which is what `at` is for.
 
     # in the object version holding the current version of a document:
@@ -119,7 +127,7 @@ history of the pinned version, which is what `at` is for.
         """The object version holding the current document version as of object
         version AT (default: the head): the last entry of its history, or without
         one the last object version holding the highest document version
-        (section 7.3)."""
+        (section 4.2)."""
         return history_of(obj_dir, inv, at)[-1]
 
 Without `history`, the head is not always the answer. It holds the
@@ -138,7 +146,7 @@ means a few small files.
 Two parts of `object.json` outlive the document version they were written
 with. *Notices* about a document version (a theorem found wrong, say) are
 written after it, by description-only versions, and every later object
-version keeps them, unchanged (section 7.3), so that a reader of any
+version keeps them, unchanged (section 4.2), so that a reader of any
 later version sees them. The *history* is kept, updated, by every object
 version once it exists.
 
@@ -161,12 +169,12 @@ before the current version; with these tools the depositor says so, with
 `--after` and the number before the current one.
 
     # in carry the notices and the history to a new object version:
-    def carry_forward(prev, new, inv, new_ver, after_doc=None):
+    def carry_forward(prev, new, inv, new_ver, after_doc=None, obj_id=None):
         """Keep the notices of the head (they persist unchanged) and its history,
         updated for NEW, the object.json of object version NEW_VER: a new document
         version is appended (or placed after document version AFTER_DOC, which
         then writes a history); a description-only version replaces the entry of
-        its document version."""
+        its document version (OBJ_ID: the object, by default the line NEW names)."""
         if prev is None:
             if after_doc:
                 sys.exit("--after needs an existing document")
@@ -175,9 +183,9 @@ before the current version; with these tools the depositor says so, with
             new["notices"] = list(prev["notices"])
         if prev.get("history") is None and after_doc is None:
             return
-        obj_dir = OCFL / new["objectId"]
-        hist = list(prev.get("history") or default_history(obj_dir, inv))
-        docs = {doc_version_of(obj_dir, inv, v): v for v in hist}
+        d = obj_dir(obj_id or names.object_id(new["name"], new["owner"]))
+        hist = list(prev.get("history") or default_history(d, inv))
+        docs = {doc_version_of(d, inv, v): v for v in hist}
         n = new["documentVersion"]
         if n in docs:                      # description-only (or completion)
             hist[hist.index(docs[n])] = new_ver
@@ -197,10 +205,10 @@ files of the new version.
     # in the notice files that every later object version keeps:
     def carried_files(obj_id, inv):
         """{logical path: file} of the notice files of the head, which every later
-        object version keeps (section 7.3)."""
+        object version keeps (section 4.2)."""
         if not inv:
             return {}
-        d = OCFL / obj_id
+        d = obj_dir(obj_id)
         head = read_json(d, inv, OBJ)
         out = {}
         for n in head.get("notices", []):
@@ -208,11 +216,34 @@ files of the new version.
                 out[n["path"]] = d / content_path(inv, inv["head"], n["path"])
         return out
 
+A [branch](23-branches.md) carries more: the *evidence* of its branch
+point, `parent.inventory.json`, `parent.object.json`, the folder
+`parent.signatures/` and, for a branch of a branch, `parent.chain/`
+(section 9.2), which every version keeps unchanged until one moves the
+branch point (section 9.4). With the genesis record they are the identity
+files of the object (section 4.1), never files of the document.
+
+    # in the notice files that every later object version keeps:
+    EVIDENCE = ("parent.inventory.json", "parent.object.json", "parent.signatures/", "parent.chain/")
+
+
+    def is_evidence(logical):
+        """Whether LOGICAL is a file of the evidence of a branch point (section 9.2)."""
+        return logical in EVIDENCE[:2] or logical.startswith(EVIDENCE[2:])
+
+
+    def evidence_paths(inv, version=None):
+        """The logical paths of the evidence of a branch point held in VERSION (default: the head)."""
+        if not inv:
+            return []
+        state = inv["versions"][version or inv["head"]]["state"]
+        return sorted(p for ps in state.values() for p in ps if is_evidence(p))
+
 Dates
 -----
 
 DataCite records dates as a list of `{date, dateType}`, at most one per
-type for our purposes. The types used by OpenSheaf (section 8) each have one
+type for our purposes. The types used by OpenSheaf (section 4.4) each have one
 meaning: `Issued` the first public appearance of the work, the same in every
 version; `Available` when this document version became public; `Created`
 when a version not public at the time was written; `Updated` the latest

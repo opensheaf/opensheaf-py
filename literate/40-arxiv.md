@@ -4,12 +4,13 @@ Importing from arXiv: fetching
 Many archives will start from papers already on arXiv. arXiv keeps every
 version of a paper, with its PDF and, usually, the sources the authors
 submitted; an OpenSheaf archive can hold the same versions, byte for byte,
-as the document versions of an object. This chapter and the two after it
+as the signed document versions of a line. This chapter and the two after it
 describe how opensheaf-py does it. This one describes the module as a
 whole and the first step, downloading; [the next](41-arxiv-metadata.md)
 turns arXiv's metadata into DataCite; [the third](42-arxiv-import.md)
-makes the object versions. They use the core of the package (the storage
-root, objects, deposits) through the module `core`, imported as `P`, and
+seals a line for each paper and adds its versions, each signed by the
+owner of the archive. They use the core of the package (the storage
+root, lines, deposits, signatures) through the module `core`, imported as `P`, and
 the chapters on the core explain what those functions do.
 
 Two steps
@@ -37,7 +38,7 @@ The downloads folder looks like this:
 DOWNLOADS/
   download.json              what was fetched, when, from where, with SHA-256
   version-licences.json      the licence and the comments of every version
-  identifiers.json           arXiv identifier -> object identifier (by the depositor)
+  identifiers.json           arXiv identifier -> label (by the depositor)
   papers/
     2303.18112/
       record.xml             the OAI-PMH record, in the arXivRaw format
@@ -48,9 +49,13 @@ DOWNLOADS/
       ...
 ```
 
-Only `identifiers.json` is written by hand: object identifiers are chosen
-by the depositor (section 6.3 of the specification), and the import stops,
-with a proposal, when one is missing.
+Only `identifiers.json` is written by hand: it gives each paper its
+*label*, the readable name of its line in the archive and of its landing
+page, `paper/<label>/` (section 3.1 of the specification). Labels should be
+chosen by the depositor, not derived from the title, and the import stops,
+with a proposal, when one is missing. The line itself is named by the
+digest of a genesis record sealed at the import (section 5), as a deposit
+with `--new` names it.
 
 The module
 ----------
@@ -59,7 +64,8 @@ Everything lives in one module, `arxiv.py`. Its docstring, shown by
 `osheaf arxiv import --help`, summarises what an imported version holds.
 
     # in arXiv: what the importer does:
-    """Import papers downloaded from arXiv into the archive, one OCFL version per
+    """Import papers downloaded from arXiv into the archive (specification 0.2): one
+    line per paper, sealed at its first import, and one signed object version per
     arXiv version.
 
         osheaf arxiv fetch DOWNLOADS --author AUTHOR-ID | ARXIV-ID ...
@@ -70,19 +76,23 @@ Everything lives in one module, `arxiv.py`. Its docstring, shown by
     (OAI-PMH arXivRaw), vN.pdf and vN-source.{tar.gz,gz,pdf}; download.json (what
     was fetched, with SHA-256); version-licences.json (the licence and comments of
     each version, from its abstract page); identifiers.json (arXiv identifier ->
-    object identifier, written by the depositor).
+    label of the line in the archive, written by the depositor).
 
-    Each version of an object holds, byte for byte as served by arXiv:
+    Each object version holds, byte for byte as served by arXiv:
 
         paper.pdf          the PDF of that arXiv version
         source/...         the source files, unpacked from arXiv's e-print
                            (absent when arXiv has only a PDF)
         datacite.json      from the arXiv record; IsIdenticalTo the arXiv version
-        object.json        with `external` (role source) naming the arXiv version and the
-                           SHA-512 of the files received from arXiv
+        object.json        the line (name, owner), previous, and `external` (role
+                           source) naming the arXiv version and the SHA-512 of the
+                           files received from arXiv
+        genesis.json       the genesis record of the line, sealed at its first import
 
-    Papers already in the archive (an arXiv relation in their datacite.json) are
-    skipped. Nothing is typeset: the PDF is arXiv's.
+    and is signed by the owner of the archive. Papers already in the archive (by
+    their label, an arXiv relation in their datacite.json or an arXiv record in
+    external) are skipped, or get their new versions with --update. Nothing is
+    typeset: the PDF is arXiv's.
     """
 
 In the module the metadata come first, then the import, the import

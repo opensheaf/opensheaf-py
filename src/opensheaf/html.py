@@ -1,17 +1,19 @@
 # Generated from literate/30-website.md by opensheaf-literate: edit the document, not this file.
-"""The website of an archive in plain HTML (the website profile, appendix C of
-the specification): a home page listing the documents of the main collection,
-one landing page per document (its current version, every version in the
-order of the history, notices, files, DOI, and the metadata read by Google
-Scholar and other services), and a sitemap.
+"""The website of an archive in plain HTML (the website profile, appendix A.3 of the
+specification 0.2): a home page presenting the latest signed version of the main
+catalogue, one landing page per line held here at paper/<label>/ (its full sheaf: URI,
+its owner, its current version, every signed document version in the order of the
+history with its status, notices, files, pins and DOI, the withdrawal if any, and the
+metadata read by Google Scholar and other services), a page per owner at owner/<owner>/
+(a summary of its key log), and a sitemap.
 
 Pages are made from templates with {{name}} placeholders: templates/index.html,
-templates/paper.html and templates/style.css of the archive (osheaf.json:
-index.html.templates or index.templates, else the folder templates/ if there
-is one), or the package's defaults. Mathematics in titles and abstracts
-($...$) is left to MathJax, loaded by the templates. With a TeXmacs index
-the home page is TeXmacs', and only the landing pages and the sitemap are
-written here.
+templates/paper.html, templates/collection.html, templates/owner.html and
+templates/style.css of the archive (osheaf.json: index.html.templates or
+index.templates, else the folder templates/ if there is one), or the package's
+defaults. Mathematics in titles and abstracts ($...$) is left to MathJax, loaded by
+the templates. With a TeXmacs index the home page is TeXmacs', and only the landing
+pages, the owner pages and the sitemap are written here.
 """
 
 import datetime
@@ -20,7 +22,7 @@ import json
 import shutil
 from pathlib import Path
 
-from . import core as P
+from . import core as P, names, owners, remote, sign
 
 DEFAULTS = Path(__file__).resolve().parent / "templates"
 
@@ -47,15 +49,26 @@ def authors(dc):
     return P.authors_of(dc)
 
 
-def file_link(root, obj_id, inv, ver, logical, label):
-    cp = P.content_path(inv, ver, logical)
-    return f'<a href="{root}ocfl/{obj_id}/{esc(cp)}">{esc(label)}</a>' if cp else ""
+def file_url(root, line, ver, logical):
+    cp = P.content_path(line.inv, ver, logical) if logical else None
+    return f"{root}ocfl/{P.path_of(line.id)}/{cp}" if cp else None
 
 
-def pdf_address(root, obj_id, inv, ver, obj):
-    lp = P.pdf_of(obj)
-    cp = P.content_path(inv, ver, lp) if lp else None
-    return f"{root}ocfl/{obj_id}/{cp}" if cp else None
+def file_link(root, line, ver, logical, label):
+    u = file_url(root, line, ver, logical)
+    return f'<a href="{esc(u)}">{esc(label)}</a>' if u else ""
+
+
+def pdf_address(root, line, ver, obj):
+    return file_url(root, line, ver, P.pdf_of(obj))
+
+
+def withdrawal_html(state, where=""):
+    if state.get("status") != "withdrawn":
+        return ""
+    w = state.get("withdrawal", {})
+    return (f'<div class="withdrawn"><strong>Withdrawn{where} ({esc(fmt_date(w.get("date")))}):</strong> '
+            f'{esc(w.get("reason", {}).get("text", ""))}</div>')
 
 
 def versions_line(m, obj):
@@ -66,11 +79,74 @@ def versions_line(m, obj):
     return f"version {obj['documentVersion']}"
 
 
-def version_block(obj_id, d, inv, ver, shown, notices, root, vetted=None):
-    """One version of a document: its number, labels, stage, date, changes,
-    files, DOI and the notices about it."""
-    obj = P.read_json(d, inv, P.OBJ, ver)
-    dc = P.read_json(d, inv, "datacite.json", ver)
+LINES = {}
+
+
+class Line:
+    """A line held in the storage root, as the pages present it."""
+
+    def __init__(self, obj_id):
+        self.id = obj_id
+        _, self.name, self.owner = obj_id.split(":")
+        self.dir = P.obj_dir(obj_id)
+        self.inv = P.load_inventory(self.dir)
+        self.slug = P.label_of(obj_id) or self.name
+        self.log = P.key_log(self.owner)
+        self.statuses = P.line_statuses(self.dir, self.inv, self.log)[1]
+        n = sign.latest_signed(self.statuses)
+        self.signed = f"v{n}" if n else None
+        self.state = self.json(P.OBJ, self.signed)
+
+    def json(self, logical, ver=None):
+        return P.read_json(self.dir, self.inv, logical, ver)
+
+    def status(self, ver):
+        return self.statuses[int(ver[1:]) - 1]
+
+    def digest(self, ver):
+        return P.digest(self.dir / ver / "inventory.json")
+
+    @property
+    def withdrawn(self):
+        return self.state.get("status") == "withdrawn"
+
+
+def removed(m):
+    """Whether the line of member M was taken down here: it has a tombstone (section 13.3)."""
+    return any(t.get("id") == f"sheaf:{m.get('name')}:{m.get('owner')}" for t in P.TOMBSTONES)
+
+
+def held(m):
+    """The Line of member M if its line is held in this archive, else None."""
+    try:
+        obj_id = names.object_id(m["name"], m["owner"])
+        if not (P.obj_dir(obj_id) / "inventory.json").is_file():
+            return None
+    except (KeyError, ValueError):
+        return None
+    if obj_id not in LINES:
+        LINES[obj_id] = Line(obj_id)
+    return LINES[obj_id]
+
+
+def full_uri(line):
+    return f"sheaf:{line.name}:{line.owner}"
+
+
+def short_uri(line):
+    return f"sheaf:{line.name[:16]}:{line.owner[:16]}"
+
+
+def pin_uri(line, ver):
+    n = line.json(P.OBJ, ver)["documentVersion"]
+    return f"{full_uri(line)}/v{n}?sha512={line.digest(ver)}"
+
+
+def version_block(line, ver, shown, notices, root, vetted=None):
+    """One version of a line: its number, labels, stage, status, date, changes, files,
+    DOI, pin and the notices about it."""
+    obj = line.json(P.OBJ, ver)
+    dc = line.json("datacite.json", ver)
     n = obj["documentVersion"]
     labels = [f"{e['service']} {e['label']}" for e in obj.get("external", [])
               if e.get("role") == "source" and e.get("label")]
@@ -81,20 +157,25 @@ def version_block(obj_id, d, inv, ver, shown, notices, root, vetted=None):
         head += ' <span class="current">vetted</span>'
     elif vetted is None and n == shown:
         head += ' <span class="current">current</span>'
+    status = line.status(ver)
+    if status == sign.VOUCHED:
+        head += ' <span class="stage">vouched for</span>'
+    elif status != sign.SIGNED:
+        head += f' <span class="contested">{esc(status)}</span>'
     when = ""
     if P.date_of(dc, "Available"):
         when = fmt_date(P.date_of(dc, "Available"))
     elif P.date_of(dc, "Created"):
         when = f"written {fmt_date(P.date_of(dc, 'Created'))}, not public at the time"
-    files = [file_link(root, obj_id, inv, ver, r["path"], "PDF") for r in obj.get("renditions", [])]
+    files = [file_link(root, line, ver, r["path"], "PDF") for r in obj.get("renditions", [])]
     if obj.get("mainSource"):
         kind = {"application/x-tex": "LaTeX source", "application/x-texmacs": "TeXmacs source"} \
             .get(obj.get("sourceFormat"), "source")
-        files.append(file_link(root, obj_id, inv, ver, obj["mainSource"], kind))
+        files.append(file_link(root, line, ver, obj["mainSource"], kind))
     elif obj.get("sourcesMissing"):
         files.append(f'<span class="missing">sources not available: '
                      f'{esc(obj["sourcesMissing"].get("text", ""))}</span>')
-    files.append(f'<a href="{root}ocfl/{obj_id}/{ver}/inventory.json">files and digests</a>')
+    files.append(f'<a href="{root}ocfl/{P.path_of(line.id)}/{ver}/inventory.json">files and digests</a>')
     arxiv = P.arxiv_id(obj, dc)
     for e in obj.get("external", []):
         if e.get("record"):
@@ -111,20 +192,24 @@ def version_block(obj_id, d, inv, ver, shown, notices, root, vetted=None):
     if P.changes_note(obj):
         out.append(f'<div class="changes">{esc(P.changes_note(obj))}</div>')
     out.append(f'<div class="files">{" · ".join(f for f in files if f)}</div>')
+    uri = pin_uri(line, ver)
+    out.append(f'<div class="pin" title="{esc(uri)}">{ver} · pin <a href="{root}ocfl/{P.path_of(line.id)}/'
+               f'{ver}/inventory.json"><code>{line.digest(ver)[:32]}…</code></a></div>')
     for x in notices:
         if x["documentVersion"] == n:
-            link = f' {file_link(root, obj_id, inv, inv["head"], x["path"], "statement")}' if x.get("path") else ""
+            src = line.signed or line.inv["head"]
+            link = f' {file_link(root, line, src, x["path"], "statement")}' if x.get("path") else ""
             out.append(f'<div class="notice"><strong>Notice ({esc(fmt_date(x["date"]))}):</strong> '
                        f'{esc(x.get("text", ""))}{link}</div>')
     out.append("</li>")
     return "\n".join(out)
 
 
-def meta_tags(obj_id, d, inv, cur, obj, dc):
+def meta_tags(line, cur, obj, dc):
     """Google Scholar's citation_* tags, schema.org JSON-LD and FAIR Signposting."""
     base = P.ARCHIVE["baseUrl"]
-    landing = f"{base}paper/{obj_id}/"
-    pdf = pdf_address(base, obj_id, inv, cur, obj)
+    landing = f"{base}paper/{line.slug}/"
+    pdf = pdf_address(base, line, cur, obj)
     date = P.date_of(dc, "Issued") or P.date_of(dc, "Available") or P.date_of(dc, "Created") or ""
     tags = [f'<meta name="citation_title" content="{esc(dc["titles"][0]["title"])}">']
     tags += [f'<meta name="citation_author" content="{esc(c["name"])}">' for c in dc["creators"]]
@@ -142,7 +227,7 @@ def meta_tags(obj_id, d, inv, cur, obj, dc):
     cite = f"https://doi.org/{dc['doi']}" if dc.get("doi") else landing
     tags += [f'<link rel="canonical" href="{esc(landing)}">',
              f'<link rel="cite-as" href="{esc(cite)}">',
-             f'<link rel="describedby" href="{base}ocfl/{obj_id}/{P.content_path(inv, cur, "datacite.json")}"'
+             f'<link rel="describedby" href="{esc(file_url(base, line, cur, "datacite.json"))}"'
              ' type="application/vnd.datacite.datacite+json">']
     if pdf:
         tags.append(f'<link rel="item" href="{esc(pdf)}" type="application/pdf">')
@@ -151,13 +236,12 @@ def meta_tags(obj_id, d, inv, cur, obj, dc):
     ld = {"@context": "https://schema.org", "@type": "ScholarlyArticle",
           "name": dc["titles"][0]["title"], "url": landing,
           "author": [{"@type": "Person", "name": P.display_name(c)} for c in dc["creators"]],
-          "datePublished": date, "version": dc["version"]}
+          "datePublished": date, "version": dc["version"],
+          "identifier": ([f"https://doi.org/{dc['doi']}"] if dc.get("doi") else []) + [full_uri(line)]}
     if pdf:
         ld["encoding"] = {"@type": "MediaObject", "contentUrl": pdf, "encodingFormat": "application/pdf"}
     if abstract:
         ld["abstract"] = abstract
-    if dc.get("doi"):
-        ld["identifier"] = f"https://doi.org/{dc['doi']}"
     if rights.get("rightsUri"):
         ld["license"] = rights["rightsUri"]
     tags.append('<script type="application/ld+json">'
@@ -173,125 +257,127 @@ def abstract_html(dc):
 
 
 def render(members, home=True, featured=None):
-    """Write index.html, paper/<id>/index.html for every member, style.css
-    and sitemap.xml; with home=False (a TeXmacs index is the home page),
-    everything but index.html. featured: a collection of the archive whose
-    members the home page lists first."""
+    """Write index.html, paper/<label>/index.html for every line presented, owner/<owner>/,
+    style.css and sitemap.xml; with home=False (a TeXmacs index is the home page),
+    everything but index.html. FEATURED: the identifier of a collection of the archive
+    whose members the home page lists first."""
+    LINES.clear()
+    members = [m for m in members if not removed(m)]
     root_out = P.ROOT
     base = P.ARCHIVE["baseUrl"]
-    entries, urls, written = [], [(base, None)], []
+    urls, written, seen_owners = [(base, None)], [], []
     page_t = template("paper.html")
     fmembers = []
     if featured:
-        fdir = P.OCFL / featured
-        finv = P.load_inventory(fdir)
-        fmembers = P.read_json(fdir, finv, "members.json")["members"]
-    listed = {m["id"] for m in members if m.get("archive") == P.ARCHIVE["archiveId"]}
-    extra, seen, followed = [], set(listed), set()
-    queue = list(fmembers) + [m for m in members if m.get("archive") == P.ARCHIVE["archiveId"]]
-    while queue:
-        qm = queue.pop(0)
-        if qm.get("archive") != P.ARCHIVE["archiveId"]:
-            continue
-        if qm["id"] not in seen:
-            seen.add(qm["id"])
-            extra.append(qm)
-        if qm.get("kind") == "collection" and qm["id"] not in followed:
-            followed.add(qm["id"])
-            qd = P.OCFL / qm["id"]
-            qinv = P.load_inventory(qd)
-            if qinv:
-                queue += P.read_json(qd, qinv, "members.json", P.presented_version(qm, qd, qinv))["members"]
-    for k, m in enumerate(members + extra):
-        if m.get("archive") != P.ARCHIVE["archiveId"]:
-            if home:
-                entries.append(remote_entry(m))
-            continue
-        obj_id = m["id"]
-        d = P.OCFL / obj_id
-        inv = P.load_inventory(d)
-        cur = P.presented_version(m, d, inv)
+        fline = held({"name": featured.split(":")[1], "owner": featured.split(":")[2]})
+        fmembers = (fline.json("members.json", fline.signed) or {}).get("members", [])
+    pages, followed = {}, set()
+
+    def walk(queue):
+        while queue:
+            qm = queue.pop(0)
+            line = held(qm)
+            if line is None:
+                continue
+            if line.id not in pages:
+                pages[line.id] = qm
+            if qm.get("kind") == "collection" and line.id not in followed:
+                followed.add(line.id)
+                ver = P.presented_version(qm, line.dir, line.inv)
+                queue += (line.json("members.json", ver) or {}).get("members", [])
+
+    fmembers = [m for m in fmembers if not removed(m)]
+    walk(list(members) + list(fmembers))
+    for label, obj_id in sorted(P.LABELS.items()):
+        _, nm, owner = obj_id.split(":")
+        line = held({"name": nm, "owner": owner})
+        if obj_id not in pages and line and line.signed and line.state.get("kind") in ("document", "collection"):
+            walk([{"kind": line.state["kind"], "name": nm, "owner": owner, "version": line.signed,
+                   "inventorySha512": line.digest(line.signed)}])
+    for obj_id, m in pages.items():
+        line = LINES[obj_id]
+        cur = P.presented_version(m, line.dir, line.inv)
         pin_ver, pin = P.member_pins(m)[-1][:2]
+        ref = line.signed or pin_ver
         vetted = {r["documentVersion"] for r in m["revisions"]} if m.get("revisions") else None
-        obj = P.read_json(d, inv, P.OBJ, cur)
-        dc = P.read_json(d, inv, "datacite.json", cur)
-        head = P.read_json(d, inv, P.OBJ)
-        notices = head.get("notices", [])
+        obj = line.json(P.OBJ, cur)
+        dc = line.json("datacite.json", cur)
+        notices = line.state.get("notices", [])
         root = "../../"
-        versions = "\n".join(version_block(obj_id, d, inv, v, obj["documentVersion"], notices, root, vetted)
-                             for v in reversed(P.history_of(d, inv)))
+        versions = "\n".join(version_block(line, v, obj["documentVersion"], notices, root, vetted)
+                             for v in reversed(P.history_of(line.dir, line.inv, ref)))
         issued = P.date_of(dc, "Issued")
-        withdrawn = ""
-        if head.get("status") == "withdrawn":
-            w = head.get("withdrawal", {})
-            withdrawn = (f'<div class="withdrawn"><strong>Withdrawn ({esc(fmt_date(w.get("date")))}):</strong> '
-                         f'{esc(w.get("reason", {}).get("text", ""))}</div>')
+        withdrawn = withdrawal_html(line.state)
+        contested = ""
+        if line.status(cur) == sign.CONTESTED or line.status(pin_ver) == sign.CONTESTED:
+            contested = ('<div class="contested"><strong>Contested:</strong> this version is signed only with '
+                         'keys its owner has since exposed (sections 6.3 and 7.3 of the specification); '
+                         'what it holds may not be the owner\'s.</div>')
         rights = (dc.get("rightsList") or [{}])[0]
         licence = esc(rights.get("rights", ""))
         if rights.get("rightsUri"):
             licence = f'<a href="{esc(rights["rightsUri"])}">{licence}</a>'
         cite = f"{authors(dc)}. {dc['titles'][0]['title']}. {P.ARCHIVE['name']}, " \
-               f"{(issued or '')[:4]}, version {obj['documentVersion']}. " \
-               + (f"https://doi.org/{dc['doi']}" if dc.get("doi") else f"{base}paper/{obj_id}/")
+               f"{(issued or '')[:4]}, version {obj['documentVersion']}. {pin_uri(line, cur)}. " \
+               + (f"https://doi.org/{dc['doi']}" if dc.get("doi") else f"{base}paper/{line.slug}/")
         html_link = ""
-        if (P.SITE / obj_id / f"{obj_id}.html").exists():
-            html_link = f' · <a href="{root}site/{obj_id}/{obj_id}.html">HTML</a>'
+        if (P.SITE / line.slug / f"{line.slug}.html").exists():
+            html_link = f' · <a href="{root}site/{line.slug}/{line.slug}.html">HTML</a>'
+        common = {
+            "root": root, "archive_name": esc(P.ARCHIVE["name"]), "base_url": esc(base),
+            "head": meta_tags(line, cur, obj, dc), "title": esc(dc["titles"][0]["title"]),
+            "issued": esc(fmt_date(issued)), "withdrawn": withdrawn, "contested": contested,
+            "versions": versions, "licence": licence, "cite": esc(cite),
+            "pin": pin, "pin_url": f"{root}ocfl/{P.path_of(line.id)}/{pin_ver}/inventory.json",
+            "sheaf_uri": esc(full_uri(line)), "sheaf_short": esc(short_uri(line)),
+            "owner": owner_html(line.owner, root),
+        }
+        if line.owner not in seen_owners:
+            seen_owners.append(line.owner)
         if obj.get("kind") == "collection":
-            cmembers = P.read_json(d, inv, "members.json", cur)
+            cmembers = line.json("members.json", cur) or {}
             kind = {"selection": "A selection", "catalogue": "A catalogue"}.get(cmembers.get("type"), "A collection")
-            items = [local_entry(cm, root) if cm.get("archive") == P.ARCHIVE["archiveId"] else remote_entry(cm)
-                     for cm in cmembers["members"]]
+            items = [local_entry(cm, root) if held(cm) else remote_entry(cm, root)
+                     for cm in cmembers.get("members", []) if not removed(cm)]
             count = len(items)
-            page = fill(template("collection.html"), {
-                "root": root, "archive_name": esc(P.ARCHIVE["name"]), "base_url": esc(base),
-                "head": meta_tags(obj_id, d, inv, cur, obj, dc),
-                "title": esc(dc["titles"][0]["title"]),
+            page = fill(template("collection.html"), dict(common, **{
                 "kind": f"{kind} curated by {esc(authors(dc))}",
-                "issued": esc(fmt_date(issued)),
                 "count": f"{count} member{'s' if count != 1 else ''}",
                 "description": abstract_html(dc),
-                "members": "\n".join(items) if items else '<li class="empty">No members yet.</li>',
-                "withdrawn": withdrawn, "versions": versions, "licence": licence,
-                "cite": esc(cite), "pin": pin, "pin_url": f"{root}ocfl/{obj_id}/{pin_ver}/inventory.json",
-            })
+                "members": "\n".join(items) if items else '<li class="empty">No members yet.</li>'}))
         else:
-            page = fill(page_t, {
-                "root": root, "archive_name": esc(P.ARCHIVE["name"]), "base_url": esc(base),
-                "head": meta_tags(obj_id, d, inv, cur, obj, dc),
-                "title": esc(dc["titles"][0]["title"]), "authors": esc(authors(dc)),
-                "issued": esc(fmt_date(issued)), "abstract": abstract_html(dc),
-                "withdrawn": withdrawn, "versions": versions, "licence": licence,
-                "pdf": esc(pdf_address(root, obj_id, inv, cur, obj) or f"#v{obj['documentVersion']}"),
-                "cite": esc(cite), "pin": pin, "pin_url": f"{root}ocfl/{obj_id}/{pin_ver}/inventory.json",
-                "html_link": html_link,
-            })
-        out = root_out / "paper" / obj_id / "index.html"
+            page = fill(page_t, dict(common, **{
+                "authors": esc(authors(dc)), "abstract": abstract_html(dc),
+                "pdf": esc(pdf_address(root, line, cur, obj) or f"#v{obj['documentVersion']}"),
+                "html_link": html_link}))
+        out = root_out / "paper" / line.slug / "index.html"
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(page, encoding="utf-8")
-        written.append(obj_id)
-        urls.append((f"{base}paper/{obj_id}/", inv["versions"][inv["head"]]["created"][:10]))
+        written.append(line.slug)
+        lastmod = line.inv["versions"][line.inv["head"]]["created"][:10]
+        urls.append((f"{base}paper/{line.slug}/", lastmod))
         if html_link:
-            urls.append((f"{base}site/{obj_id}/{obj_id}.html", inv["versions"][inv["head"]]["created"][:10]))
-        if k < len(members):
-            entries.append(local_entry(m))
+            urls.append((f"{base}site/{line.slug}/{line.slug}.html", lastmod))
     if home:
+        entries = [local_entry(m) if held(m) else remote_entry(m) for m in members]
         featured_html = ""
         if featured:
-            fdc = P.read_json(fdir, finv, "datacite.json")
-            items = [local_entry(fm) if fm.get("archive") == P.ARCHIVE["archiveId"] else remote_entry(fm)
-                     for fm in fmembers]
+            fdc = fline.json("datacite.json", fline.signed)
+            items = [local_entry(fm) if held(fm) else remote_entry(fm) for fm in fmembers]
             featured_html = ('<section class="featured">\n'
                              f'<h2>{esc(fdc["titles"][0]["title"])}</h2>\n<ol class="papers">\n'
                              + ("\n".join(items) if items else '<li class="empty">No members yet.</li>')
                              + "\n</ol>\n</section>")
-        lead = ('Papers with their sources, every version, fixed by digests. An '
+        lead = ('Papers with their sources, every version, fixed by digests and signed by their owners. An '
                 '<a href="https://opensheaf.org">OpenSheaf</a> archive: programs start from '
                 '<a href="opensheaf.json">opensheaf.json</a>.')
-        cdir = P.OCFL / (featured or P.ARCHIVE["mainCollection"])
-        cinv = P.load_inventory(cdir)
-        cmem = P.read_json(cdir, cinv, "members.json") if cinv else {}
+        main_id = P.LABELS.get(P.ARCHIVE["mainCollection"])
+        cline = fline if featured else (LINES.get(main_id) or (held({"name": main_id.split(":")[1],
+                                                                     "owner": main_id.split(":")[2]})
+                                                               if main_id else None))
+        cmem = (cline.json("members.json", cline.signed) or {}) if cline else {}
         if featured or cmem.get("order") == "manual":
-            cdc = P.read_json(cdir, cinv, "datacite.json")
+            cdc = cline.json("datacite.json", cline.signed)
             desc = next((x["description"] for x in cdc.get("descriptions", [])), "")
             lead = (esc(desc) + ' A collection in the <a href="https://opensheaf.org">OpenSheaf</a> format: each '
                     'member is kept in its own archive and pinned by a digest'
@@ -309,17 +395,26 @@ def render(members, home=True, featured=None):
         (root_out / ".nojekyll").touch()
     elif "style.css" in page_t:
         shutil.copyfile(template_path("style.css"), root_out / "style.css")
+    owner_pages = []
+    for owner in seen_owners:
+        if P.key_log(owner) is None:
+            continue
+        lines = [LINES[i] for i in pages if LINES[i].owner == owner]
+        out = root_out / "owner" / owner / "index.html"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(owner_page(owner, lines), encoding="utf-8")
+        owner_pages.append(owner)
+        urls.append((f"{base}owner/{owner}/", None))
     sm = ['<?xml version="1.0" encoding="UTF-8"?>',
           '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">']
     for url, last in urls:
         sm.append(f"  <url><loc>{esc(url)}</loc>" + (f"<lastmod>{last}</lastmod>" if last else "") + "</url>")
     sm.append("</urlset>")
     (root_out / "sitemap.xml").write_text("\n".join(sm) + "\n", encoding="utf-8")
-    # remove landing pages of documents no longer listed (by the main or the
-    # featured collection): those not written now
-    for p in (root_out / "paper").glob("*") if (root_out / "paper").exists() else []:
-        if p.is_dir() and p.name not in set(written):
-            shutil.rmtree(p)
+    for folder, keep in (("paper", set(written)), ("owner", set(owner_pages))):
+        for p in (root_out / folder).glob("*") if (root_out / folder).exists() else []:
+            if p.is_dir() and p.name not in keep:
+                shutil.rmtree(p)
     return len(written)
 
 
@@ -329,57 +424,39 @@ def template_path(name):
     return p if p.exists() else DEFAULTS / name
 
 
-def remote_entry(m):
-    """The home-page entry of a member of another archive: its metadata read
-    from that archive, or else the cached citation."""
-    from . import collections
+def remote_entry(m, root=""):
+    """The entry of a member held elsewhere: its metadata read from the first of its at
+    that answers, checked against the pin, or else the cached citation."""
     cite = m.get("cite", {})
-    title, by, year = cite.get("title", m["id"]), P.names_joined(cite.get("creators", [])), cite.get("year", "")
-    links, abstract, archive_name, status, landing = [], "", m.get("archiveUrl", ""), {}, ""
+    title, by, year = cite.get("title") or m["name"], P.names_joined(cite.get("creators", [])), \
+        cite.get("year", "")
     pin = P.member_pins(m)[-1][1]
-    minv = P.load_inventory(P.OCFL / m["id"])
-    here = P.ARCHIVE["baseUrl"] in m.get("mirrors", []) and minv is not None \
-        and all(v in minv["versions"] for v, _, _ in P.member_pins(m))
-    if here:
-        # a mirror in this archive: its copy is read and linked locally
-        shown = P.presented_version(m, P.OCFL / m["id"], minv)
-        dc = P.read_json(P.OCFL / m["id"], minv, "datacite.json", shown)
+    links, abstract, landing, withdrawn = [], "", "", ""
+    at = (m.get("at") or [""])[0]
+    archive_name = at
+    view = remote_view(m)
+    if view is None:
+        links.append('<span class="missing">archive unavailable: cached citation</span>')
+    elif view.get("mismatch"):
+        archive_name, at = view["archive"], view["at"]
+        links.append('<span class="contested">mismatch: its archive holds another version under this '
+                     'pin</span>')
+    else:
+        archive_name, at = view["archive"], view["at"]
+        dc = view["dc"]
         title, by, abstract = dc["titles"][0]["title"], authors(dc), abstract_html(dc)
-        pdf = pdf_address("", m["id"], minv, shown, P.read_json(P.OCFL / m["id"], minv, P.OBJ, shown))
-        status = P.read_json(P.OCFL / m["id"], minv, P.OBJ)
-        if pdf:
-            links.append(f'<a href="{esc(pdf)}">PDF (mirrored here)</a>')
-    try:
-        r = collections.Remote(m["archiveUrl"])
-        archive_name = r.disc.get("name", archive_name)
-        rinv = r.inventory(m["id"])
-        shown = m["revisions"][-1]["version"] if m.get("revisions") else r.current(m["id"], m["version"])
-        rdc = json.loads(r.file(m["id"], rinv, shown, "datacite.json"))
-        status = json.loads(r.file(m["id"], rinv, rinv["head"], P.OBJ))
-        if not here:
-            title, by, abstract = rdc["titles"][0]["title"], authors(rdc), abstract_html(rdc)
-            lp = P.pdf_of(json.loads(r.file(m["id"], rinv, shown, P.OBJ)))
-            cp = P.content_path(rinv, shown, lp) if lp else None
-            if cp:
-                links.append(f'<a href="{esc(r.root + m["id"] + "/" + cp)}">PDF</a>')
-        if rdc.get("url"):
-            landing = rdc["url"]
+        if view.get("pdf"):
+            links.append(f'<a href="{esc(view["pdf"])}">PDF</a>')
+        landing = dc.get("url", "")
+        if landing:
             links.insert(0, f'<a href="{esc(landing)}">landing page</a>')
-    except Exception:  # noqa: BLE001 - the copy or the cached citation is shown
-        links.append('<span class="missing">'
-                     + ("its archive is unavailable" if here else "archive unavailable: cached citation")
-                     + "</span>")
-    withdrawn = ""
-    if status.get("status") == "withdrawn":
-        w = status.get("withdrawal", {})
-        withdrawn = (f'<div class="withdrawn"><strong>Withdrawn in its archive ({esc(fmt_date(w.get("date")))}):'
-                     f'</strong> {esc(w.get("reason", {}).get("text", ""))}</div>')
+        withdrawn = withdrawal_html(view.get("state", {}), " by its owner")
     return "\n".join([
         f'<li class="paper member{" withdrawn" if withdrawn else ""}">',
         (f'<a class="paper-title" href="{esc(landing)}">{esc(title)}</a>' if landing
          else f'<span class="paper-title">{esc(title)}</span>'),
         f'<div class="paper-authors">{esc(by)}</div>',
-        f'<div class="paper-meta">{esc(str(year))} · in <a href="{esc(m["archiveUrl"])}">{esc(archive_name)}</a>'
+        f'<div class="paper-meta">{esc(str(year))} · in <a href="{esc(at)}">{esc(archive_name)}</a>'
         + (f' · {versions_line(m, {})}' if m.get("revisions") else "")
         + (" · " + " · ".join(links) if links else "")
         + f' · <span class="pin" title="{pin}">pin {pin[:32]}…</span></div>',
@@ -388,29 +465,158 @@ def remote_entry(m):
         "</li>"])
 
 
+def remote_view(m):
+    """{archive, at, dc, pdf, state} of member M, read at the first of its at that answers
+    and whose copy matches the pin; {archive, at, mismatch} for a copy that does not
+    match; None if none answers."""
+    obj_id = names.object_id(m["name"], m["owner"])
+    pin_ver, pin = P.member_pins(m)[-1][:2]
+    for at in m.get("at", []):
+        src = remote.Source(at)
+        try:
+            disc = src.discovery()
+            path = src.object_path(obj_id)
+            data = src.get(f"{path}/{pin_ver}/inventory.json")
+            if data is None:
+                continue
+            view = {"archive": disc.get("name") or at, "at": src.at or at}
+            if names.sha512_hex(data) != pin:
+                return dict(view, mismatch=True)
+            inv = json.loads(data)
+
+            def read(ver, logical, inv=inv):
+                cp = P.content_path(inv, ver, logical)
+                raw = src.get(f"{path}/{cp}") if cp and remote.safe_path(cp) else None
+                return json.loads(raw) if raw else None
+            if m.get("revisions"):
+                shown = pin_ver
+            else:
+                hist = (read(pin_ver, P.OBJ) or {}).get("history")
+                if hist:
+                    shown = hist[-1]
+                else:
+                    last = {}
+                    for k in range(1, int(pin_ver[1:]) + 1):
+                        o = read(f"v{k}", P.OBJ) if f"v{k}" in inv["versions"] else None
+                        if o:
+                            last[o["documentVersion"]] = f"v{k}"
+                    shown = last[max(last)]
+            view["dc"] = read(shown, "datacite.json")
+            lp = P.pdf_of(read(shown, P.OBJ) or {})
+            cp = P.content_path(inv, shown, lp) if lp else None
+            if cp and remote.safe_path(cp) and src.at:
+                view["pdf"] = f"{src.at}{path}/{cp}"
+            entry = next((o for o in disc.get("objects", []) if isinstance(o, dict) and o.get("id") == obj_id), {})
+            if entry.get("status") == "withdrawn":
+                root_inv = json.loads(src.get(f"{path}/inventory.json") or b"{}")
+                state = read(root_inv.get("head", pin_ver), P.OBJ, root_inv) if root_inv.get("versions") else None
+                view["state"] = state if state and state.get("status") == "withdrawn" else {"status": "withdrawn"}
+            if not view["dc"]:
+                continue
+            return view
+        except (remote.Unavailable, ValueError, KeyError, TypeError, AttributeError):
+            continue
+    return None
+
+
 def local_entry(m, root=""):
-    """The entry of a member of this archive, in the version its collection
-    presents (the main collection's, the featured one's, or that of the
-    collection whose landing page lists it); root: the way to the root of
-    the archive from the page ("../../" on a landing page)."""
-    obj_id = m["id"]
-    d = P.OCFL / obj_id
-    inv = P.load_inventory(d)
-    cur = P.presented_version(m, d, inv)
-    pin = P.member_pins(m)[-1][1]
-    obj = P.read_json(d, inv, P.OBJ, cur)
-    dc = P.read_json(d, inv, "datacite.json", cur)
-    withdrawn = P.read_json(d, inv, P.OBJ).get("status") == "withdrawn"
+    """The entry of a member held here, in the version its collection presents (the main
+    catalogue's, the featured one's, or that of the collection whose landing page lists it);
+    root: the way to the root of the archive from the page ("../../" on a landing page)."""
+    line = held(m)
+    cur = P.presented_version(m, line.dir, line.inv)
+    pin_ver, pin = P.member_pins(m)[-1][:2]
+    obj = line.json(P.OBJ, cur)
+    dc = line.json("datacite.json", cur)
     issued = P.date_of(dc, "Issued")
-    pdf = pdf_address(root, obj_id, inv, cur, obj)
+    pdf = pdf_address(root, line, cur, obj)
     abstract = abstract_html(dc)
     summary = "Description" if obj.get("kind") == "collection" else "Abstract"
+    contested = sign.CONTESTED in (line.status(cur), line.status(pin_ver))
     return "\n".join([
-        f'<li class="paper{" withdrawn" if withdrawn else ""}">',
-        f'<a class="paper-title" href="{root}paper/{obj_id}/">{esc(dc["titles"][0]["title"])}</a>',
+        f'<li class="paper{" withdrawn" if line.withdrawn else ""}">',
+        f'<a class="paper-title" href="{root}paper/{line.slug}/">{esc(dc["titles"][0]["title"])}</a>',
         f'<div class="paper-authors">{esc(authors(dc))}</div>',
         f'<div class="paper-meta">{esc((issued or "")[:4])} · {versions_line(m, obj)}'
         + (f' · <a href="{esc(pdf)}">PDF</a>' if pdf else "")
+        + (' · <span class="contested">contested</span>' if contested else "")
         + f' · <span class="pin" title="{pin}">pin {pin[:32]}…</span></div>',
         f"<details><summary>{summary}</summary>{abstract}</details>" if abstract else "",
         "</li>"])
+
+
+def owner_html(owner, root):
+    """The owner of a line, on a landing page: its name, linked to its page, its keeper and
+    its state."""
+    log = P.key_log(owner)
+    name = f"<code>{esc(owner)}</code>"
+    out = f'<a href="{root}owner/{owner}/">{name}</a>' if log else name
+    keeper = keeper_of(log)
+    if keeper:
+        out += f' · keeper <a href="{esc(keeper)}">{esc(keeper)}</a>'
+    notes = owner_notes(log)
+    return out + (f' · <span class="contested">{esc("; ".join(notes))}</span>' if notes else "")
+
+
+def keeper_of(log):
+    try:
+        return (names.read_genesis(log.genesis).get("keeper") or [None])[0] if log else None
+    except ValueError:
+        return None
+
+
+def owner_notes(log):
+    """What a reader is told about an owner: an end, a fork, a successor, exposed keys."""
+    if log is None:
+        return []
+    out = []
+    if log.fork_point:
+        out.append(f"ended by a fork of its key log at v{log.fork_point}")
+    elif log.ended:
+        out.append("ended")
+    if log.successor:
+        out.append(f"successor {log.successor}")
+    exposed = log.exposed_keys()
+    if exposed:
+        out.append(f"{len(exposed)} key{'s' if len(exposed) != 1 else ''} exposed")
+    return out
+
+
+def owner_page(owner, lines):
+    """The page of OWNER, from its key log held here, listing LINES ([Line])."""
+    log = P.key_log(owner)
+    side = log.side()
+    last = side[-1] if side else None
+    keys = (last.keys or {}) if last else {}
+    facts = [f"<li>Key log <code>sheaf:{esc(owner)}</code>, {len(log.versions)} version"
+             f"{'s' if len(log.versions) != 1 else ''}"
+             + (f"; latest <code>sheaf:{esc(owner)}/v{last.number}?sha512={last.digest}</code>" if last else "")
+             + "</li>"]
+    keeper = keeper_of(log)
+    if keeper:
+        facts.append(f'<li>Keeper: <a href="{esc(keeper)}">{esc(keeper)}</a></li>')
+    latest = log.latest()
+    if latest is not None:
+        facts.append(f"<li>Current keys ({latest.keys['threshold']} of {len(latest.keys['keys'])} sign):"
+                     "<ul>" + "".join(f"<li><code>{esc(k)}</code></li>" for k in latest.keys["keys"])
+                     + "</ul></li>")
+        facts.append(f"<li>Rotation keys committed to: {len(keys.get('next', []))}, of which "
+                     f"{keys.get('nextThreshold')} sign the next version of the key log</li>")
+    facts.append(f"<li>Rotations, exposures and ends: {max(len(side) - 1, 0)}</li>")
+    exposed = sorted(log.exposed_keys())
+    if exposed:
+        facts.append('<li class="contested">Exposed keys (what they alone signed is contested):<ul>'
+                     + "".join(f"<li><code>{esc(k)}</code></li>" for k in exposed) + "</ul></li>")
+    if log.fork_point:
+        facts.append(f'<li class="contested">Ended by a fork of its key log at v{log.fork_point}</li>')
+    elif log.ended:
+        facts.append('<li class="contested">Ended: it signs nothing more</li>')
+    if log.successor:
+        facts.append(f"<li>Successor named by its ending version: <code>{esc(log.successor)}</code></li>")
+    items = [f'<li><a href="../../paper/{ln.slug}/">'
+             f'{esc((ln.json("datacite.json", ln.signed) or {}).get("titles", [{}])[0].get("title", ln.slug))}'
+             f'</a> <code class="small">{esc(full_uri(ln))}</code></li>' for ln in lines]
+    return fill(template("owner.html"), {
+        "root": "../../", "archive_name": esc(P.ARCHIVE["name"]), "base_url": esc(P.ARCHIVE["baseUrl"]),
+        "owner": esc(owner), "facts": "\n".join(facts),
+        "lines": "\n".join(items) if items else '<li class="empty">No lines with a page here.</li>'})

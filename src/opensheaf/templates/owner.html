@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Owner {{owner}} · {{archive_name}}</title>
+<link rel="stylesheet" href="{{root}}style.css">
+</head>
+<body>
+<nav><a href="{{root}}">{{archive_name}}</a></nav>
+<main class="paper-page owner-page">
+  <h1>Owner</h1>
+  <p class="paper-meta"><code>{{owner}}</code></p>
+  <p class="small">An owner is the keyed identity that signs the versions of its lines
+  (section 6 of the specification); its name identifies no one. What it signs is checked
+  against its key log, summarised here as this archive holds it.</p>
+  <section>
+    <h2>Key log</h2>
+    <ul class="facts">
+{{facts}}
+    </ul>
+  </section>
+  <section>
+    <h2>Lines in this archive</h2>
+    <ul class="facts">
+{{lines}}
+    </ul>
+  </section>
+</main>
+<footer>
+  <p>An <a href="https://opensheaf.org">OpenSheaf</a> archive (format 0.2, a draft, which may still change) ·
+  made with <a href="https://github.com/opensheaf/opensheaf-py">opensheaf-py</a></p>
+</footer>
+</body>
+</html>
