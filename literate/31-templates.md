@@ -45,7 +45,8 @@ typeset.
 
 Identifiers a reader pastes elsewhere, `sheaf:` URIs, pins and owner
 names, are marked `<code class="copy">`, and a click on one copies it to
-the clipboard; `data-copy` holds the whole identifier when the page shows
+the clipboard (it is underlined only under the pointer, as a link that is
+only an identifier, the owner of a line, is too); `data-copy` holds the whole identifier when the page shows
 less of it (the pin of a version, shown by the start of its digest). The
 script is inline, so that an archive's page needs no other file, and does
 nothing where the browser has no clipboard: the identifier can still be
@@ -585,5 +586,6 @@ string of hexadecimal digits, and may be broken anywhere.
     code { font-family: var(--os-mono); font-size: 0.75em; word-break: break-all;
            font-variant-ligatures: none; }
     code.copy { border-bottom: 1px dotted transparent; }
+    a:has(> code:only-child):not(:hover):not(:focus-visible) { text-decoration-color: transparent; }
     code.copy:hover { border-bottom-color: var(--os-ink); }
     code.copy.copied::after { content: " copied"; font-family: var(--os-sans); color: var(--os-ok); }
