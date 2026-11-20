@@ -71,7 +71,7 @@ def b58decode(text):
 
 
 ED25519_PUB = b"\xed\x01"   # the multicodec code of ed25519-pub, as a varint
-DID_KEY = re.compile(r"^did:key:z6Mk[1-9A-HJ-NP-Za-km-z]{44}$")
+DID_KEY = re.compile(r"^did:key:z6Mk[1-9A-HJ-NP-Za-km-z]{44}\Z")
 
 
 def did_key(public):
@@ -112,10 +112,10 @@ def short(name):
 GENESIS = "genesis.json"
 GENESIS_FORMAT = "opensheaf-genesis/0.2"
 KINDS = ("document", "collection", "owner")
-NAME = re.compile(r"^[a-z2-7]{52}$")
-OWNER_NAME = re.compile(r"^[a-z2-7]{51}[aq]$")   # names of algorithm 0 (section 5.2)
-CREATED = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?Z$")
-NONCE = re.compile(r"^([0-9a-f]{2}){16,}$")
+NAME = re.compile(r"^[a-z2-7]{52}\Z")
+OWNER_NAME = re.compile(r"^[a-z2-7]{51}[aq]\Z")   # names of algorithm 0 (section 5.2)
+CREATED = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?Z\Z")
+NONCE = re.compile(r"^([0-9a-f]{2}){16,}\Z")
 
 
 def utc_now():
@@ -364,8 +364,8 @@ class SheafURI:
         return nm.startswith(self.name) and (self.owner in (None, "*") or owner.startswith(self.owner))
 
 
-PART = re.compile(r"^[a-z2-7]+$")
-UNRESERVED_OR_ESCAPED = re.compile(r"^(?:[A-Za-z0-9\-._~]|%[0-9A-Fa-f]{2})*$")
+PART = re.compile(r"^[a-z2-7]+\Z")
+UNRESERVED_OR_ESCAPED = re.compile(r"^(?:[A-Za-z0-9\-._~]|%[0-9A-Fa-f]{2})*\Z")
 
 
 def parse_sheaf(text, *, short=False, fold=False):
@@ -423,8 +423,8 @@ def parse_sheaf(text, *, short=False, fold=False):
     return uri
 
 
-ORCID = re.compile(r"^(?:https://orcid\.org/)?([0-9]{4})-([0-9]{4})-([0-9]{4})-([0-9]{3}[0-9X])$")
-KEEPER_DOMAIN = re.compile(r"^https://[a-z0-9.-]+/$")
+ORCID = re.compile(r"^(?:https://orcid\.org/)?([0-9]{4})-([0-9]{4})-([0-9]{4})-([0-9]{3}[0-9X])\Z")
+KEEPER_DOMAIN = re.compile(r"^https://[a-z0-9.-]+/\Z")
 
 
 def orcid_check_digit(digits):

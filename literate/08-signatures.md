@@ -153,14 +153,14 @@ in base64 with padding. Anything else makes it malformed, and so invalid.
 
     # in signatures: reading a signature file:
     FIELDS = {
-        "format": re.compile("^" + re.escape(SIGNATURE_FORMAT) + "$"),
-        "object": re.compile(r"^sheaf:[a-z2-7]{52}:[a-z2-7]{51}[aq]$"),
-        "version": re.compile(r"^v[1-9][0-9]*$"),
-        "inventorySha512": re.compile(r"^[0-9a-f]{128}$"),
+        "format": re.compile("^" + re.escape(SIGNATURE_FORMAT) + "\Z"),
+        "object": re.compile(r"^sheaf:[a-z2-7]{52}:[a-z2-7]{51}[aq]\Z"),
+        "version": re.compile(r"^v[1-9][0-9]*\Z"),
+        "inventorySha512": re.compile(r"^[0-9a-f]{128}\Z"),
         "signer": names.OWNER_NAME,
         "key": names.DID_KEY,
-        "keyLog": re.compile(r"^sheaf:([a-z2-7]{51}[aq])/v([1-9][0-9]*)\?sha512=([0-9a-f]{128})$"),
-        "signature": re.compile(r"^[A-Za-z0-9+/]{86}==$"),
+        "keyLog": re.compile(r"^sheaf:([a-z2-7]{51}[aq])/v([1-9][0-9]*)\?sha512=([0-9a-f]{128})\Z"),
+        "signature": re.compile(r"^[A-Za-z0-9+/]{86}==\Z"),
     }
 
 

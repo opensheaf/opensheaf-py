@@ -1240,7 +1240,7 @@ folders of git and of the tools' staging are not searched.
     # in look for keys left in the archive:
     def look_for_keys(f):
         """Warn of the files of the archive that look like private keys (section 15.4)."""
-        rotation_name = re.compile(r"^rotation-[a-z2-7]{16}-[a-z2-7]{16}\.txt$")
+        rotation_name = re.compile(r"^rotation-[a-z2-7]{16}-[a-z2-7]{16}\.txt\Z")
         for p in sorted(ROOT.rglob("*")):
             rel = p.relative_to(ROOT)
             if rel.parts[0] == ".git" or rel.parts[0].startswith(".staging-") or p.is_symlink() or not p.is_file():

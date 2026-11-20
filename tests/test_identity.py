@@ -359,6 +359,27 @@ def test_rules_of_keys():
     assert len(log.versions) == 1 and log.check() == ([], [])
 
 
+def test_a_final_line_feed_is_refused():
+    from opensheaf import wallet
+    v1 = authors_log(1).versions[0].keys
+    fields = {"format": "opensheaf-keys/0.2", "keys": [K3.did, K3.did + "\n"], "threshold": 2,
+              "next": [R[4].digest], "nextThreshold": 1}
+    assert owners.key_rules(fields, [v1], A) != []
+    for pattern, good in ((names.OWNER_NAME, A), (names.NAME, A), (names.DID_KEY, K3.did),
+                          (names.NONCE, "00" * 16), (sign.FIELDS["version"], "v2")):
+        assert pattern.match(good) and not pattern.match(good + "\n")
+    with pytest.raises(wallet.WalletError):
+        wallet.entry_path(A + "\n", "a" * 16)
+    with pytest.raises(wallet.WalletError):
+        wallet.entry_path(A, "a" * 16 + "\n")
+    obj = "sheaf:" + "a" * 52 + ":" + A
+    pin = names.key_log_pin(A, 1, "0" * 128)
+    good = json.loads(sign.signature_file(K3, obj, "v2", "0" * 128, A, pin))
+    assert sign.read_signature_file(json.dumps(good).encode())
+    with pytest.raises(ValueError, match="keyLog"):
+        sign.read_signature_file(json.dumps(dict(good, keyLog=pin + "\n")).encode())
+
+
 def test_signing_the_key_log():
     log = authors_log(2)
     args = dict(next_keys=R[7:10], next_threshold=2, user=USER_A)

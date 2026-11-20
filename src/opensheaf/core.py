@@ -88,7 +88,7 @@ LAYOUTS = {"owner-name": OWNER_NAME_LAYOUT, "hashed": HASHED_LAYOUT}
 LAYOUT_FILE = "opensheaf-owner-name-storage-layout.md"
 LAYOUT_TEXT = ("Lines at <owner>/<name>/, drafts at draft/<id>/: the owner-name layout of the "
                "OpenSheaf specification 0.2, section 3.2\n")
-LABEL_RE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
+LABEL_RE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*\Z")
 TEXMACS_VERSION = "2.1.5"
 REQUIRED = ("owner", "name", "baseUrl", "mainCollection", "curator", "depositor")
 REBUILD = ("this archive is of specification 0.1, which these tools no longer read: rebuild it under "
@@ -503,7 +503,7 @@ def install_version(obj_id, stage):
     """Add to the storage root the version that add_version(..., stage_in=STAGE) built;
     returns its inventory."""
     stage = Path(stage)
-    ver = next(p.name for p in stage.iterdir() if p.is_dir() and re.match(r"^v[1-9][0-9]*$", p.name))
+    ver = next(p.name for p in stage.iterdir() if p.is_dir() and re.match(r"^v[1-9][0-9]*\Z", p.name))
     inv = json.loads((stage / ver / "inventory.json").read_text(encoding="utf-8"))
     d = obj_dir(obj_id)
     before = load_inventory(d)
@@ -2611,7 +2611,7 @@ def check_presentation(f, disc):
 
 def look_for_keys(f):
     """Warn of the files of the archive that look like private keys (section 15.4)."""
-    rotation_name = re.compile(r"^rotation-[a-z2-7]{16}-[a-z2-7]{16}\.txt$")
+    rotation_name = re.compile(r"^rotation-[a-z2-7]{16}-[a-z2-7]{16}\.txt\Z")
     for p in sorted(ROOT.rglob("*")):
         rel = p.relative_to(ROOT)
         if rel.parts[0] == ".git" or rel.parts[0].startswith(".staging-") or p.is_symlink() or not p.is_file():

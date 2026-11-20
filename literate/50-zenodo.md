@@ -649,7 +649,7 @@ sandbox's copy.
                 problems.append(f"an external entry lacks role, service or record: {e}")
             elif e["role"] not in ("deposit", "source") or not e["record"].startswith("https://"):
                 problems.append(f"an external entry with a bad role or record: {e}")
-            if "doi" in e and not re.match(r"^10\.[0-9]+(\.[0-9]+)*/\S+$", str(e["doi"])):
+            if "doi" in e and not re.match(r"^10\.[0-9]+(\.[0-9]+)*/\S+\Z", str(e["doi"])):
                 problems.append(f"an external entry with a malformed DOI: {e['doi']}")
         if not [e for e in zenodo_entries(obj) if e.get("doi") == doi]:
             problems.append(f"no external entry of the deposit of {doi}")

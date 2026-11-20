@@ -151,7 +151,7 @@ rule explicit, so that a key has one URI and one digest.
 
     # in names: did:key URIs and the digests of keys:
     ED25519_PUB = b"\xed\x01"   # the multicodec code of ed25519-pub, as a varint
-    DID_KEY = re.compile(r"^did:key:z6Mk[1-9A-HJ-NP-Za-km-z]{44}$")
+    DID_KEY = re.compile(r"^did:key:z6Mk[1-9A-HJ-NP-Za-km-z]{44}\Z")
 
 
     def did_key(public):
@@ -215,14 +215,21 @@ the data of extensions.
 The nonce has 128 bits from the operating system's secure generator, as the
 specification requires; tests pass their own.
 
+The patterns that validate end with `\Z`, the end of the text, and never
+with `$`, which in Python also matches before a final line feed: with `$`,
+an owner name followed by a line feed would pass as an owner name, and
+make its way into a path, a command or a signature file. So `match` with
+these patterns checks the whole text, as `fullmatch` would; all the
+validating patterns of the package are written so.
+
     # in names: genesis records:
     GENESIS = "genesis.json"
     GENESIS_FORMAT = "opensheaf-genesis/0.2"
     KINDS = ("document", "collection", "owner")
-    NAME = re.compile(r"^[a-z2-7]{52}$")
-    OWNER_NAME = re.compile(r"^[a-z2-7]{51}[aq]$")   # names of algorithm 0 (section 5.2)
-    CREATED = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?Z$")
-    NONCE = re.compile(r"^([0-9a-f]{2}){16,}$")
+    NAME = re.compile(r"^[a-z2-7]{52}\Z")
+    OWNER_NAME = re.compile(r"^[a-z2-7]{51}[aq]\Z")   # names of algorithm 0 (section 5.2)
+    CREATED = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?Z\Z")
+    NONCE = re.compile(r"^([0-9a-f]{2}){16,}\Z")
 
 
     def utc_now():
@@ -596,8 +603,8 @@ letters, which a resolver MAY do. The hint must be an `https` URL ending
 with `/`, percent-encoded, and is decoded once.
 
     # in names: sheaf: URIs:
-    PART = re.compile(r"^[a-z2-7]+$")
-    UNRESERVED_OR_ESCAPED = re.compile(r"^(?:[A-Za-z0-9\-._~]|%[0-9A-Fa-f]{2})*$")
+    PART = re.compile(r"^[a-z2-7]+\Z")
+    UNRESERVED_OR_ESCAPED = re.compile(r"^(?:[A-Za-z0-9\-._~]|%[0-9A-Fa-f]{2})*\Z")
 
 
     def parse_sheaf(text, *, short=False, fold=False):
@@ -664,8 +671,8 @@ schema pattern can check it, so verifiers do (section 14.3), and the tools
 refuse to write a keeper whose check digit is wrong.
 
     # in names: ORCID iDs and keepers:
-    ORCID = re.compile(r"^(?:https://orcid\.org/)?([0-9]{4})-([0-9]{4})-([0-9]{4})-([0-9]{3}[0-9X])$")
-    KEEPER_DOMAIN = re.compile(r"^https://[a-z0-9.-]+/$")
+    ORCID = re.compile(r"^(?:https://orcid\.org/)?([0-9]{4})-([0-9]{4})-([0-9]{4})-([0-9]{3}[0-9X])\Z")
+    KEEPER_DOMAIN = re.compile(r"^https://[a-z0-9.-]+/\Z")
 
 
     def orcid_check_digit(digits):
