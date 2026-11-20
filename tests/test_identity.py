@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 import stat
+import sys
 from pathlib import Path
 
 import pytest
@@ -667,6 +668,20 @@ def test_current_keys_in_files(tmp_path, monkeypatch, capsys):
     assert keys.current_keys(A, [K1.did]) == [] and keys.current_keys(J, [K3.did]) == []
     with pytest.raises(FileExistsError):
         keys.store_current_key(A, K3)
+    path.chmod(0o644)
+    keys.forget_seen()
+    with pytest.raises(keys.KeyStoreError, match="other users"):
+        keys.current_keys(A, [K3.did])
+    path.chmod(0o600)
+    moved = tmp_path / "elsewhere.key"
+    path.rename(moved)
+    path.symlink_to(moved)
+    keys.forget_seen()
+    with pytest.raises(keys.KeyStoreError, match="symbolic link"):
+        keys.current_keys(A, [K3.did])
+    path.unlink()
+    moved.rename(path)
+    keys.forget_seen()
     monkeypatch.setenv(keys.SIGNING_KEY, base64.b64encode(K5.seed).decode())
     assert [k.did for k in keys.current_keys(A, [K5.did])] == [K5.did]
     with pytest.raises(keys.KeyStoreError):
@@ -680,6 +695,34 @@ def test_current_keys_in_files(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv(keys.KEY_STORE, "elsewhere")
     with pytest.raises(keys.KeyStoreError):
         keys.current_keys(A, [K3.did])
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="the security store is macOS only")
+def test_keys_in_the_keychain_are_read_back(tmp_path, monkeypatch):
+    folder = tmp_path / "keychain"
+    folder.mkdir()
+    bin_ = tmp_path / "bin"
+    bin_.mkdir()
+    fake = bin_ / "security"
+    fake.write_text(f"""#!/bin/sh
+if [ "$1" = "-i" ]; then read -r cmd; set -- $cmd
+  while [ $# -gt 1 ]; do [ "$1" = "-a" ] && a=$2; [ "$1" = "-w" ] && w=$2; shift; done
+  [ -e '{folder}/forget' ] || printf '%s' "$w" > '{folder}'/"$a"; exit 0; fi
+while [ $# -gt 1 ]; do [ "$1" = "-a" ] && a=$2; shift; done
+[ -f '{folder}'/"$a" ] || exit 44; cat '{folder}'/"$a"
+""")
+    fake.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_}:{os.environ['PATH']}")
+    monkeypatch.setenv(keys.KEY_STORE, "security")
+    monkeypatch.delenv(keys.SIGNING_KEY, raising=False)
+    keys.forget_seen()
+    assert keys.store_current_key(A, K3) == "security"
+    keys.forget_seen()
+    assert [k.did for k in keys.current_keys(A, [K3.did])] == [K3.did]
+    (folder / "forget").write_text("")
+    with pytest.raises(keys.KeyStoreError, match="no store kept"):
+        keys.store_current_key(A, K5)
+    keys.forget_seen()
 
 
 FAST = dict(opslimit=pwhash.argon2id.OPSLIMIT_MIN, memlimit=pwhash.argon2id.MEMLIMIT_MIN)

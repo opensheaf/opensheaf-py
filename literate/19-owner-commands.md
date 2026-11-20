@@ -215,7 +215,9 @@ keys there.
 A passphrase is asked twice, without echo, or taken from the environment
 variable `OPENSHEAF_PASSPHRASE`, for scripts, or printed by the command of
 `OPENSHEAF_PASSPHRASE_COMMAND`, run by the shell, whose standard output,
-stripped, is the passphrase: `security find-generic-password -w -s
+less its final line feed, is the passphrase (nothing else is stripped,
+neither there nor from a passphrase typed, so that the same passphrase
+gives the same key whichever way it comes): `security find-generic-password -w -s
 opensheaf-passphrase` reads it from the macOS keychain, `op read
 op://Private/opensheaf/password` from 1Password. A command that fails or
 prints nothing is said so, and the passphrase is asked. An empty
@@ -245,9 +247,10 @@ neither alone gives the keys.
         command = os.environ.get(PASSPHRASE_COMMAND, "").strip()
         if command:
             r = subprocess.run(command, shell=True, capture_output=True, text=True)
-            if r.returncode == 0 and r.stdout.strip():
-                _ASKED["passphrase"] = r.stdout.strip()
-                return _ASKED["passphrase"]
+            given = r.stdout[:-1] if r.stdout.endswith("\n") else r.stdout
+            if r.returncode == 0 and given:
+                _ASKED["passphrase"] = given
+                return given
             print(f"warning: {PASSPHRASE_COMMAND} gave no passphrase: {r.stderr.strip()}", file=sys.stderr)
         import getpass
         first = getpass.getpass(f"Passphrase of the keys in {where}: " if where else "Passphrase of the keys: ")
@@ -1055,7 +1058,10 @@ text of [chapter 7](07-keys.md), to the clipboard, to be pasted into a note
 of a password manager such as the Passwords app of macOS, which keeps it
 in the user's iCloud keychain; `--stdout` prints it instead, the one case
 in which a command prints a secret on its standard output, since it is
-asked for. `--encrypt` encrypts the seed under the passphrase. The key is
+asked for. `--encrypt` encrypts the seed under the passphrase. On the
+clipboard, the key is cleared after a minute ([chapter 9](09-wallets.md)),
+and the command warns that the clipboard is readable by any program of
+the user and may be sent to the user's other devices. The key is
 the one named, or the one current key of the latest version of the key log
 that this device holds.
 
@@ -1090,8 +1096,12 @@ that this device holds.
                 wallet.to_clipboard(text)
             except wallet.WalletError as e:
                 sys.exit(str(e))
+            wallet.clear_later(text)
             print(f"the current key {key.did} of {owner} is on the clipboard: paste it into a note of your "
-                  "password manager (the Passwords app), then copy something else", file=sys.stderr)
+                  f"password manager (the Passwords app) within {int(wallet.CLEAR_AFTER)} seconds, after which "
+                  "osheaf clears the clipboard if it still holds the key", file=sys.stderr)
+            print("warning: any program of yours can read the clipboard, and Universal Clipboard may send it to "
+                  "your other Apple devices nearby", file=sys.stderr)
         print("warning: a current key kept in a password manager is on every device that it syncs with; "
               "section 6.2 has one key per device", file=sys.stderr)
 

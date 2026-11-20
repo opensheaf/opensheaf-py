@@ -253,7 +253,10 @@ Reading a seed from a store is a lookup by owner and key name: the caller
 knows which keys it may use, the `keys` of the latest version of the key
 log, and asks for each in turn. A store that is missing or refuses is
 skipped. A seed is base64; one whose key is not the one it is filed under
-is an error, never used.
+is an error, never used. A key file that is a symbolic link, or that other
+users may read or write (any permission beyond 0600), is refused, with a
+message, rather than read: a link could make the tools read a key from
+elsewhere, and loose permissions mean the key may have leaked.
 
 Each item of a store is read at most once in a command. On macOS, every
 read of a keychain item by a program that the item does not list asks the
@@ -305,7 +308,13 @@ too, under the store `none`, which no read ever reaches.
                                capture_output=True, text=True)
             return r.stdout.strip() if r.returncode == 0 else None
         path = key_folder(owner) / f"{kid}.key"
-        return path.read_text(encoding="ascii").strip() if path.exists() else None
+        if path.is_symlink():
+            raise KeyStoreError(f"{path} is a symbolic link: a key file is a plain file of its own")
+        if not path.exists():
+            return None
+        if path.stat().st_mode & 0o077:
+            raise KeyStoreError(f"{path} can be read by other users: chmod 600 it (and check who read it)")
+        return path.read_text(encoding="ascii").strip()
 
 
     def key_from_base64(text, where):
@@ -351,8 +360,10 @@ that the command does not read it again. A store may accept and forget:
 keyring has a backend that does nothing, chosen only by a user who asks for
 it, which is taken for a store that refuses. With `security`, the seed is
 passed on the standard input of `security -i` rather than on its command
-line, where other users of the machine could see it. The file is created
-with mode 0600, inside a folder of mode 0700, and never replaces another.
+line, where other users of the machine could see it, and read back with
+`find-generic-password -w`: a key is reported kept only once the keychain
+gives the same seed back. The file is created with mode 0600, inside a
+folder of mode 0700, and never replaces another, nor follows a link.
 
     # in keys: where current keys are kept:
     def store_current_key(owner, key, store=None):
@@ -385,10 +396,14 @@ with mode 0600, inside a folder of mode 0700, and never replaces another.
                 return False
             r = subprocess.run(["security", "-i"], input=f"add-generic-password -U -s {SERVICE} -a {account} -w {text}\n",
                                capture_output=True, text=True)
-            return r.returncode == 0
+            if r.returncode != 0:
+                return False
+            back = subprocess.run(["security", "find-generic-password", "-s", SERVICE, "-a", account, "-w"],
+                                  capture_output=True, text=True)
+            return back.returncode == 0 and back.stdout.strip() == text
         folder = key_folder(owner)
         folder.mkdir(parents=True, exist_ok=True, mode=0o700)
-        fd = os.open(folder / f"{kid}.key", os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        fd = os.open(folder / f"{kid}.key", os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
         with os.fdopen(fd, "w", encoding="ascii") as f:
             f.write(text + "\n")
         print(f"warning: the key {kid} of {owner} is kept in {folder / f'{kid}.key'}, protected only by the "
@@ -407,6 +422,16 @@ program of the system whatever Python runs osheaf; with
 osheaf adds no other program itself: `-A` would let every program of the
 user read the key without asking, and a list of programs given with `-T`
 would name the Python binaries of environments that come and go.
+
+Plainly: the keychain protects a current key from other users of the
+computer and from a copy of the disk, not from programs that run as you.
+Once *Always Allow* is answered for `security` (or for a Python), any
+program running as you can run `security find-generic-password -w` (or
+that Python) and read the key, without a question; against malware
+running as you, the keychain is no better than the file store. What
+protects the owner then is that a current key can be retired, and an
+exposed one declared, with the rotation keys, which are kept elsewhere
+(section 6.2).
 
 Hence the advice for running osheaf with `uvx` without installing it: name
 the Python, so that uv runs the same interpreter of its own every time
@@ -742,7 +767,11 @@ and rewritten as an envelope when a passkey is added to it.
         elif method == ["none"]:
             raise KeyStoreError("this key is kept unencrypted: there is nothing to unlock")
         else:
-            seed = decrypt_seed(lines[enc][len("encryption "):], base64.b64decode(lines[seed_at][5:]), passphrase)
+            try:
+                data = base64.b64decode(lines[seed_at][5:].strip(), validate=True)
+            except ValueError:
+                raise KeyStoreError("the seed of the key is damaged") from None
+            seed = decrypt_seed(lines[enc][len("encryption "):], data, passphrase)
             wraps, data = envelope(seed, passphrase, [passkey], opslimit=opslimit, memlimit=memlimit)
             lines[enc:seed_at + 1] = [f"encryption {ENVELOPE}", *wraps, "seed " + _b64(data)]
         return "\n".join(lines) + "\n"

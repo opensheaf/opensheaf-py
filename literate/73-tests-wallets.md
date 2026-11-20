@@ -159,6 +159,7 @@ browser is two seconds.
         monkeypatch.delenv(passkey.UNLOCK, raising=False)
         monkeypatch.setattr(passkey, "OPEN", lambda url: pytest.fail(f"a browser was opened: {url}"))
         monkeypatch.setattr(passkey, "TIMEOUT", 2.0)
+        monkeypatch.setattr(wallet, "CLEAR_AFTER", 0)
         monkeypatch.setenv(keys.TEST_KEYS, ",".join(f"{request.node.name} {i}" for i in range(80)))
         monkeypatch.setattr(keys, "OPSLIMIT", FAST["opslimit"])
         monkeypatch.setattr(keys, "MEMLIMIT", FAST["memlimit"])
@@ -423,7 +424,8 @@ A current key goes to the clipboard (the double's file) as text, and
 nothing secret goes to the standard output; forgotten on the device, it
 comes back from the clipboard. Encrypted, it needs the passphrase. With
 `--stdout` the text is printed, as asked; a rotation key is never
-imported.
+imported. The clipboard is cleared after a while if it still holds the
+key, and left alone if the user copied something else.
 
     # in wallet tests: the clipboard:
     def test_clipboard_round_trip(tmp_path, monkeypatch, capsys):
@@ -458,6 +460,20 @@ imported.
         (tmp_path / "clipboard.txt").write_text(rotation.read_text())
         with pytest.raises(SystemExit, match="never kept on a device"):
             run(*r, "key", "import", "--clipboard")
+        import time
+        clipboard = tmp_path / "clipboard.txt"
+        monkeypatch.setattr(wallet, "CLEAR_AFTER", 0.3)
+        run(*r, "key", "export", "--clipboard")
+        assert "Universal Clipboard" in capsys.readouterr().err
+        for _ in range(100):
+            if clipboard.read_text() == "":
+                break
+            time.sleep(0.05)
+        assert clipboard.read_text() == ""
+        run(*r, "key", "export", "--clipboard")
+        clipboard.write_text("something else")
+        time.sleep(1.0)
+        assert clipboard.read_text() == "something else"
 
 A command wallet
 ----------------

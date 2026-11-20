@@ -355,7 +355,10 @@ removed but by `forget`.
             got = self._api(self._contents(entry_path(owner, kid)))
             if not isinstance(got, dict) or "content" not in got:
                 return None
-            return base64.b64decode(got["content"]).decode("utf-8")
+            try:
+                return base64.b64decode("".join(str(got["content"]).split()), validate=True).decode("utf-8")
+            except (ValueError, UnicodeDecodeError):
+                raise WalletError(f"{self.name}: {entry_path(owner, kid)} is not a key file") from None
 
         def write(self, owner, kid, kind, text):
             self.check_writable()
@@ -605,8 +608,35 @@ another device copies the note and runs `osheaf key import --clipboard`.
 The clipboard is that of macOS, through `pbcopy` and `pbpaste`; `COPY` and
 `PASTE` name the commands, which the tests replace.
 
+A key on the clipboard is a secret in a place that every program of the
+user can read, and that Universal Clipboard may hand to the user's other
+Apple devices nearby. So the command says so, and clears the clipboard
+after a minute (`CLEAR_AFTER`, in seconds), if it still holds the key: a
+small process of its own, detached, waits, and compares the digest of the
+clipboard with that of the key before emptying it, so that what the user
+copied since is left alone, and the key itself is not in its arguments.
+
     # in wallet: the clipboard:
     COPY, PASTE = ["pbcopy"], ["pbpaste"]
+    CLEAR_AFTER = 60.0
+    _CLEAR = """import hashlib, json, subprocess, sys, time
+    time.sleep(float(sys.argv[2]))
+    r = subprocess.run(json.loads(sys.argv[3]), capture_output=True)
+    if r.returncode == 0 and hashlib.sha256(r.stdout).hexdigest() == sys.argv[1]:
+        subprocess.run(json.loads(sys.argv[4]), input=b"")
+    """
+
+
+    def clear_later(text, seconds=None):
+        """Empty the clipboard after SECONDS (CLEAR_AFTER) if it still holds TEXT."""
+        import hashlib
+        seconds = CLEAR_AFTER if seconds is None else seconds
+        if not seconds:
+            return
+        digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
+        subprocess.Popen([sys.executable, "-c", _CLEAR, digest, str(seconds), json.dumps(PASTE), json.dumps(COPY)],
+                         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                         start_new_session=True)
 
 
     def to_clipboard(text):

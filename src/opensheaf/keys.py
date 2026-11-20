@@ -158,7 +158,13 @@ def _read(store, owner, kid):
                            capture_output=True, text=True)
         return r.stdout.strip() if r.returncode == 0 else None
     path = key_folder(owner) / f"{kid}.key"
-    return path.read_text(encoding="ascii").strip() if path.exists() else None
+    if path.is_symlink():
+        raise KeyStoreError(f"{path} is a symbolic link: a key file is a plain file of its own")
+    if not path.exists():
+        return None
+    if path.stat().st_mode & 0o077:
+        raise KeyStoreError(f"{path} can be read by other users: chmod 600 it (and check who read it)")
+    return path.read_text(encoding="ascii").strip()
 
 
 def key_from_base64(text, where):
@@ -225,10 +231,14 @@ def _write(store, owner, kid, text):
             return False
         r = subprocess.run(["security", "-i"], input=f"add-generic-password -U -s {SERVICE} -a {account} -w {text}\n",
                            capture_output=True, text=True)
-        return r.returncode == 0
+        if r.returncode != 0:
+            return False
+        back = subprocess.run(["security", "find-generic-password", "-s", SERVICE, "-a", account, "-w"],
+                              capture_output=True, text=True)
+        return back.returncode == 0 and back.stdout.strip() == text
     folder = key_folder(owner)
     folder.mkdir(parents=True, exist_ok=True, mode=0o700)
-    fd = os.open(folder / f"{kid}.key", os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    fd = os.open(folder / f"{kid}.key", os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
     with os.fdopen(fd, "w", encoding="ascii") as f:
         f.write(text + "\n")
     print(f"warning: the key {kid} of {owner} is kept in {folder / f'{kid}.key'}, protected only by the "
@@ -459,7 +469,11 @@ def add_passkey(text, passphrase, passkey, *, opslimit=None, memlimit=None):
     elif method == ["none"]:
         raise KeyStoreError("this key is kept unencrypted: there is nothing to unlock")
     else:
-        seed = decrypt_seed(lines[enc][len("encryption "):], base64.b64decode(lines[seed_at][5:]), passphrase)
+        try:
+            data = base64.b64decode(lines[seed_at][5:].strip(), validate=True)
+        except ValueError:
+            raise KeyStoreError("the seed of the key is damaged") from None
+        seed = decrypt_seed(lines[enc][len("encryption "):], data, passphrase)
         wraps, data = envelope(seed, passphrase, [passkey], opslimit=opslimit, memlimit=memlimit)
         lines[enc:seed_at + 1] = [f"encryption {ENVELOPE}", *wraps, "seed " + _b64(data)]
     return "\n".join(lines) + "\n"
