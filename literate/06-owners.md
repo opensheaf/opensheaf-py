@@ -60,6 +60,7 @@ The module builds on the names and on the signatures.
     import copy
     import json
     import os
+    import re
     from dataclasses import dataclass, field
     from pathlib import Path
 
@@ -1090,7 +1091,32 @@ files of its witness folder. It records what is wrong in the files, a
 digest that does not match or a missing file, as problems of the key log,
 which its checks report, rather than stopping: a verifier wants them all.
 
+A key log may come from anywhere, a copy fetched from another archive
+among others, and its inventories say where its files are: a path of a
+manifest is used only if it stays inside the object, a relative path
+without `.`, `..` or empty parts, and is in the content folder of a
+version not later than the inventory's, `vN/content/...` (or the
+`contentDirectory` that the inventory names). Any other is a problem of
+the key log, and never read or written.
+
     # in owners: reading and writing a key log on disk:
+    def safe_relative(rel):
+        """Whether REL is a relative path that stays below its base: no leading /, no \\, ., .. or empty parts."""
+        return (isinstance(rel, str) and bool(rel) and not rel.startswith("/") and "\\" not in rel
+                and all(x not in ("", ".", "..") for x in rel.split("/")))
+
+
+    def content_path(cp, inv, n=None):
+        """Whether CP, a path of the manifest of the inventory INV (of version N), is a content path of the
+        object: vK/<contentDirectory>/..., K <= N."""
+        cd = inv.get("contentDirectory", "content") if isinstance(inv, dict) else "content"
+        if not safe_relative(cp) or not safe_relative(cd) or "/" in cd:
+            return False
+        parts = cp.split("/")
+        return (len(parts) >= 3 and re.fullmatch(r"v[1-9][0-9]*", parts[0]) is not None and parts[1] == cd
+                and (n is None or int(parts[0][1:]) <= n))
+
+
     def load_key_log(obj_dir):
         """The key log held in the OCFL object folder OBJ_DIR."""
         obj_dir, problems, versions = Path(obj_dir), [], []
@@ -1114,8 +1140,12 @@ which its checks report, rather than stopping: a verifier wants them all.
             files = {}
             for d, paths in state.items():
                 try:
-                    data = (obj_dir / manifest[d][0]).read_bytes()
-                except (OSError, KeyError, IndexError):
+                    cp = manifest[d][0]
+                    if not content_path(cp, entry, n):
+                        problems.append(f"v{n}: a content path out of the object: {cp!r}")
+                        raise KeyError(cp)
+                    data = (obj_dir / cp).read_bytes()
+                except (OSError, KeyError, IndexError, TypeError):
                     problems.append(f"v{n}: the content of {paths[0]} is missing")
                     data = b""
                 if sha512_hex(data) != d:
@@ -1164,6 +1194,8 @@ holds a valid object at its old head.
             by_digest = {sha512_hex(data): data for data in v.files.values()}
             for d, paths in inv["manifest"].items():
                 for cp in paths:
+                    if not content_path(cp, inv, v.number):
+                        raise OwnerError(f"{obj_dir}: v{v.number}: a content path out of the object: {cp!r}")
                     if cp.startswith(f"v{v.number}/"):
                         (obj_dir / cp).parent.mkdir(parents=True, exist_ok=True)
                         (obj_dir / cp).write_bytes(by_digest[d])

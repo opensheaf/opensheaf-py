@@ -119,6 +119,54 @@ def test_resolution_across_two_archives(tmp_path, capsys):
     assert out["status"] == "verified" and out["pin"] == f"sheaf:{nm}:{owner}/v2?sha512={head_digest(a, 'paper', 'v2')}"
 
 
+def test_what_another_archive_says_is_checked(tmp_path, monkeypatch):
+    a = make(tmp_path, "a")
+    deposit(a, "paper", "one", new=True)
+    for good in ("v1/content/paper.tm", "v12/content/a/b"):
+        assert owners.content_path(good, {}, 12)
+    for bad in ("v1/content/../../x", "/v1/content/x", "v1/other/x", "v2/content/x", "x/content/y", "v1/content",
+                "v1/content//x", "v1\\content\\x", None):
+        assert not owners.content_path(bad, {}, 1), bad
+    assert owners.content_path("v1/data/x", {"contentDirectory": "data"}, 1)
+    for root in ("../x/", "/etc/", "//evil.example/", "https://evil.example/", "ocfl", "a/../../"):
+        folder = tmp_path / ("root" + str(abs(hash(root))))
+        folder.mkdir()
+        (folder / "opensheaf.json").write_text(json.dumps({"specification": "0.2", "storageRoot": root}))
+        with pytest.raises(remote.Unavailable, match="storage root"):
+            remote.Source(str(folder)).object_path(line(a, "paper"))
+    src = remote.Source(str(a))
+    monkeypatch.setattr(remote, "MAX_FETCH_FILES", 3)
+    with pytest.raises(remote.Unavailable, match="more than 3 files"):
+        remote.fetch_object(src, line(a, "paper"), tmp_path / "copy1")
+    monkeypatch.setattr(remote, "MAX_FETCH_FILES", 20000)
+    tampered = tmp_path / "tampered"
+    shutil.copytree(a, tampered)
+    d = tampered / remote.Source(str(a)).object_path(line(a, "paper"))
+    inv = json.loads((d / "v1" / "inventory.json").read_bytes())
+    first = next(iter(inv["manifest"]))
+    inv["manifest"][first] = ["v1/content/../../../../escaped"]
+    data = json.dumps(inv).encode()
+    for f in (d / "v1" / "inventory.json", d / "inventory.json"):
+        f.write_bytes(data)
+        f.with_name(f.name + ".sha512").write_bytes(owners.sidecar(data))
+    with pytest.raises(remote.Unavailable, match="out of the object"):
+        remote.fetch_object(remote.Source(str(tampered)), line(a, "paper"), tmp_path / "copy2")
+    assert not (tmp_path / "escaped").exists()
+    owner = P.ARCHIVE["owner"]
+    kd = tmp_path / "keylog"
+    shutil.copytree(a / remote.Source(str(a)).object_path(f"sheaf:{owner}:{owner}"), kd)
+    kinv = json.loads((kd / "v1" / "inventory.json").read_bytes())
+    state = kinv["versions"]["v1"]["state"]
+    k0 = next(dg for dg, paths in state.items() if paths != ["genesis.json"])
+    kinv["manifest"][k0] = ["v1/content/../../../outside"]
+    kdata = json.dumps(kinv).encode()
+    (kd / "v1" / "inventory.json").write_bytes(kdata)
+    (kd / "v1" / "inventory.json.sha512").write_bytes(owners.sidecar(kdata))
+    (tmp_path / "outside").write_text("not read")
+    log = owners.load_key_log(kd)
+    assert any("a content path out of the object" in p for p in log.problems)
+
+
 class Quiet(http.server.SimpleHTTPRequestHandler):
     def log_message(self, *args):
         pass

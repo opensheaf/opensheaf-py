@@ -7,6 +7,7 @@ of section 14.3, and key logs read from and written to OCFL object folders."""
 import copy
 import json
 import os
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -708,6 +709,23 @@ def _count(items, noun):
     return f"{len(items)} {noun}" + ("" if len(items) == 1 else "s")
 
 
+def safe_relative(rel):
+    """Whether REL is a relative path that stays below its base: no leading /, no \\, ., .. or empty parts."""
+    return (isinstance(rel, str) and bool(rel) and not rel.startswith("/") and "\\" not in rel
+            and all(x not in ("", ".", "..") for x in rel.split("/")))
+
+
+def content_path(cp, inv, n=None):
+    """Whether CP, a path of the manifest of the inventory INV (of version N), is a content path of the
+    object: vK/<contentDirectory>/..., K <= N."""
+    cd = inv.get("contentDirectory", "content") if isinstance(inv, dict) else "content"
+    if not safe_relative(cp) or not safe_relative(cd) or "/" in cd:
+        return False
+    parts = cp.split("/")
+    return (len(parts) >= 3 and re.fullmatch(r"v[1-9][0-9]*", parts[0]) is not None and parts[1] == cd
+            and (n is None or int(parts[0][1:]) <= n))
+
+
 def load_key_log(obj_dir):
     """The key log held in the OCFL object folder OBJ_DIR."""
     obj_dir, problems, versions = Path(obj_dir), [], []
@@ -731,8 +749,12 @@ def load_key_log(obj_dir):
         files = {}
         for d, paths in state.items():
             try:
-                data = (obj_dir / manifest[d][0]).read_bytes()
-            except (OSError, KeyError, IndexError):
+                cp = manifest[d][0]
+                if not content_path(cp, entry, n):
+                    problems.append(f"v{n}: a content path out of the object: {cp!r}")
+                    raise KeyError(cp)
+                data = (obj_dir / cp).read_bytes()
+            except (OSError, KeyError, IndexError, TypeError):
                 problems.append(f"v{n}: the content of {paths[0]} is missing")
                 data = b""
             if sha512_hex(data) != d:
@@ -773,6 +795,8 @@ def write_key_log(obj_dir, log):
         by_digest = {sha512_hex(data): data for data in v.files.values()}
         for d, paths in inv["manifest"].items():
             for cp in paths:
+                if not content_path(cp, inv, v.number):
+                    raise OwnerError(f"{obj_dir}: v{v.number}: a content path out of the object: {cp!r}")
                 if cp.startswith(f"v{v.number}/"):
                     (obj_dir / cp).parent.mkdir(parents=True, exist_ok=True)
                     (obj_dir / cp).write_bytes(by_digest[d])

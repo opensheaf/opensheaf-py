@@ -23,6 +23,8 @@ from . import core as P, names, owners, sign
 UA = {"User-Agent": "opensheaf-py (https://github.com/opensheaf/opensheaf-py)"}
 TIMEOUT = 30
 MAX_BYTES = 1 << 30
+MAX_FETCH_BYTES = 4 << 30
+MAX_FETCH_FILES = 20000
 LOCATIONS = "OPENSHEAF_LOCATIONS"
 
 
@@ -123,10 +125,17 @@ class Source:
             self._disc = disc
         return self._disc
 
+    def storage_root(self):
+        """The storage root of the archive, a relative path ending with /."""
+        root = self.discovery().get("storageRoot", "ocfl/")
+        if not isinstance(root, str) or ":" in root or not owners.safe_relative(root.rstrip("/")) \
+                or not root.endswith("/"):
+            raise Unavailable(f"{self}: the storage root {root!r} is not a relative path below the archive")
+        return root
+
     def object_path(self, obj_id):
         """The path of the object OBJ_ID below the base, in the archive's layout (section 3.2)."""
-        disc = self.discovery()
-        return disc.get("storageRoot", "ocfl/") + P.path_of(obj_id, disc.get("storageLayout"))
+        return self.storage_root() + P.path_of(obj_id, self.discovery().get("storageLayout"))
 
     def object_url(self, obj_id, version):
         """The URL of VERSION of OBJ_ID at the base URL recorded (section 9.1), or None."""
@@ -153,8 +162,7 @@ class Source:
 
 
 def safe_path(rel):
-    parts = rel.split("/")
-    return rel and not rel.startswith("/") and "\\" not in rel and all(x not in ("", ".", "..") for x in parts)
+    return owners.safe_relative(rel)
 
 
 def fetch_object(src, obj_id, dest, *, upto=None, witness_names=None):
@@ -172,12 +180,30 @@ def fetch_object(src, obj_id, dest, *, upto=None, witness_names=None):
     upto = min(upto or head, head)
     dest.mkdir(parents=True)
     (dest / "0=ocfl_object_1.1").write_text("ocfl_object_1.1\n")
-    last = None
+    last, fetched = None, [0, 0]
+
+    def get(rel):
+        data = src.get(rel)
+        if data is not None:
+            fetched[0] += 1
+            fetched[1] += len(data)
+            if fetched[0] > MAX_FETCH_FILES or fetched[1] > MAX_FETCH_BYTES:
+                raise Unavailable(f"{src}: {obj_id} has more than {MAX_FETCH_FILES} files or "
+                                  f"{MAX_FETCH_BYTES} bytes: not copied (section 15.2)")
+        return data
+
     for n in range(1, upto + 1):
-        data = src.get(f"{base}/v{n}/inventory.json")
-        sc = src.get(f"{base}/v{n}/inventory.json.sha512")
+        data = get(f"{base}/v{n}/inventory.json")
+        sc = get(f"{base}/v{n}/inventory.json.sha512")
         if data is None or sc is None or owners.sidecar_digest(sc) != names.sha512_hex(data):
             raise Unavailable(f"{src}: {obj_id} v{n} has no inventory with its checksum file (section 4.1)")
+        try:
+            inv_n = json.loads(data)
+            bad = [cp for ps in inv_n["manifest"].values() for cp in ps if not owners.content_path(cp, inv_n, n)]
+        except (ValueError, KeyError, TypeError, AttributeError):
+            raise Unavailable(f"{src}: the inventory of {obj_id} v{n} cannot be read") from None
+        if bad:
+            raise Unavailable(f"{src}: {obj_id} v{n}: a content path out of the object: {bad[0]!r}")
         (dest / f"v{n}").mkdir()
         (dest / f"v{n}" / "inventory.json").write_bytes(data)
         (dest / f"v{n}" / "inventory.json.sha512").write_bytes(sc)
@@ -187,9 +213,9 @@ def fetch_object(src, obj_id, dest, *, upto=None, witness_names=None):
         raise Unavailable(f"{src}: the inventory of {obj_id} v{upto} is not one of that version")
     for dig, paths in inv.get("manifest", {}).items():
         for cp in paths:
-            if not safe_path(cp) or not cp.startswith("v"):
+            if not owners.content_path(cp, inv, upto):
                 raise Unavailable(f"{src}: {obj_id}: a content path out of the object: {cp!r}")
-            data = src.get(f"{base}/{cp}")
+            data = get(f"{base}/{cp}")
             if data is None or names.sha512_hex(data) != dig:
                 raise Unavailable(f"{src}: {obj_id}: {cp} is missing, or does not have its digest")
             (dest / cp).parent.mkdir(parents=True, exist_ok=True)
@@ -204,7 +230,7 @@ def fetch_object(src, obj_id, dest, *, upto=None, witness_names=None):
         for name in found:
             if not safe_path(name) or "/" in name:
                 continue
-            data = src.get(f"{folder}/{name}")
+            data = get(f"{folder}/{name}")
             if data is not None:
                 (dest / sign.WITNESSES / f"v{n}").mkdir(parents=True, exist_ok=True)
                 (dest / sign.WITNESSES / f"v{n}" / name).write_bytes(data)
@@ -372,7 +398,7 @@ class Resolver:
                     base = origin + u.path[:k]
                     src = self.sources.get(base) or Source(base)
                     try:
-                        root = urllib.parse.urljoin(base, src.discovery().get("storageRoot", "ocfl/"))
+                        root = urllib.parse.urljoin(base, src.storage_root())
                     except Unavailable:
                         continue
                     if not root.endswith("/"):
