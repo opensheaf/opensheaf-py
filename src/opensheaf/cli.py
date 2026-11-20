@@ -9,7 +9,7 @@ Commands:
   init                   create an archive (osheaf.json, storage root, owner, main catalogue)
   owner init|rotate|expose|end|show   make an owner, change its keys, end it, show it
   key new                a new current key for this device
-  key push|pull|list|forget   current keys to and from a key wallet (--keys)
+  key push|pull|list|forget   current keys to and from a key wallet (--wallet)
   key export|import --clipboard   a key to and from a password manager
   key enroll|unlock      a passkey (Touch ID) opens the keys of the wallet
   deposit LABEL [SOURCE] deposit a document (TeXmacs, or any source with --pdf);
@@ -314,15 +314,18 @@ def build_parser():
     kls = ksub.add_parser("list", help="what the key wallet holds: owner, key, kind, did:key (no secrets)")
     kf = ksub.add_parser("forget", help="remove keys from this device, and with --wallet from the wallet")
     kf.add_argument("did", nargs="*", metavar="DID", help="the keys to forget")
-    kf.add_argument("--wallet", action="store_true", help="also remove them from the key wallet")
+    kf.add_argument("--from-wallet", action="store_true", help="also remove them from the key wallet")
     kf.add_argument("--used", action="store_true",
-                    help="with --wallet: remove the keys the latest version of the key log no longer needs")
+                    help="with --from-wallet: remove the keys the latest version of the key log no longer needs")
+    kf.add_argument("--passkey", metavar="CRED",
+                    help="remove instead the passkey wraps of this credential from the keys in the wallet")
+    kf.add_argument("--rp", metavar="RP", help="remove instead the passkey wraps of this relying party "
+                    "(e.g. opensheaf.org) from the keys in the wallet")
     kf.add_argument("--force", action="store_true", help="also remove rotation keys still committed")
     kf.add_argument("--yes", action="store_true", help="do not ask to confirm the removal (scripts)")
     for x in (kp, kl, kls, kf):
         x.add_argument("--owner", help="an owner the archive hosts (default: the archive's)")
-        x.add_argument("--keys", metavar="WALLET", help="the key wallet, github:OWNER/REPO or command "
-                       "(default: the one configured)")
+        wallet_option(x)
     ke = ksub.add_parser("export", help="copy a current key to the clipboard, for a password manager")
     ke.add_argument("did", nargs="?", metavar="DID", help="the key (default: the owner's one key on this device)")
     ke.add_argument("--owner", help="the owner (default: the archive's)")
@@ -339,8 +342,7 @@ def build_parser():
     ku = ksub.add_parser("unlock", help="open the keys of the wallet with the passkey; pull the current keys")
     for x in (ken, ku):
         x.add_argument("--owner", help="the owner (default: the archive's)")
-        x.add_argument("--keys", metavar="WALLET", help="the key wallet, github:OWNER/REPO or command "
-                       "(default: the one configured)")
+        wallet_option(x)
         x.add_argument("--no-browser", action="store_true", help="print the address of the page, do not open it")
     k.set_defaults(func=None)
     sub.add_parser("help-config", help="describe osheaf.json").set_defaults(func=None)
@@ -415,6 +417,11 @@ def level_options(p, new_keys=True):
     if new_keys:
         p.add_argument("--plain-current", action="store_true",
                        help="in a wallet, keep the current keys unencrypted")
+
+
+def wallet_option(p):
+    p.add_argument("--wallet", metavar="WALLET", help="the key wallet, github:OWNER/REPO or command "
+                   "(default: the one configured)")
 
 
 def export_options(p):

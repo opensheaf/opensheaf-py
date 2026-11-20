@@ -100,7 +100,8 @@ SHA-1) required to replace or delete it, and the 404 of the real API
     if repo not in repos:
         not_found()
     if len(parts) == 3:
-        print(json.dumps({"full_name": repo, "private": repos[repo]}))
+        vis = repos[repo] if isinstance(repos[repo], str) else "private" if repos[repo] else "public"
+        print(json.dumps({"full_name": repo, "private": vis != "public", "visibility": vis}))
         sys.exit(0)
     full = os.path.join(state, "contents", repo, *parts[4:])
     sha = lambda f: hashlib.sha1(open(f, "rb").read()).hexdigest()
@@ -164,7 +165,8 @@ browser is two seconds.
         keys.forget_seen()
         gh = tmp_path / "gh-state"
         gh.mkdir()
-        (gh / "repos.json").write_text(json.dumps({"me/keys": True, "me/open": False, "me/papers": True}))
+        (gh / "repos.json").write_text(json.dumps({"me/keys": True, "me/open": False, "me/papers": True,
+                                                       "me/internal": "internal"}))
         monkeypatch.setenv("FAKE_GH_DIR", str(gh))
         monkeypatch.setenv("FAKE_GH_AUTH", "1")
         bin_ = tmp_path / "bin"
@@ -260,7 +262,7 @@ of its GitHub Pages address.
 The GitHub wallet refuses
 -------------------------
 
-Nothing is written to a public repository, nor to the archive's own (here
+Nothing is written to a public or internal repository, nor to the archive's own (here
 the repository of its git remote), nor to one that does not exist; a
 missing or signed-out `gh` is said so. The log of the double shows that no
 `PUT` was ever sent.
@@ -274,17 +276,19 @@ missing or signed-out `gh` is said so. The log of the double shows that no
         monkeypatch.setenv(P.PASSPHRASE, "correct horse")
         r = ["--root", str(root), "key", "push"]
         with pytest.raises(SystemExit, match="not a private repository"):
-            run(*r, "--keys", "github:me/open")
+            run(*r, "--wallet", "github:me/open")
+        with pytest.raises(SystemExit, match="not a private repository"):
+            run(*r, "--wallet", "github:me/internal")
         with pytest.raises(SystemExit, match="repository of the archive"):
-            run(*r, "--keys", "github:me/papers")
+            run(*r, "--wallet", "github:me/papers")
         with pytest.raises(SystemExit, match="no repository me/missing"):
-            run(*r, "--keys", "github:me/missing")
+            run(*r, "--wallet", "github:me/missing")
         monkeypatch.setenv("FAKE_GH_AUTH", "0")
         with pytest.raises(SystemExit, match="not signed in"):
-            run(*r, "--keys", "github:me/keys")
+            run(*r, "--wallet", "github:me/keys")
         monkeypatch.setattr(wallet, "GH", str(tmp_path / "no-gh"))
         with pytest.raises(SystemExit, match="needs the GitHub CLI"):
-            run(*r, "--keys", "github:me/keys")
+            run(*r, "--wallet", "github:me/keys")
         assert not [c for c in gh_calls(tmp_path) if "PUT" in c or "DELETE" in c]
         assert in_repo(tmp_path, "me/open") == {} and in_repo(tmp_path, "me/papers") == {}
 
@@ -305,19 +309,19 @@ back, and signs. A machine whose archive names the wallet (here through
         monkeypatch.setenv(P.PASSPHRASE, "correct horse")
         r = ["--root", str(root)]
         capsys.readouterr()
-        run(*r, "key", "push", "--keys", "github:me/keys")
+        run(*r, "key", "push", "--wallet", "github:me/keys")
         out, err = capsys.readouterr()
         assert wallet.risk("github:me/keys", owner) in err and "pushed to github:me/keys" in out
         files = in_repo(tmp_path)
         assert list(files) == [f"{owner}/{kid}.key.enc"]
         assert "kind current" in files[f"{owner}/{kid}.key.enc"] and "wrap passphrase argon2id" in files[f"{owner}/{kid}.key.enc"]
-        run(*r, "key", "list", "--keys", "github:me/keys")
+        run(*r, "key", "list", "--wallet", "github:me/keys")
         out = capsys.readouterr().out
         assert out.split() == [owner, kid, "current", current, "v1"]
         seed = (tmp_path / "config" / "opensheaf" / "keys" / owner / f"{kid}.key").read_text().strip()
         run(*r, "key", "forget", current)
         assert local_keys(tmp_path, owner) == []
-        run(*r, "key", "pull", "--keys", "github:me/keys")
+        run(*r, "key", "pull", "--wallet", "github:me/keys")
         assert local_keys(tmp_path, owner) == [f"{kid}.key"]
         assert "Pulled 1 current key of" in capsys.readouterr().out
         run(*r, "key", "forget", current)
@@ -339,7 +343,7 @@ stated. A rotation reads the rotation keys from the wallet, asking no
 files, and keeps the new ones there. Moving up, `owner rotate --keys
 offline --export DIR`, signs with the keys of the wallet and exports the
 new ones only: the wallet's are used up, which the command says, and
-`key forget --wallet --used` removes them, keeping the current key. The
+`key forget --from-wallet --used` removes them, keeping the current key. The
 next rotation finds no rotation keys in the wallet, and needs the files.
 No secret is ever printed on the standard output.
 
@@ -375,7 +379,7 @@ No secret is ever printed on the standard output.
         v3 = P.key_log(owner).latest().keys
         assert not {f"{owner}/{d[:16]}.key.enc" for d in v3["next"]} & set(in_repo(tmp_path))
         assert len(list((tmp_path / "usb").glob("rotation-*.txt"))) == 3
-        run(*r, "key", "forget", "--wallet", "--used", "--yes")
+        run(*r, "key", "forget", "--from-wallet", "--used", "--yes")
         assert sorted(in_repo(tmp_path)) == sorted(f"{owner}/{names.key_id(d)}.key.enc" for d in v3["keys"])
         with pytest.raises(SystemExit, match="holds 0 of the rotation keys of v3"):
             run(*r, "owner", "rotate", "--export", str(tmp_path / "usb2"), "--yes")
@@ -401,10 +405,10 @@ rotation keys and encrypts three.
         did = next(x.split()[1] for x in rotation.splitlines() if x.startswith("key "))
         r = ["--root", str(root)]
         with pytest.raises(SystemExit, match="--force removes them"):
-            run(*r, "key", "forget", "--wallet", did, "--yes")
+            run(*r, "key", "forget", "--from-wallet", did, "--yes")
         monkeypatch.setattr("builtins.input", lambda prompt: "no")
         with pytest.raises(SystemExit, match="not confirmed"):
-            run(*r, "key", "forget", "--wallet", did, "--force")
+            run(*r, "key", "forget", "--from-wallet", did, "--force")
         assert len(in_repo(tmp_path)) == 4
         monkeypatch.delenv(P.PASSPHRASE)
         asked = []
@@ -458,13 +462,16 @@ imported.
 A command wallet
 ----------------
 
-A wallet of commands, configured in `osheaf.json`, here commands that keep
+A wallet of commands, configured in the user's configuration file, here
+commands that keep
 each key as a file `<owner>-<k>-<kind>.txt` of a folder of the test, as a
 password manager would keep an item: an owner made offline moves to it with
 a rotation, and the next rotation reads its rotation keys there. The
 listing uses the `list` command. `OPENSHEAF_WALLET` overrides the
 configuration: here, with a wallet of JSON, the same commands in another
-folder, which holds nothing.
+folder, which holds nothing. The same commands in `osheaf.json` are
+refused, before any is run, with a message that says where they belong; a
+GitHub wallet there is accepted.
 
     # in wallet tests: a command wallet:
     def test_command_wallet(tmp_path, monkeypatch, capsys):
@@ -478,9 +485,9 @@ folder, which holds nothing.
                     "write": f"cat > '{folder}/{{owner}}-{{k}}-{{kind}}.txt'",
                     "list": f"ls '{folder}' | sed 's/-/ /g'"}
 
-        cfg = json.loads((root / "osheaf.json").read_text())
-        cfg["keys"] = commands(vault)
-        (root / "osheaf.json").write_text(json.dumps(cfg))
+        user = wallet.user_config_path()
+        user.parent.mkdir(parents=True, exist_ok=True)
+        user.write_text(json.dumps({"keys": commands(vault)}))
         monkeypatch.setenv(P.PASSPHRASE, "correct horse")
         r = ["--root", str(root)]
         usb = sorted(str(f) for f in (tmp_path / "usb").glob("rotation-*.txt"))
@@ -502,6 +509,19 @@ folder, which holds nothing.
         monkeypatch.setenv(wallet.WALLET, "command")
         run(*r, "owner", "end")
         assert P.key_log(owner).ended and P.verify_errors() == []
+        monkeypatch.delenv(wallet.WALLET)
+        cfg = json.loads((root / "osheaf.json").read_text())
+        planted = tmp_path / "planted"
+        cfg["keys"] = {"wallet": "command", "read": f"touch '{planted}'", "write": f"touch '{planted}'",
+                       "list": f"touch '{planted}'"}
+        (root / "osheaf.json").write_text(json.dumps(cfg))
+        with pytest.raises(SystemExit, match="Move .keys. to .*config.json"):
+            run(*r, "key", "list")
+        assert not planted.exists()
+        cfg["keys"] = {"wallet": "github:me/keys"}
+        (root / "osheaf.json").write_text(json.dumps(cfg))
+        user.unlink()
+        run(*r, "key", "list")
 
 Passkey unlock
 --------------
@@ -527,7 +547,7 @@ passkeys that could open it.
         assert "encryption argon2id-secretbox" in old and keys.read_key(old, "pass").key.did == k.did
         pk = keys.Passkey("Y3JlZGVudGlhbC0x", keys.passkey_salt(owner), kek=keys.passkey_kek(b"\1" * 32))
         new = keys.add_passkey(old, "pass", pk, **FAST)
-        assert "encryption envelope-secretbox\nwrap passphrase argon2id" in new and "wrap passkey prf rp=opensheaf.org " \
+        assert "encryption envelope-secretbox\nwrap passphrase argon2id" in new and "wrap passkey prf rp=unlock.opensheaf.org " \
             "cred=Y3JlZGVudGlhbC0x" in new
         assert keys.read_key(new, keks={pk.cred: pk.kek}).key.did == k.did == keys.read_key(new, "pass").key.did
         with pytest.raises(keys.PassphraseNeeded) as e:
@@ -541,59 +561,122 @@ passkeys that could open it.
         with pytest.raises(keys.KeyStoreError, match="nothing to unlock"):
             keys.add_passkey(keys.key_file_text(k, owner, keys.CURRENT), None, pk)
 
+A wrap of the first relying party, `opensheaf.org`, as the first
+enrolments wrote them, is still read and opens with its key, and with the
+passphrase; `remove_passkeys` takes the wraps of a relying party or of a
+credential away, and nothing else, and never the passphrase wrap. A
+passkey read from a file opens with the right key only. A file that asks
+Argon2id for more than the "sensitive" cost, or less than the minimum, is
+refused before Argon2id runs.
+
+    # in wallet tests: passkey unlock:
+    def test_passkey_wraps_old_and_removed():
+        owner = "a" * 52
+        k = keys.example_key("wallet passkey")
+        old_rp = keys.Passkey("b2xkLWNyZWRlbnRpYWw", keys.passkey_salt(owner), rp="opensheaf.org",
+                              kek=keys.passkey_kek(b"\4" * 32))
+        new_rp = keys.Passkey("bmV3LWNyZWRlbnRpYWw", keys.passkey_salt(owner), kek=keys.passkey_kek(b"\5" * 32))
+        text = keys.key_file_text(k, owner, keys.CURRENT, 1, "pass", passkeys=[old_rp, new_rp], **FAST)
+        assert "wrap passkey prf rp=opensheaf.org cred=b2xkLWNyZWRlbnRpYWw" in text
+        assert keys.read_key(text, keks={old_rp.cred: old_rp.kek}).key.did == k.did
+        found = {p.cred: p for p in keys.passkeys_of(text)}
+        assert found[old_rp.cred].rp == "opensheaf.org" and found[new_rp.cred].rp == "unlock.opensheaf.org"
+        assert found[new_rp.cred].opens(new_rp.kek) and not found[new_rp.cred].opens(old_rp.kek)
+        moved = keys.remove_passkeys(text, rp="opensheaf.org")
+        assert "rp=opensheaf.org" not in moved and moved.count("wrap passkey") == 1
+        assert keys.read_key(moved, "pass").key.did == keys.read_key(moved, keks={new_rp.cred: new_rp.kek}).key.did
+        bare = keys.remove_passkeys(moved, cred=new_rp.cred)
+        assert "wrap passkey" not in bare and keys.read_key(bare, "pass").key.did == k.did
+        assert keys.remove_passkeys(bare, rp="opensheaf.org") == bare
+        with pytest.raises(keys.KeyStoreError):
+            keys.remove_passkeys(text)
+        a = pwhash.argon2id
+        for ops, mem in ((a.OPSLIMIT_SENSITIVE + 1, a.MEMLIMIT_MIN), (a.OPSLIMIT_MIN, a.MEMLIMIT_SENSITIVE * 4),
+                         (0, a.MEMLIMIT_MIN)):
+            costly = text.replace(f"opslimit={FAST['opslimit']} memlimit={FAST['memlimit']}",
+                                  f"opslimit={ops} memlimit={mem}")
+            with pytest.raises(keys.KeyStoreError, match="out of bounds"):
+                keys.read_key(costly, "pass")
+
 The hand-off is fixed by a test vector, which the tests of the page
-(`tests/unlock.test.mjs` of the manager) check too, with WebCrypto: from
-these two private keys, this state and this secret, the page sends this
-public key and this ciphertext, and the listener opens it. Any other state
-or key gives another secret.
+(`tests/unlock.test.mjs` of opensheaf/unlock) check too, with WebCrypto:
+from these two private keys, this state, mode, owner and credential, and
+this secret, the page sends this public key, this ciphertext and this tag,
+and the listener opens it; the page shows this confirmation code. Any
+other state, mode, owner, credential, key or ciphertext is refused.
 
     # in wallet tests: passkey unlock:
     HAND_OFF = {"sk": "3MnQ1WVJ9j-gIHW04onidnPAdXBkj8Ex38awjc_xIFU", "pk": "EDUGNAoWiXZye3oZT1uexqCDj6g-_pOiwL6N01HzQX0",
                 "esk": "XsIioGnOBETGr9GuOkvzh0s9Mnee8lz8KkfLHClLxGc", "epk": "wz_hpV5NNJh92Eqb4TE6dA7IVbA2LrWBmV8GisGgjBE",
-                "state": "Zaz8C5ywR4VKbNOX7dQHUg", "secret": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
-                "ct": "zFOj0v4rRRRpaSyM_xRgRRWo-SH_pdvdYHDVc--it4k"}
+                "state": "Zaz8C5ywR4VKbNOX7dQHUg", "mode": "unlock",
+                "owner": "em4v3kp5btra7jlggxhvl5y6uluymzk2ezcdjg4pnptnk5tygora", "cred": "ZmFrZS1wYXNza2V5LWNyZWRlbnRpYWw",
+                "secret": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+                "ct": "715olE38lfUKZdHslhzg2vWDWtGo88nSvuZNo4v-Hrc", "tag": "2MlYwfCCb9AS4OVAMHXml-cxWi4HCPyd34BNYNVGeyU",
+                "code": "371 704"}
 
 
     def test_hand_off_vector():
-        v = {k: passkey.from_b64url(x) if k != "state" else x for k, x in HAND_OFF.items()}
+        text = ("state", "mode", "owner", "cred", "code")
+        v = {k: x if k in text else passkey.from_b64url(x) for k, x in HAND_OFF.items()}
         sk, esk = PrivateKey(v["sk"]), PrivateKey(v["esk"])
         assert bytes(sk.public_key) == v["pk"] and bytes(esk.public_key) == v["epk"]
         assert v["secret"] == bytes(range(32))
-        assert passkey.seal(v["secret"], v["pk"], v["state"], esk) == (v["epk"], v["ct"])
-        assert passkey.unseal(sk, v["epk"], v["ct"], v["state"]) == v["secret"]
-        assert passkey.unseal(sk, v["epk"], v["ct"], "another state") != v["secret"]
-        assert passkey.unseal(esk, v["pk"], v["ct"], v["state"]) == v["secret"]
+        context = (v["state"], v["mode"], v["owner"], v["cred"])
+        assert passkey.seal(v["secret"], v["pk"], *context, esk) == (v["epk"], v["ct"], v["tag"])
+        assert passkey.unseal(sk, v["epk"], v["ct"], v["tag"], *context) == v["secret"]
+        assert passkey.confirmation_code(v["state"], v["pk"]) == v["code"]
+        changed = [(v["epk"], v["ct"], v["tag"], "another state", *context[1:]),
+                   (v["epk"], v["ct"], v["tag"], v["state"], "enroll", *context[2:]),
+                   (v["epk"], v["ct"], v["tag"], *context[:2], "a" * 52, v["cred"]),
+                   (v["epk"], v["ct"], v["tag"], *context[:3], "b3RoZXI"),
+                   (v["epk"], bytes([v["ct"][0] ^ 1]) + v["ct"][1:], v["tag"], *context),
+                   (v["epk"], v["ct"], bytes(32), *context),
+                   (bytes(sk.public_key), v["ct"], v["tag"], *context)]
+        for args in changed:
+            with pytest.raises(ValueError):
+                passkey.unseal(sk, *args)
+        with pytest.raises(ValueError):
+            passkey.unseal(sk, v["epk"], v["ct"][:16], v["tag"], *context)
         assert passkey.hkdf(b"\x0b" * 22, bytes(range(13)), bytes(range(0xf0, 0xfa)), 42).hex() == (
             "3cb25f25faacd57a90434f64d0362f2a2d2d0a90cf1a5a4c5db02d56ecc4c5bf34007208d5b887185865")
-        with pytest.raises(ValueError):
-            passkey.unseal(sk, v["epk"], v["ct"][:16], v["state"])
 
 The double of the browser reads the address of the page as the page
-does, checks the salt, and goes back to the listener as the page would,
-from another thread: it encrypts a PRF secret of its own (a digest of the
-credential and the salt, stable as a real one is) to the public key of
-the listener, and sends it in the address of a `GET`; or it sends an
-error, or a wrong state, or nothing at all. It records the queries of the
-pages it opened, and the addresses it went to.
+does, from its fragment, computes the salt from the owner, and goes back
+to the listener as the page would, from another thread: it encrypts a PRF
+secret of its own (a digest of the credential and the salt, stable as a
+real one is) to the public key of the listener, and sends it in the
+address of a `GET`; or it sends an error, or a wrong state, or a forged
+answer, or nothing at all. To enroll, it makes a new credential, unless
+the provider holds one of those excluded already. It records the
+fragments of the pages it opened, and the addresses it went to.
 
     # in wallet tests: passkey unlock:
     def fake_browser(opened, answer="secret", cred="ZmFrZS1wYXNza2V5LWNyZWRlbnRpYWw"):
         def opener(url):
-            assert url.startswith(passkey.PAGE + "?")
-            q = {k: v[0] for k, v in urllib.parse.parse_qs(urllib.parse.urlsplit(url).query).items()}
+            assert url.startswith(passkey.UNLOCK_PAGE + "#") and "?" not in url
+            q = {k: v[0] for k, v in urllib.parse.parse_qs(urllib.parse.urlsplit(url).fragment).items()}
+            assert "salt" not in q
             opened.append(q)
             if answer == "none":
                 return True
-            salt = passkey.from_b64url(q["salt"])
-            assert salt == keys.passkey_salt(q["owner"])
-            used = cred if q["mode"] == "enroll" else q["cred"].split(",")[0]
+            salt = keys.passkey_salt(q["owner"])
+            if q["mode"] == "enroll":
+                used = cred if cred not in q.get("cred", "").split(",") else None
+            else:
+                used = q["cred"].split(",")[0]
             fields = {"state": q["state"] if answer != "wrong state" else "W" * 22}
-            if answer in ("error", "x25519-unavailable"):
-                fields["error"] = "NotAllowedError: the user cancelled" if answer == "error" else answer
+            if answer in ("error", "x25519-unavailable") or used is None:
+                fields["error"] = ("InvalidStateError: a passkey of this owner is here already" if used is None
+                                   else "NotAllowedError: the user cancelled" if answer == "error" else answer)
             else:
                 prf = names.sha256(b"fake prf " + used.encode() + salt)
-                epk, ct = passkey.seal(prf, passkey.from_b64url(q["pk"]), q["state"])
-                fields.update(epk=passkey.b64url(epk), ct=passkey.b64url(ct), cred=used)
+                if answer == "forged":
+                    prf = names.sha256(b"forged")
+                pk = passkey.from_b64url(q["pk"])
+                epk, ct, tag = passkey.seal(prf, pk, q["state"], q["mode"], q["owner"], used)
+                if answer == "tampered":
+                    ct = bytes(32)
+                fields.update(epk=passkey.b64url(epk), ct=passkey.b64url(ct), tag=passkey.b64url(tag), cred=used)
             to = f"http://127.0.0.1:{q['port']}/callback?" + urllib.parse.urlencode(fields)
 
             def go():
@@ -608,7 +691,7 @@ pages it opened, and the addresses it went to.
         return opener
 
 `key enroll` asks the passphrase once, opens the page to create a
-passkey, and adds a passkey wrap to every key of the owner in the wallet,
+passkey, then once more to unlock with it alone, as a check, and adds a passkey wrap to every key of the owner in the wallet,
 keeping the passphrase wrap; a key written before envelopes is converted.
 Run again, it has nothing to do. On another machine, `key unlock` opens
 the page to unlock, with the credential and the owner, and pulls the
@@ -635,7 +718,8 @@ is printed.
         r = ["--root", str(root)]
         capsys.readouterr()
         run(*r, "key", "enroll")
-        assert len(asked) == 1 and [q["mode"] for q in opened if "mode" in q] == ["enroll"]
+        assert len(asked) == 1 and [q["mode"] for q in opened if "mode" in q] == ["enroll", "unlock"]
+        assert "cred" not in opened[0] and opened[2]["cred"] == "ZmFrZS1wYXNza2V5LWNyZWRlbnRpYWw"
         assert opened[0]["owner"] == owner and len(passkey.from_b64url(opened[0]["pk"])) == 32
         assert asked == ["Passphrase of the keys in github:me/keys: "]
         out, err = capsys.readouterr()
@@ -644,14 +728,16 @@ is printed.
         assert f"Opening the 4 keys of {short} in github:me/keys with the passphrase…" in err
         assert "  1/4 " in err and "  4/4 " in err and "Saving the 4 keys to github:me/keys…" in err
         assert "Opening the browser to create a passkey for" in err and "Still waiting" not in err
-        assert passkey.PAGE not in err and "(s)" not in out + err
+        assert passkey.UNLOCK_PAGE not in err and "(s)" not in out + err
+        assert err.count("Check that the browser shows the code ") == 2
         went = [q["went"] for q in opened if "went" in q]
-        assert "secret" not in went[0] and "&ct=" in went[0]
+        assert "secret" not in went[0] and "&ct=" in went[0] and "&tag=" in went[0]
         files = in_repo(tmp_path)
         assert len(files) == 4 and all("encryption envelope-secretbox\nwrap passphrase argon2id" in t
-                                       and "wrap passkey prf rp=opensheaf.org cred=ZmFrZS1w" in t for t in files.values())
+                                       and "wrap passkey prf rp=unlock.opensheaf.org cred=ZmFrZS1w" in t
+                                       for t in files.values())
         run(*r, "key", "enroll")
-        assert "already" in capsys.readouterr().out and len(opened) == 2 and len(asked) == 1
+        assert "already" in capsys.readouterr().out and len(opened) == 4 and len(asked) == 1
         run(*r, "key", "forget", current)
         monkeypatch.setattr("getpass.getpass", lambda prompt: pytest.fail("the passphrase was asked"))
         capsys.readouterr()
@@ -666,12 +752,137 @@ is printed.
         deposit(root, "p", "one", new=True)
         monkeypatch.setattr("getpass.getpass", lambda prompt: asked.append(prompt) or "correct horse")
         run(*r, "owner", "rotate", "--keys", "github:me/keys")
-        assert len([q for q in opened if "mode" in q]) == 3 and len(asked) == 2
+        assert len([q for q in opened if "mode" in q]) == 4 and len(asked) == 2
         v2 = P.key_log(owner).latest().keys
         new = [in_repo(tmp_path)[f"{owner}/{d[:16]}.key.enc"] for d in v2["next"]]
         assert all("wrap passkey" in t for t in new) and P.verify_errors() == []
         out2, err2 = capsys.readouterr()
         assert "correct horse" not in out + err + out2 + err2 and "secret=" not in err + err2
+
+`key enroll --new-passkey` tells the page the credentials that the owner
+has, to exclude: on the provider that holds one, the page fails, and
+nothing is changed; on another provider, a second passkey is made, and
+every key gets a second passkey wrap. A new passkey whose second unlock
+gives another secret than its creation (here, a creation answered by
+someone else) is refused, and nothing is written.
+
+    # in wallet tests: passkey unlock:
+    def test_enroll_another_passkey(tmp_path, monkeypatch, capsys):
+        monkeypatch.setenv(P.PASSPHRASE, "correct horse")
+        root = make_archive(tmp_path, "--keys", "github:me/keys")
+        opened = []
+        monkeypatch.setattr(passkey, "OPEN", fake_browser(opened))
+        r = ["--root", str(root)]
+        run(*r, "key", "enroll")
+        before = in_repo(tmp_path)
+        with pytest.raises(SystemExit, match="InvalidStateError"):
+            run(*r, "key", "enroll", "--new-passkey")
+        assert opened[-2]["mode"] == "enroll" and opened[-2]["cred"] == "ZmFrZS1wYXNza2V5LWNyZWRlbnRpYWw"
+        assert in_repo(tmp_path) == before
+        pages = [fake_browser(opened, "forged", cred="Zm9yZ2VkLWNyZWRlbnRpYWw"),
+                 fake_browser(opened, cred="Zm9yZ2VkLWNyZWRlbnRpYWw")]
+        monkeypatch.setattr(passkey, "OPEN", lambda url: pages.pop(0)(url))
+        with pytest.raises(SystemExit, match="did not give the same secret twice"):
+            run(*r, "key", "enroll", "--new-passkey")
+        assert in_repo(tmp_path) == before
+        monkeypatch.setattr(passkey, "OPEN", fake_browser(opened, cred="YW5vdGhlci1wcm92aWRlcg"))
+        run(*r, "key", "enroll", "--new-passkey")
+        assert all(t.count("wrap passkey prf rp=unlock.opensheaf.org") == 2 for t in in_repo(tmp_path).values())
+
+An answer that does not open a key is never trusted. Here the page is
+played by someone else, who encrypts a secret of its own to the listener
+(the address of the page is no secret): the key is opened with the
+passphrase instead, nothing is kept as unlocked, and the keys that the
+same command writes next, a rotation, get no wrap under that secret. An
+answer changed on the way (the ciphertext) is refused by the listener.
+The same, with `passkey.unlock` itself replaced by a double that returns
+the forger's secret.
+
+    # in wallet tests: passkey unlock:
+    def test_forged_answers_are_not_kept(tmp_path, monkeypatch, capsys):
+        monkeypatch.setenv(P.PASSPHRASE, "correct horse")
+        root = make_archive(tmp_path, "--keys", "github:me/keys")
+        owner = P.ARCHIVE["owner"]
+        current = P.key_log(owner).latest().keys["keys"][0]
+        opened = []
+        monkeypatch.setattr(passkey, "OPEN", fake_browser(opened))
+        r = ["--root", str(root)]
+        run(*r, "key", "enroll")
+        monkeypatch.delenv(P.PASSPHRASE)
+        asked = []
+        monkeypatch.setattr("getpass.getpass", lambda prompt: asked.append(prompt) or "correct horse")
+        forged_kek = keys.passkey_kek(names.sha256(b"forged"))
+        for answer, said in (("forged", "opens no key"), ("tampered", "damaged")):
+            run(*r, "key", "forget", current)
+            monkeypatch.setattr(passkey, "OPEN", fake_browser(opened, answer))
+            capsys.readouterr()
+            run(*r, "key", "pull")
+            assert said in capsys.readouterr().err and local_keys(tmp_path, owner) != []
+        assert len(asked) == 2
+        deposit(root, "p", "one", new=True)
+        monkeypatch.setattr(passkey, "OPEN", fake_browser(opened, "forged"))
+        run(*r, "owner", "rotate", "--keys", "github:me/keys")
+        v2 = P.key_log(owner).latest().keys
+        for d in v2["next"]:
+            text = in_repo(tmp_path)[f"{owner}/{d[:16]}.key.enc"]
+            assert not any(p.opens(forged_kek) for p in keys.passkeys_of(text))
+        P.forget_passphrase()
+        w = wallet.parse("github:me/keys")
+        kid = names.key_id(current)
+        monkeypatch.setattr(passkey, "unlock", lambda owner, creds, **kw: (creds[0], names.sha256(b"forged")))
+        assert P.unlock_key(w, owner, kid, keys.CURRENT).did == current
+        assert P.unlocked_passkeys(owner) == []
+        P.forget_passphrase()
+        monkeypatch.setattr(passkey, "unlock", lambda owner, creds, **kw: (None, names.sha256(b"forged")))
+        assert P.unlock_key(w, owner, kid, keys.CURRENT).did == current and P.unlocked_passkeys(owner) == []
+        P.forget_passphrase()
+
+The first passkeys were made for `opensheaf.org`. Their wraps are read,
+but the browser is never asked for them: the command says how to move
+them, and the passphrase opens the key. `key enroll` then makes a passkey
+for `unlock.opensheaf.org` (none counts as enrolled yet), and `key forget
+--rp opensheaf.org` removes the old wraps, keeping the new ones and the
+passphrase.
+
+    # in wallet tests: passkey unlock:
+    def test_move_from_the_first_relying_party(tmp_path, monkeypatch, capsys):
+        monkeypatch.setenv(P.PASSPHRASE, "correct horse")
+        root = make_archive(tmp_path, "--keys", "github:me/keys")
+        owner = P.ARCHIVE["owner"]
+        current = P.key_log(owner).latest().keys["keys"][0]
+        repo = tmp_path / "gh-state" / "contents" / "me" / "keys" / owner
+        old = keys.Passkey("b2xkLWNyZWRlbnRpYWw", keys.passkey_salt(owner), rp="opensheaf.org",
+                           kek=keys.passkey_kek(b"\4" * 32))
+        for f in repo.iterdir():
+            f.write_text(keys.add_passkey(f.read_text(), "correct horse", old))
+        monkeypatch.delenv(P.PASSPHRASE)
+        asked = []
+        monkeypatch.setattr("getpass.getpass", lambda prompt: asked.append(prompt) or "correct horse")
+        r = ["--root", str(root)]
+        run(*r, "key", "forget", current)
+        capsys.readouterr()
+        run(*r, "key", "pull")
+        err = capsys.readouterr().err
+        assert "was enrolled on opensheaf.org" in err and "osheaf key enroll --new-passkey" in err
+        assert len(asked) == 1 and local_keys(tmp_path, owner) != []
+        opened = []
+        monkeypatch.setattr(passkey, "OPEN", fake_browser(opened))
+        run(*r, "key", "enroll")
+        assert [q["mode"] for q in opened if "mode" in q] == ["enroll", "unlock"] and "cred" not in opened[0]
+        assert all("rp=opensheaf.org" in t and "rp=unlock.opensheaf.org" in t for t in in_repo(tmp_path).values())
+        with pytest.raises(SystemExit, match="not confirmed"):
+            monkeypatch.setattr("builtins.input", lambda prompt: "no")
+            run(*r, "key", "forget", "--rp", "opensheaf.org")
+        capsys.readouterr()
+        run(*r, "key", "forget", "--rp", "opensheaf.org", "--yes")
+        assert capsys.readouterr().out.count("passkey wrap of opensheaf.org removed") == 4
+        files = in_repo(tmp_path).values()
+        assert all("rp=opensheaf.org" not in t and "rp=unlock.opensheaf.org" in t for t in files)
+        assert all(keys.read_key(t, "correct horse").owner == owner for t in files)
+        run(*r, "key", "forget", "--passkey", "ZmFrZS1wYXNza2V5LWNyZWRlbnRpYWw", "--yes")
+        assert all("wrap passkey" not in t for t in in_repo(tmp_path).values())
+        run(*r, "key", "forget", "--rp", "opensheaf.org", "--yes")
+        assert "No key of" in capsys.readouterr().out
 
 When the browser gives nothing, the passphrase is asked instead: the page
 reports an error; it posts with another state, which the listener refuses
@@ -712,25 +923,32 @@ itself does not fall back: it says the passkey failed.
 
 The listener answers only `GET /callback` with the fields of an answer:
 another path, another query (a secret in clear, a field more, a field
-missing), a form `POST` are refused, and it keeps waiting; a ciphertext
-that is not 32 bytes counts as an error of the page. Without a browser
+missing, the answer of an older page without a tag), a form `POST` are
+refused, and it keeps waiting; a ciphertext that is not 32 bytes counts
+as an error of the page. Another program that holds a connection open and
+says nothing does not stop the answer of the page from arriving at once.
+Without a browser
 (`--no-browser`), the address is printed at once; when the browser does
 not answer, it is printed after a while, in case no browser opened.
 
     # in wallet tests: passkey unlock:
     def test_listener():
+        import socket
+        import time
         owner = "56wo6cdpjsxk7ddgnqfp2quipfghukhtmvjuahvwzko7m4tkz3pa"
-        got = []
+        got, idle = [], []
 
         def opener(url):
-            q = {k: v[0] for k, v in urllib.parse.parse_qs(urllib.parse.urlsplit(url).query).items()}
+            q = {k: v[0] for k, v in urllib.parse.parse_qs(urllib.parse.urlsplit(url).fragment).items()}
+            idle.append(socket.create_connection(("127.0.0.1", int(q["port"]))))
             o = urllib.request.build_opener(urllib.request.ProxyHandler({}))
             base = f"http://127.0.0.1:{q['port']}"
             s, short = q["state"], passkey.b64url(b"short")
+            v1 = f"epk={short}&ct={short}&cred=Y3JlZA"
             for path in (f"/other?state={s}&error=x", f"/callback?state={s}&secret=AAAA&error=x",
                          f"/callback?state={s}&epk=AAAA", f"/callback?state={s}&error=x&error=y",
-                         f"/callback?state={s}&epk={short}&ct={short}&cred=Y3JlZA&more=1", None,
-                         f"/callback?state={s}&epk={short}&ct={short}&cred=Y3JlZA"):
+                         f"/callback?state={s}&{v1}&tag={short}&more=1", f"/callback?state={s}&{v1}", None,
+                         f"/callback?state={s}&{v1}&tag={short}"):
                 try:
                     data = b"state=" + s.encode() if path is None else None
                     got.append(o.open(base + (path or "/callback"), data=data, timeout=5).status)
@@ -739,12 +957,15 @@ not answer, it is printed after a while, in case no browser opened.
             return True
 
         passkey.OPEN = opener
+        started = time.monotonic()
         try:
             with pytest.raises(passkey.UnlockFailed, match="damaged"):
-                passkey.unlock(owner, ["Y3JlZA"])
+                passkey.unlock(owner, ["Y3JlZA"], no_browser=False)
         finally:
             passkey.OPEN = lambda url: pytest.fail("a browser was opened")
-        assert got == [404, 400, 400, 400, 400, 501, 200]
+            for c in idle:
+                c.close()
+        assert got == [404, 400, 400, 400, 400, 400, 501, 200] and time.monotonic() - started < 1.5
         with pytest.raises(passkey.UnlockFailed, match="32 bytes"):
             passkey._answer({"secret": b"short", "cred": "Y3JlZA"})
         with pytest.raises(passkey.UnlockFailed, match="another passkey"):
@@ -759,7 +980,7 @@ not answer, it is printed after a while, in case no browser opened.
             passkey.unlock(owner, ["Y3JlZA"], timeout=0.5)
         err = capsys.readouterr().err
         assert err.index("Waiting for the browser") < err.index("Still waiting… if the browser did not open, go to:\n  "
-                                                                 + passkey.PAGE + "?mode=unlock&")
+                                                                 + passkey.UNLOCK_PAGE + "#mode=unlock&")
         monkeypatch.setattr(passkey, "OPEN", lambda url: pytest.fail("a browser was opened"))
         with pytest.raises(passkey.UnlockFailed, match="no answer"):
             passkey.unlock(owner, ["Y3JlZA"], timeout=0.3, no_browser=True)

@@ -65,7 +65,7 @@ core.
       init                   create an archive (osheaf.json, storage root, owner, main catalogue)
       owner init|rotate|expose|end|show   make an owner, change its keys, end it, show it
       key new                a new current key for this device
-      key push|pull|list|forget   current keys to and from a key wallet (--keys)
+      key push|pull|list|forget   current keys to and from a key wallet (--wallet)
       key export|import --clipboard   a key to and from a password manager
       key enroll|unlock      a passkey (Touch ID) opens the keys of the wallet
       deposit LABEL [SOURCE] deposit a document (TeXmacs, or any source with --pdf);
@@ -774,23 +774,34 @@ osheaf owner init --keys github:mgubi/opensheaf-keys     # rotation and current 
 osheaf key pull                                           # on another machine: the current keys
 osheaf key list                                           # what the wallet holds (no secrets)
 osheaf owner rotate --keys offline --export /Volumes/USB/keys   # move up: new rotation keys offline
-osheaf key forget --wallet --used                         # remove the used keys from the wallet
+osheaf key forget --from-wallet --used                    # remove the used keys from the wallet
 osheaf key export --clipboard                             # paste into a note of the Passwords app
 osheaf key import --clipboard                             # on another machine, after copying the note
 osheaf key enroll                                         # once: a passkey opens the keys of the wallet
 osheaf key unlock                                         # on another Mac: Touch ID, the current keys pulled
 ```
 
-`key enroll` creates a passkey for `opensheaf.org` in the browser (the
-page `https://opensheaf.org/manager/unlock.html`), after the passphrase
-has opened the keys of the wallet once, and lets it open them; from then
+`key enroll` creates a passkey for `unlock.opensheaf.org` in the browser
+(the page `https://unlock.opensheaf.org/`, which shows the confirmation
+code that the command prints), after the passphrase has opened the keys
+of the wallet once, checks it with a second unlock, and lets it open them;
+from then
 on, a command that needs a key of the wallet asks the browser (Touch ID)
 rather than the passphrase, which stays the way back: on an error of the
 page, after two minutes without an answer, on Ctrl-C, or always with
 `OPENSHEAF_UNLOCK=passphrase` or `OPENSHEAF_PASSPHRASE` set
 ([chapter 19](19-owner-commands.md)). `--no-browser` prints the address of
 the page without opening it. `OPENSHEAF_PASSPHRASE_COMMAND` names a
-command that prints the passphrase, run before it is asked.
+command that prints the passphrase, run before it is asked. `key forget
+--rp opensheaf.org` removes the locks of the passkeys made for the first
+relying party, after `key enroll --new-passkey`; `--passkey CRED`, those
+of one passkey.
+
+The commands that make keys (`init --new-owner`, `owner init`, `rotate`,
+`expose`, `end`) take the security level with `--keys LEVEL` (`offline`,
+`github:OWNER/REPO` or `command`); the `key` commands, which only read or
+move keys, name the wallet with `--wallet WALLET`, and otherwise use the
+one configured ([chapter 9](09-wallets.md)).
 
 `owner pull` meets the archive's copy of a key log with the copy at
 another place, an archive or the folder of the owner object, as section
@@ -844,15 +855,18 @@ The options of making an owner are shared by `owner init` and
     kls = ksub.add_parser("list", help="what the key wallet holds: owner, key, kind, did:key (no secrets)")
     kf = ksub.add_parser("forget", help="remove keys from this device, and with --wallet from the wallet")
     kf.add_argument("did", nargs="*", metavar="DID", help="the keys to forget")
-    kf.add_argument("--wallet", action="store_true", help="also remove them from the key wallet")
+    kf.add_argument("--from-wallet", action="store_true", help="also remove them from the key wallet")
     kf.add_argument("--used", action="store_true",
-                    help="with --wallet: remove the keys the latest version of the key log no longer needs")
+                    help="with --from-wallet: remove the keys the latest version of the key log no longer needs")
+    kf.add_argument("--passkey", metavar="CRED",
+                    help="remove instead the passkey wraps of this credential from the keys in the wallet")
+    kf.add_argument("--rp", metavar="RP", help="remove instead the passkey wraps of this relying party "
+                    "(e.g. opensheaf.org) from the keys in the wallet")
     kf.add_argument("--force", action="store_true", help="also remove rotation keys still committed")
     kf.add_argument("--yes", action="store_true", help="do not ask to confirm the removal (scripts)")
     for x in (kp, kl, kls, kf):
         x.add_argument("--owner", help="an owner the archive hosts (default: the archive's)")
-        x.add_argument("--keys", metavar="WALLET", help="the key wallet, github:OWNER/REPO or command "
-                       "(default: the one configured)")
+        wallet_option(x)
     ke = ksub.add_parser("export", help="copy a current key to the clipboard, for a password manager")
     ke.add_argument("did", nargs="?", metavar="DID", help="the key (default: the owner's one key on this device)")
     ke.add_argument("--owner", help="the owner (default: the archive's)")
@@ -869,8 +883,7 @@ The options of making an owner are shared by `owner init` and
     ku = ksub.add_parser("unlock", help="open the keys of the wallet with the passkey; pull the current keys")
     for x in (ken, ku):
         x.add_argument("--owner", help="the owner (default: the archive's)")
-        x.add_argument("--keys", metavar="WALLET", help="the key wallet, github:OWNER/REPO or command "
-                       "(default: the one configured)")
+        wallet_option(x)
         x.add_argument("--no-browser", action="store_true", help="print the address of the page, do not open it")
     k.set_defaults(func=None)
 
@@ -901,6 +914,11 @@ rotation keys and committing new ones.
         if new_keys:
             p.add_argument("--plain-current", action="store_true",
                            help="in a wallet, keep the current keys unencrypted")
+
+
+    def wallet_option(p):
+        p.add_argument("--wallet", metavar="WALLET", help="the key wallet, github:OWNER/REPO or command "
+                       "(default: the one configured)")
 
 
     def export_options(p):

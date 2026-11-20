@@ -8,10 +8,14 @@ unlock them too (osheaf key enroll, module passkey). Also the clipboard,
 through which a key goes to and from a password manager such as the
 Passwords app of macOS.
 
-The wallet is chosen with --keys github:OWNER/REPO or --keys command, or
-configured in osheaf.json, "keys": {"wallet": "github:OWNER/REPO"} or
-{"wallet": "command", "read": "...", "write": "..."}, or by the environment
-variable OPENSHEAF_WALLET (the same, as text or JSON), which wins."""
+The wallet is chosen with --keys (commands that make keys) or --wallet (the
+key commands), github:OWNER/REPO or command; or configured: by the
+environment variable OPENSHEAF_WALLET (text or JSON), which wins, then by
+"keys" of the user's configuration file ~/.config/opensheaf/config.json
+($XDG_CONFIG_HOME/opensheaf/config.json), {"wallet": "github:OWNER/REPO"}
+or {"wallet": "command", "read": "...", "write": "..."}, then by "keys" of
+osheaf.json, which may name a GitHub wallet only: the commands of a command
+wallet run on the user's machine, and are never read from an archive."""
 
 import base64
 import json
@@ -20,6 +24,7 @@ import re
 import shutil
 import subprocess
 import sys
+from pathlib import Path
 
 from . import keys, names
 
@@ -44,6 +49,26 @@ def risk(where, owner):
 
 WALLET = "OPENSHEAF_WALLET"
 REPO = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?/[A-Za-z0-9._-]+")
+COMMANDS = ("read", "write", "list", "forget")
+
+
+def user_config_path():
+    """The user's configuration file of opensheaf."""
+    base = os.environ.get("XDG_CONFIG_HOME") or str(Path.home() / ".config")
+    return Path(base) / "opensheaf" / "config.json"
+
+
+def user_config():
+    """The `keys` of the user's configuration file, or {}."""
+    path = user_config_path()
+    if not path.is_file():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+        raise WalletError(f"{path}: {e}") from None
+    found = data.get("keys") if isinstance(data, dict) else None
+    return found if isinstance(found, dict) else {}
 
 
 def parse(spec, config=None, *, forbidden=()):
@@ -64,17 +89,25 @@ def parse(spec, config=None, *, forbidden=()):
             raise WalletError(f"a GitHub wallet is github:OWNER/REPO: {spec}")
         return GitHubWallet(repo, forbidden)
     if spec == "command":
-        return CommandWallet(config or {})
+        return CommandWallet(config or user_config())
     raise WalletError(f"a security level is offline, github:OWNER/REPO or command: {spec}")
 
 
 def configured(config, *, forbidden=()):
-    """The wallet of OPENSHEAF_WALLET, or else of CONFIG (the `keys` of osheaf.json), or None."""
+    """The wallet of OPENSHEAF_WALLET, or else of the user's configuration, or else of CONFIG (the `keys`
+    of osheaf.json, a GitHub wallet only), or None."""
     config = config if isinstance(config, dict) else {}
+    if config.get("wallet") == "command" or any(c in config for c in COMMANDS):
+        raise WalletError(f'osheaf.json configures a command wallet ("keys"), whose commands would run on this '
+                          f"machine: they are read only from your own configuration. Move \"keys\" to "
+                          f"{user_config_path()} (or to {WALLET}), and leave osheaf.json without it")
     env = os.environ.get(WALLET, "").strip()
     if env:
-        return parse(env, config, forbidden=forbidden)
-    return parse(config.get("wallet"), config, forbidden=forbidden)
+        return parse(env, forbidden=forbidden)
+    user = user_config()
+    if user.get("wallet"):
+        return parse(str(user["wallet"]), user, forbidden=forbidden)
+    return parse(config.get("wallet"), forbidden=forbidden)
 
 
 GITHUB_REMOTE = re.compile(r"github\.com[:/]+([A-Za-z0-9-]+)/([A-Za-z0-9._-]+?)(?:\.git)?/?(?:\s|$)")
@@ -142,7 +175,7 @@ class GitHubWallet:
         if info is None:
             raise WalletError(f"no repository {self.repo} that gh can reach: create it, private, with "
                               f"gh repo create {self.repo} --private")
-        if info.get("private") is not True:
+        if info.get("private") is not True or info.get("visibility") != "private":
             raise WalletError(f"{self.repo} is not a private repository: a wallet must be private")
         if str(info.get("full_name", self.repo)).lower() in self.forbidden:
             raise WalletError(f"{self.repo} is a repository of the archive, which is public: a wallet is "
@@ -214,7 +247,7 @@ class CommandWallet:
         self.config = config
         if not config.get("read") or not config.get("write"):
             raise WalletError('a command wallet needs "read" and "write" commands, in "keys" of '
-                              f"osheaf.json or in {WALLET}")
+                              f"{user_config_path()} or in {WALLET}")
 
     def _run(self, what, owner="", kid="", kind="", text=None):
         if owner or kid:

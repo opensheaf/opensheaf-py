@@ -1,9 +1,10 @@
 # Generated from literate/09-wallets.md by opensheaf-literate: edit the document, not this file.
 """Passkey unlock (opensheaf-py): the command line's side of the page
-https://opensheaf.org/manager/unlock.html, which creates a passkey for
-opensheaf.org or derives the PRF secret of one (WebAuthn), and hands the
-secret back to a one-time listener on 127.0.0.1, encrypted to a one-time
-X25519 key of the listener (X25519, HKDF-SHA256, XOR).
+https://unlock.opensheaf.org/ (UNLOCK_PAGE), which creates a passkey for
+unlock.opensheaf.org or derives the PRF secret of one (WebAuthn), and hands
+the secret back to a one-time listener on 127.0.0.1, encrypted and
+authenticated to a one-time X25519 key of the listener (X25519,
+HKDF-SHA256, XOR and HMAC-SHA256).
 
 OPENSHEAF_UNLOCK=passphrase never asks the browser."""
 
@@ -28,7 +29,7 @@ class UnlockFailed(Exception):
     """The browser gave no secret: an error of the page, no answer in time, or the user gave up."""
 
 
-PAGE = "https://opensheaf.org/manager/unlock.html"
+UNLOCK_PAGE = f"https://{keys.PASSKEY_RP}/"
 UNLOCK = "OPENSHEAF_UNLOCK"
 TIMEOUT = 120.0
 STILL = 10.0
@@ -40,21 +41,30 @@ def b64url(data):
 
 
 def from_b64url(text):
-    if not isinstance(text, str) or not B64URL.fullmatch(text):
+    if not isinstance(text, str) or not B64URL.fullmatch(text) or len(text) % 4 == 1:
         raise ValueError("not base64url")
     return base64.urlsafe_b64decode(text + "=" * (-len(text) % 4))
 
 
 def page_url(mode, port, state, pk, owner, creds=()):
     """The address of the page, in MODE, for the listener on PORT with STATE and public key PK."""
-    query = {"mode": mode, "port": str(port), "state": state, "pk": b64url(pk), "owner": owner,
-             "salt": b64url(keys.passkey_salt(owner))}
+    fragment = {"mode": mode, "port": str(port), "state": state, "pk": b64url(pk), "owner": owner}
     if creds:
-        query["cred"] = ",".join(creds)
-    return PAGE + "?" + urllib.parse.urlencode(query)
+        fragment["cred"] = ",".join(creds)
+    return UNLOCK_PAGE + "#" + urllib.parse.urlencode(fragment)
 
 
-HAND_OFF_INFO = b"opensheaf unlock hand-off v1"
+CODE_LABEL = b"opensheaf unlock code v1"
+
+
+def confirmation_code(state, pk):
+    """The six digits that the page shows for the listener with STATE and public key PK, as `123 456`."""
+    n = int.from_bytes(hashlib.sha256(CODE_LABEL + state.encode("utf-8") + bytes(pk)).digest()[:4], "big")
+    digits = f"{n % 1000000:06d}"
+    return f"{digits[:3]} {digits[3:]}"
+
+
+HAND_OFF_INFO = b"opensheaf unlock hand-off v2"
 
 
 def hkdf(ikm, salt, info, length):
@@ -67,35 +77,53 @@ def hkdf(ikm, salt, info, length):
     return out[:length]
 
 
-def _pad(private, other, state, length):
+def _hand_off_keys(private, other, state):
     shared = bindings.crypto_scalarmult(bytes(private), bytes(other))
-    return hkdf(shared, state.encode("utf-8"), HAND_OFF_INFO, length)
+    both = hkdf(shared, state.encode("utf-8"), HAND_OFF_INFO, 64)
+    return both[:32], both[32:]
 
 
-def seal(secret, pk, state, ephemeral=None):
-    """(epk, ct): SECRET encrypted to the X25519 public key PK, as the page does, with the one-time
-    private key EPHEMERAL (a fresh one by default)."""
+def associated_data(mode, owner, cred, pk, epk):
+    """What the tag of the hand-off covers besides the ciphertext."""
+    return f"{mode}|{owner}|{cred}|{b64url(pk)}|{b64url(epk)}".encode("utf-8")
+
+
+def _tag(mac_key, aad, ct):
+    return hmac.new(mac_key, aad + ct, hashlib.sha256).digest()
+
+
+def seal(secret, pk, state, mode, owner, cred, ephemeral=None):
+    """(epk, ct, tag): SECRET encrypted and authenticated to the X25519 public key PK, as the page does,
+    with the one-time private key EPHEMERAL (a fresh one by default)."""
     ephemeral = ephemeral or public.PrivateKey.generate()
-    pad = _pad(ephemeral, pk, state, len(secret))
-    return bytes(ephemeral.public_key), bytes(a ^ b for a, b in zip(secret, pad))
+    epk = bytes(ephemeral.public_key)
+    enc, mac = _hand_off_keys(ephemeral, pk, state)
+    ct = bytes(a ^ b for a, b in zip(secret, enc))
+    return epk, ct, _tag(mac, associated_data(mode, owner, cred, pk, epk), ct)
 
 
-def unseal(private, epk, ct, state):
-    """The secret that the page encrypted as CT, with its public key EPK, to the key pair PRIVATE."""
-    if len(epk) != 32 or len(ct) != 32:
+def unseal(private, epk, ct, tag, state, mode, owner, cred):
+    """The secret that the page encrypted as CT, with its public key EPK and the tag TAG, to the key pair
+    PRIVATE; ValueError if anything was changed."""
+    if len(epk) != 32 or len(ct) != 32 or len(tag) != 32:
         raise ValueError("not a hand-off of 32 bytes")
-    pad = _pad(private, epk, state, len(ct))
-    return bytes(a ^ b for a, b in zip(ct, pad))
+    enc, mac = _hand_off_keys(private, epk, state)
+    aad = associated_data(mode, owner, cred, bytes(private.public_key), epk)
+    if not hmac.compare_digest(_tag(mac, aad, ct), tag):
+        raise ValueError("the answer of the page is not authentic")
+    return bytes(a ^ b for a, b in zip(ct, enc))
 
 
 DONE = "osheaf has the key. You can close this tab."
 FAILED = "osheaf did not get the key ({}): it asks for the passphrase instead. You can close this tab."
-NO_X25519 = ("this browser cannot hand the key to osheaf securely; use Safari 17+, Chrome 133+ "
-             "or Firefox 130+, or the passphrase")
-ANSWER = ({"state", "epk", "ct", "cred"}, {"state", "epk", "ct"}, {"state", "error"})
+NO_X25519 = ("this browser has no X25519 in WebCrypto, and cannot hand the key to osheaf securely (known to "
+             "work: Safari 17+, Chrome 133+, Firefox 130+); osheaf uses the passphrase")
+ANSWER = ({"state", "epk", "ct", "tag", "cred"}, {"state", "error"})
 
 
 class _Handler(http.server.BaseHTTPRequestHandler):
+    timeout = 5
+
     def do_GET(self):
         url = urllib.parse.urlsplit(self.path)
         if url.path != "/callback":
@@ -105,13 +133,15 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         except ValueError:
             fields = {}
         if set(fields) not in ANSWER or any(len(v) != 1 for v in fields.values()) or len(url.query) > 8192:
-            return self._answer(400, "this is not an answer of the page")
+            return self._answer(400, "this is not an answer of the page (if osheaf or the page was just "
+                                     "updated, update the other too)")
         fields = {k: v[0] for k, v in fields.items()}
         if not hmac.compare_digest(fields["state"].encode(), self.server.state.encode()):
             return self._answer(403, "this is not the answer osheaf is waiting for")
-        if self.server.result is not None:
-            return self._answer(409, "osheaf has its answer already")
-        self.server.result = result = self._open(fields)
+        with self.server.lock:
+            if self.server.result is not None:
+                return self._answer(409, "osheaf has its answer already")
+            self.server.result = result = self._open(fields)
         if "error" in result:
             error = NO_X25519 if result["error"] == "x25519-unavailable" else result["error"][:200]
             self._answer(200, FAILED.format(error))
@@ -122,14 +152,14 @@ class _Handler(http.server.BaseHTTPRequestHandler):
     def _open(self, fields):
         if "error" in fields:
             return {"error": fields["error"][:200] or "an error"}
+        s = self.server
         try:
-            epk, ct = from_b64url(fields["epk"]), from_b64url(fields["ct"])
-            if "cred" in fields:
-                from_b64url(fields["cred"])
-            secret = unseal(self.server.key, epk, ct, self.server.state)
+            epk, ct, tag = from_b64url(fields["epk"]), from_b64url(fields["ct"]), from_b64url(fields["tag"])
+            from_b64url(fields["cred"])
+            secret = unseal(s.key, epk, ct, tag, s.state, s.mode, s.owner, fields["cred"])
         except Exception:
             return {"error": "the page sent a damaged answer"}
-        return {"cred": fields.get("cred"), "secret": secret}
+        return {"cred": fields["cred"], "secret": secret}
 
     def _answer(self, status, text):
         page = (f"<!DOCTYPE html><html lang=en><meta charset=utf-8><title>osheaf</title>"
@@ -151,16 +181,19 @@ OPEN = webbrowser.open
 
 def ask(mode, owner, creds=(), *, no_browser=False, timeout=None, ctrl_c="type the passphrase instead"):
     """The answer of the page ({cred, secret} or {error}), in MODE (enroll or unlock), for OWNER and
-    its credentials CREDS; UnlockFailed if none comes."""
-    if not names.OWNER_NAME.match(owner) or mode not in ("enroll", "unlock"):
+    CREDS (to unlock with, or to exclude when enrolling); UnlockFailed if none comes."""
+    if not names.OWNER_NAME.fullmatch(owner) or mode not in ("enroll", "unlock"):
         raise UnlockFailed(f"not an owner name: {owner}")
-    server = http.server.HTTPServer(("127.0.0.1", 0), _Handler)
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
+    server.daemon_threads = True
     server.state, server.result, server.done = secrets.token_urlsafe(16), None, threading.Event()
+    server.mode, server.owner, server.lock = mode, owner, threading.Lock()
     server.key = public.PrivateKey.generate()
     thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.1}, daemon=True)
     thread.start()
     try:
-        url = page_url(mode, server.server_port, server.state, bytes(server.key.public_key), owner, creds)
+        pk = bytes(server.key.public_key)
+        url = page_url(mode, server.server_port, server.state, pk, owner, creds)
         what = (f"create a passkey for {names.short(owner)}" if mode == "enroll"
                 else f"unlock the keys of {names.short(owner)} with your passkey")
         opened = False
@@ -172,6 +205,7 @@ def ask(mode, owner, creds=(), *, no_browser=False, timeout=None, ctrl_c="type t
                 opened = False
         if not opened:
             print(f"Go to this address in your browser, to {what} (Touch ID):\n  {url}", file=sys.stderr)
+        print(f"Check that the browser shows the code {confirmation_code(server.state, pk)}", file=sys.stderr)
         print(f"Waiting for the browser (Ctrl-C to {ctrl_c})…", file=sys.stderr)
         limit = TIMEOUT if timeout is None else timeout
         try:
@@ -201,11 +235,11 @@ def _answer(result, creds=()):
     return cred, secret
 
 
-def enroll(owner, **kw):
-    """(the credential of a new passkey of OWNER, its PRF secret)."""
-    cred, secret = _answer(ask("enroll", owner, **kw))
-    if cred is None:
-        raise UnlockFailed("the page sent no credential")
+def enroll(owner, exclude=(), **kw):
+    """(the credential of a new passkey of OWNER, its PRF secret); EXCLUDE, the credentials it has."""
+    cred, secret = _answer(ask("enroll", owner, exclude, **kw))
+    if cred is None or cred in exclude:
+        raise UnlockFailed("the page sent no new credential")
     return cred, secret
 
 

@@ -458,8 +458,31 @@ default, libsodium's "moderate" (the module's `OPSLIMIT` and `MEMLIMIT`,
 read when a seed is encrypted, so that the tests can lower them); `none`
 means a seed kept as it is.
 
+The cost recorded in a file is read from the file, which may come from
+anywhere: a wallet, a clipboard, a USB key. A file that asks for more than
+libsodium's "sensitive" cost (4 passes, 1 GiB), or less than its minimum,
+is refused before Argon2id runs, so that a crafted file cannot make the
+command run for hours or exhaust the memory; and a machine that cannot
+give the memory asked for is told so, as an error of the key, not a crash.
+
     # in keys: encrypting a seed:
     OPSLIMIT, MEMLIMIT = pwhash.argon2id.OPSLIMIT_MODERATE, pwhash.argon2id.MEMLIMIT_MODERATE
+
+
+    def _argon2id(passphrase, salt, opslimit, memlimit):
+        """The key derived from PASSPHRASE by Argon2id, with a cost read from a file, checked first."""
+        a = pwhash.argon2id
+        opslimit, memlimit = int(opslimit), int(memlimit)
+        if not (a.OPSLIMIT_MIN <= opslimit <= a.OPSLIMIT_SENSITIVE and a.MEMLIMIT_MIN <= memlimit <= a.MEMLIMIT_SENSITIVE):
+            raise KeyStoreError(f"the key asks for an Argon2id cost out of bounds (opslimit={opslimit}, "
+                                f"memlimit={memlimit}): at most {a.OPSLIMIT_SENSITIVE} and {a.MEMLIMIT_SENSITIVE}")
+        if len(salt) != a.SALTBYTES:
+            raise KeyStoreError("the encryption of the key is damaged")
+        try:
+            return a.kdf(secret.SecretBox.KEY_SIZE, passphrase.encode("utf-8"), salt,
+                         opslimit=opslimit, memlimit=memlimit)
+        except (MemoryError, RuntimeError) as e:
+            raise KeyStoreError(f"Argon2id could not run with memlimit={memlimit} on this machine: {e}") from None
 
 
     class PassphraseNeeded(KeyStoreError):
@@ -478,8 +501,7 @@ means a seed kept as it is.
         opslimit = OPSLIMIT if opslimit is None else opslimit
         memlimit = MEMLIMIT if memlimit is None else memlimit
         salt = utils.random(pwhash.argon2id.SALTBYTES)
-        box = secret.SecretBox(pwhash.argon2id.kdf(secret.SecretBox.KEY_SIZE, passphrase.encode("utf-8"), salt,
-                                                   opslimit=opslimit, memlimit=memlimit))
+        box = secret.SecretBox(_argon2id(passphrase, salt, opslimit, memlimit))
         return (f"argon2id-secretbox opslimit={opslimit} memlimit={memlimit} "
                 f"salt={base64.b64encode(salt).decode('ascii')}", box.encrypt(seed))
 
@@ -496,9 +518,7 @@ means a seed kept as it is.
         params = dict(p.partition("=")[::2] for p in encryption[1:])
         try:
             salt = base64.b64decode(params["salt"], validate=True)
-            box = secret.SecretBox(pwhash.argon2id.kdf(secret.SecretBox.KEY_SIZE, passphrase.encode("utf-8"), salt,
-                                                       opslimit=int(params["opslimit"]),
-                                                       memlimit=int(params["memlimit"])))
+            box = secret.SecretBox(_argon2id(passphrase, salt, params["opslimit"], params["memlimit"]))
             return box.decrypt(data)
         except (KeyError, ValueError, binascii.Error):
             raise KeyStoreError("the encryption of the key is damaged") from None
@@ -516,7 +536,8 @@ for the passphrase, with Touch ID or another check of the user, through
 its PRF extension, which derives a stable 32-byte secret from the passkey
 and a salt, never leaving the authenticator otherwise. The way from the
 command line to a passkey is a page in the browser, at
-`https://opensheaf.org/manager/unlock.html` ([chapter 9](09-wallets.md)).
+`https://unlock.opensheaf.org/` ([chapter 9](09-wallets.md)), an origin
+that serves that page alone.
 
 So that one key can be opened by the passphrase and by one passkey or
 more, its file holds the seed encrypted by *envelope encryption*: the seed
@@ -526,7 +547,7 @@ each on a line of its own, under a key-encryption key:
 
 - `wrap passphrase argon2id opslimit=N memlimit=N salt=S BOX`: the
   key-encryption key is derived from the passphrase by Argon2id, as above;
-- `wrap passkey prf rp=opensheaf.org cred=C salt=S BOX`: the passkey of
+- `wrap passkey prf rp=unlock.opensheaf.org cred=C salt=S BOX`: the passkey of
   the relying party `rp`, whose credential identifier is `C` (base64url),
   gives the PRF secret for the salt `S` (base64); the key-encryption key
   is HKDF-SHA256 of that secret (RFC 5869, no salt, info `opensheaf wallet
@@ -540,9 +561,21 @@ is missing. The PRF salt is the same for every key of an owner, the
 SHA-256 digest of `opensheaf wallet unlock v1 ` followed by the owner
 name, so that one check of the user unlocks all of them.
 
+The relying party is `unlock.opensheaf.org` (`PASSKEY_RP`), whose origin
+serves nothing but the unlock page, so that no other page of the project's
+sites, present or future, can ask a passkey for these secrets. The first
+passkeys were made for `opensheaf.org` itself (`OLD_PASSKEY_RP`), from a
+page of the Manager; their wraps are still read, and still open with the
+passphrase, but the command line no longer asks the browser for them: the
+owner enrolls a passkey of the new relying party (`osheaf key enroll
+--new-passkey`), then removes the old wraps (`osheaf key forget --rp
+opensheaf.org`). The salt and the derivation of the key-encryption key are
+the same for both.
+
     # in keys: a seed unlocked in several ways:
     ENVELOPE = "envelope-secretbox"
-    PASSKEY_RP = "opensheaf.org"
+    PASSKEY_RP = "unlock.opensheaf.org"
+    OLD_PASSKEY_RP = "opensheaf.org"
     PASSKEY_INFO = b"opensheaf wallet passkey v1"
     PASSKEY_SALT = "opensheaf wallet unlock v1 "
 
@@ -560,6 +593,9 @@ name, so that one check of the user unlocks all of them.
 A passkey of an owner is its credential identifier and its salt, and, once
 the user has unlocked it in this command, its key-encryption key, held in
 memory only: the PRF secret and the key derived from it are never stored.
+A passkey read from a file also carries the box of its wrap, so that a
+key-encryption key that the browser sends can be checked against it before
+it is trusted (`opens`).
 
     # in keys: a seed unlocked in several ways:
     def _b64(data):
@@ -570,8 +606,18 @@ memory only: the PRF secret and the key derived from it are never stored.
         """A passkey that unlocks keys: credential CRED (base64url), PRF SALT (bytes), relying party RP,
         and KEK, its key-encryption key, once unlocked."""
 
-        def __init__(self, cred, salt, rp=PASSKEY_RP, kek=None):
-            self.cred, self.salt, self.rp, self.kek = cred, bytes(salt), rp, kek
+        def __init__(self, cred, salt, rp=PASSKEY_RP, kek=None, box=None):
+            self.cred, self.salt, self.rp, self.kek, self.box = cred, bytes(salt), rp, kek, box
+
+        def opens(self, kek):
+            """Whether KEK unwraps the box of this wrap."""
+            if self.box is None:
+                return False
+            try:
+                secret.SecretBox(kek).decrypt(self.box)
+                return True
+            except (CryptoError, ValueError, TypeError):
+                return False
 
         def wrap(self, data_key):
             """The wrap line of DATA_KEY under this passkey."""
@@ -585,11 +631,6 @@ The data key is wrapped under the passphrase as the seed was before,
 Argon2id with a fresh salt.
 
     # in keys: a seed unlocked in several ways:
-    def _argon2id(passphrase, salt, opslimit, memlimit):
-        return pwhash.argon2id.kdf(secret.SecretBox.KEY_SIZE, passphrase.encode("utf-8"), salt,
-                                   opslimit=opslimit, memlimit=memlimit)
-
-
     def envelope(seed, passphrase, passkeys=(), *, opslimit=None, memlimit=None):
         """(the wrap lines, the encrypted seed): SEED under a new data key, wrapped under PASSPHRASE and
         under each of PASSKEYS (unlocked)."""
@@ -636,7 +677,7 @@ command line what to ask the browser for.
         for line in wraps_of(text):
             w = parse_wrap(line)
             if w["method"] == "passkey" and w["kind"] == "prf" and w.get("cred"):
-                out.append(Passkey(w["cred"], w.get("salt", b""), w.get("rp", PASSKEY_RP)))
+                out.append(Passkey(w["cred"], w.get("salt", b""), w.get("rp", PASSKEY_RP), box=w["box"]))
         return out
 
 Opening the envelope unwraps the data key with a passkey whose
@@ -656,7 +697,7 @@ that the caller can ask the browser for one, or the passphrase.
                     pass
         if passphrase is None:
             raise PassphraseNeeded("this key is encrypted: a passphrase is needed",
-                                   [Passkey(w["cred"], w.get("salt", b""), w.get("rp", PASSKEY_RP))
+                                   [Passkey(w["cred"], w.get("salt", b""), w.get("rp", PASSKEY_RP), box=w["box"])
                                     for w in parsed if w["method"] == "passkey" and w.get("cred")])
         for w in parsed:
             if w["method"] == "passphrase" and w["kind"] == "argon2id":
@@ -705,6 +746,27 @@ and rewritten as an envelope when a passkey is added to it.
             wraps, data = envelope(seed, passphrase, [passkey], opslimit=opslimit, memlimit=memlimit)
             lines[enc:seed_at + 1] = [f"encryption {ENVELOPE}", *wraps, "seed " + _b64(data)]
         return "\n".join(lines) + "\n"
+
+The wraps of a passkey that is lost, or of a relying party no longer
+asked (`OLD_PASSKEY_RP`), are removed by `osheaf key forget --passkey` or
+`--rp`: the lines of the passkey wraps that match go, and nothing else,
+the passphrase wrap above all, so that the file opens as before.
+
+    # in keys: a seed unlocked in several ways:
+    def remove_passkeys(text, cred=None, rp=None):
+        """The key file TEXT without the passkey wraps of the credential CRED, or of the relying party RP."""
+        def gone(line):
+            if not line.startswith("wrap passkey "):
+                return False
+            w = parse_wrap(line)
+            return (cred is None or w.get("cred") == cred) and (rp is None or w.get("rp", PASSKEY_RP) == rp)
+        if cred is None and rp is None:
+            raise KeyStoreError("name the passkey wraps to remove, by credential or relying party")
+        lines = text.splitlines()
+        kept = [x for x in lines if not gone(x.strip())]
+        if not any(x.strip().startswith("wrap passphrase ") for x in kept):
+            raise KeyStoreError("the key would have no passphrase wrap left")
+        return "\n".join(kept) + "\n"
 
 Exporting rotation keys
 -----------------------
@@ -854,7 +916,7 @@ key did:key:z6Mkh5i2epG9LsWNnYbBHG7ctEiNLZPjsBNXxNUcsaYgEtNm
 digest oxthfb6b4q3sqathmcpnciqggfxlr3aekgfg2tpm2lgrm2qnalha
 encryption envelope-secretbox
 wrap passphrase argon2id opslimit=3 memlimit=268435456 salt=... ...
-wrap passkey prf rp=opensheaf.org cred=... salt=... ...
+wrap passkey prf rp=unlock.opensheaf.org cred=... salt=... ...
 seed ...
 ```
 

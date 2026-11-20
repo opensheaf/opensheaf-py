@@ -259,6 +259,22 @@ def forget_current_key(owner, did):
 OPSLIMIT, MEMLIMIT = pwhash.argon2id.OPSLIMIT_MODERATE, pwhash.argon2id.MEMLIMIT_MODERATE
 
 
+def _argon2id(passphrase, salt, opslimit, memlimit):
+    """The key derived from PASSPHRASE by Argon2id, with a cost read from a file, checked first."""
+    a = pwhash.argon2id
+    opslimit, memlimit = int(opslimit), int(memlimit)
+    if not (a.OPSLIMIT_MIN <= opslimit <= a.OPSLIMIT_SENSITIVE and a.MEMLIMIT_MIN <= memlimit <= a.MEMLIMIT_SENSITIVE):
+        raise KeyStoreError(f"the key asks for an Argon2id cost out of bounds (opslimit={opslimit}, "
+                            f"memlimit={memlimit}): at most {a.OPSLIMIT_SENSITIVE} and {a.MEMLIMIT_SENSITIVE}")
+    if len(salt) != a.SALTBYTES:
+        raise KeyStoreError("the encryption of the key is damaged")
+    try:
+        return a.kdf(secret.SecretBox.KEY_SIZE, passphrase.encode("utf-8"), salt,
+                     opslimit=opslimit, memlimit=memlimit)
+    except (MemoryError, RuntimeError) as e:
+        raise KeyStoreError(f"Argon2id could not run with memlimit={memlimit} on this machine: {e}") from None
+
+
 class PassphraseNeeded(KeyStoreError):
     """A key encrypted under a passphrase, read without one; PASSKEYS, the passkeys that could unlock it
     instead."""
@@ -275,8 +291,7 @@ def encrypt_seed(seed, passphrase, *, opslimit=None, memlimit=None):
     opslimit = OPSLIMIT if opslimit is None else opslimit
     memlimit = MEMLIMIT if memlimit is None else memlimit
     salt = utils.random(pwhash.argon2id.SALTBYTES)
-    box = secret.SecretBox(pwhash.argon2id.kdf(secret.SecretBox.KEY_SIZE, passphrase.encode("utf-8"), salt,
-                                               opslimit=opslimit, memlimit=memlimit))
+    box = secret.SecretBox(_argon2id(passphrase, salt, opslimit, memlimit))
     return (f"argon2id-secretbox opslimit={opslimit} memlimit={memlimit} "
             f"salt={base64.b64encode(salt).decode('ascii')}", box.encrypt(seed))
 
@@ -293,9 +308,7 @@ def decrypt_seed(encryption, data, passphrase):
     params = dict(p.partition("=")[::2] for p in encryption[1:])
     try:
         salt = base64.b64decode(params["salt"], validate=True)
-        box = secret.SecretBox(pwhash.argon2id.kdf(secret.SecretBox.KEY_SIZE, passphrase.encode("utf-8"), salt,
-                                                   opslimit=int(params["opslimit"]),
-                                                   memlimit=int(params["memlimit"])))
+        box = secret.SecretBox(_argon2id(passphrase, salt, params["opslimit"], params["memlimit"]))
         return box.decrypt(data)
     except (KeyError, ValueError, binascii.Error):
         raise KeyStoreError("the encryption of the key is damaged") from None
@@ -304,7 +317,8 @@ def decrypt_seed(encryption, data, passphrase):
 
 
 ENVELOPE = "envelope-secretbox"
-PASSKEY_RP = "opensheaf.org"
+PASSKEY_RP = "unlock.opensheaf.org"
+OLD_PASSKEY_RP = "opensheaf.org"
 PASSKEY_INFO = b"opensheaf wallet passkey v1"
 PASSKEY_SALT = "opensheaf wallet unlock v1 "
 
@@ -328,8 +342,18 @@ class Passkey:
     """A passkey that unlocks keys: credential CRED (base64url), PRF SALT (bytes), relying party RP,
     and KEK, its key-encryption key, once unlocked."""
 
-    def __init__(self, cred, salt, rp=PASSKEY_RP, kek=None):
-        self.cred, self.salt, self.rp, self.kek = cred, bytes(salt), rp, kek
+    def __init__(self, cred, salt, rp=PASSKEY_RP, kek=None, box=None):
+        self.cred, self.salt, self.rp, self.kek, self.box = cred, bytes(salt), rp, kek, box
+
+    def opens(self, kek):
+        """Whether KEK unwraps the box of this wrap."""
+        if self.box is None:
+            return False
+        try:
+            secret.SecretBox(kek).decrypt(self.box)
+            return True
+        except (CryptoError, ValueError, TypeError):
+            return False
 
     def wrap(self, data_key):
         """The wrap line of DATA_KEY under this passkey."""
@@ -338,11 +362,6 @@ class Passkey:
 
     def __repr__(self):
         return f"Passkey({self.rp} {self.cred})"
-
-
-def _argon2id(passphrase, salt, opslimit, memlimit):
-    return pwhash.argon2id.kdf(secret.SecretBox.KEY_SIZE, passphrase.encode("utf-8"), salt,
-                               opslimit=opslimit, memlimit=memlimit)
 
 
 def envelope(seed, passphrase, passkeys=(), *, opslimit=None, memlimit=None):
@@ -387,7 +406,7 @@ def passkeys_of(text):
     for line in wraps_of(text):
         w = parse_wrap(line)
         if w["method"] == "passkey" and w["kind"] == "prf" and w.get("cred"):
-            out.append(Passkey(w["cred"], w.get("salt", b""), w.get("rp", PASSKEY_RP)))
+            out.append(Passkey(w["cred"], w.get("salt", b""), w.get("rp", PASSKEY_RP), box=w["box"]))
     return out
 
 
@@ -402,7 +421,7 @@ def data_key(wraps, passphrase=None, keks=None):
                 pass
     if passphrase is None:
         raise PassphraseNeeded("this key is encrypted: a passphrase is needed",
-                               [Passkey(w["cred"], w.get("salt", b""), w.get("rp", PASSKEY_RP))
+                               [Passkey(w["cred"], w.get("salt", b""), w.get("rp", PASSKEY_RP), box=w["box"])
                                 for w in parsed if w["method"] == "passkey" and w.get("cred")])
     for w in parsed:
         if w["method"] == "passphrase" and w["kind"] == "argon2id":
@@ -444,6 +463,22 @@ def add_passkey(text, passphrase, passkey, *, opslimit=None, memlimit=None):
         wraps, data = envelope(seed, passphrase, [passkey], opslimit=opslimit, memlimit=memlimit)
         lines[enc:seed_at + 1] = [f"encryption {ENVELOPE}", *wraps, "seed " + _b64(data)]
     return "\n".join(lines) + "\n"
+
+
+def remove_passkeys(text, cred=None, rp=None):
+    """The key file TEXT without the passkey wraps of the credential CRED, or of the relying party RP."""
+    def gone(line):
+        if not line.startswith("wrap passkey "):
+            return False
+        w = parse_wrap(line)
+        return (cred is None or w.get("cred") == cred) and (rp is None or w.get("rp", PASSKEY_RP) == rp)
+    if cred is None and rp is None:
+        raise KeyStoreError("name the passkey wraps to remove, by credential or relying party")
+    lines = text.splitlines()
+    kept = [x for x in lines if not gone(x.strip())]
+    if not any(x.strip().startswith("wrap passphrase ") for x in kept):
+        raise KeyStoreError("the key would have no passphrase wrap left")
+    return "\n".join(kept) + "\n"
 
 
 ROTATION_FORMAT = "opensheaf-rotation-key/0.2"

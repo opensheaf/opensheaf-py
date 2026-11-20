@@ -176,8 +176,8 @@ on `osheaf init --new-owner`, `owner init` and `owner rotate`:
   keys from the wallet, with no USB stick.
 - **`command`, a key wallet in your password manager** (1Password `op`,
   Bitwarden `bw`, `pass`): the same, through a `read` and a `write` command
-  configured in `osheaf.json` (chapter 9 of the literate program has
-  examples for the three).
+  configured in your own configuration file (below; chapter 9 of the
+  literate program has examples for the three).
 
 A wallet trades security for convenience, and the tools say so each time
 they put keys in one: whoever controls the wallet *and* knows the
@@ -187,7 +187,7 @@ in the Passwords app of macOS, for instance, so that GitHub and Apple
 would both have to fail. Move up at any time with one rotation: `osheaf
 owner rotate --keys offline --export DIR` signs with the rotation keys of
 the wallet and exports the new ones offline only, after which those in the
-wallet are used up (`osheaf key forget --wallet --used` removes them).
+wallet are used up (`osheaf key forget --from-wallet --used` removes them).
 
 ```
 gh repo create me/opensheaf-keys --private        # once, by hand: the tools never create it
@@ -197,13 +197,29 @@ osheaf key list                                   # owner, key, kind, did:key: n
 osheaf key pull                                   # on another machine
 osheaf owner rotate --add did:key:NEW             # rotation keys read from the wallet
 osheaf owner rotate --keys offline --export /Volumes/USB/opensheaf-keys --print   # move up
-osheaf key forget --wallet --used
+osheaf key forget --from-wallet --used
 ```
 
-The wallet is named in `osheaf.json` (`"keys": {"wallet":
-"github:me/opensheaf-keys"}`, written by `init`), or in the environment
-variable `OPENSHEAF_WALLET`, which wins and keeps its name out of the
-archive. The passphrase is asked once per command, or taken from
+The `key` commands name the wallet with `--wallet github:OWNER/REPO` (or
+`--wallet command`); otherwise it is configured, the first of these that
+does: the environment variable `OPENSHEAF_WALLET` (text, or JSON as
+below); `"keys"` in your configuration file `~/.config/opensheaf/config.json`
+(`$XDG_CONFIG_HOME/opensheaf/config.json`); `"keys"` in `osheaf.json`
+(`{"wallet": "github:me/opensheaf-keys"}`, written by `init`). A command
+wallet is configured only in the first two, as in
+
+```json
+{"keys": {"wallet": "command",
+          "read": "op read 'op://Private/opensheaf-{owner}-{k}/notesPlain'",
+          "write": "op item create --vault Private --category 'Secure Note' --title 'opensheaf-{owner}-{k}' \"notesPlain=$(cat)\""}}
+```
+
+where `{owner}`, `{k}` and `{kind}` stand for the owner name, the key's 16
+characters and `current` or `rotation`; `read` prints the key file, `write`
+receives it on its standard input, and the optional `list` and `forget`
+list and remove keys. These commands run on your machine, so `osheaf`
+never takes them from an archive's `osheaf.json`, which anyone may have
+written: an `osheaf.json` with a command wallet is refused. The passphrase is asked once per command, or taken from
 `OPENSHEAF_PASSPHRASE`. A current key also goes to and from a password
 manager through the clipboard: `osheaf key export --clipboard` (paste it
 into a note of the Passwords app; `--encrypt` encrypts it under the
@@ -233,41 +249,65 @@ osheaf key unlock        # on another Mac: Touch ID, and the current keys are pu
 ```
 
 `osheaf key enroll` asks the passphrase once, then opens the page
-<https://opensheaf.org/manager/unlock.html> in the browser, which creates a
-passkey for `opensheaf.org` ("OpenSheaf owner …") and derives a secret from
-it (the WebAuthn PRF extension; Safari 17+, Chrome 133+ or Firefox 130+, with iCloud
-Keychain, Google Password Manager, 1Password or a security key that
-supports it). The page hands the secret to `osheaf` on your own computer,
-by going to `http://127.0.0.1:<port>/callback`, a listener that answers
-once, to the one page it opened; and every key of the owner in the wallet
-gets a second lock, under that secret, besides the passphrase. From then on,
-whenever `osheaf` needs a key of the wallet, it opens the page, which asks
-you to click *Unlock* and then for Touch ID; a passkey in iCloud Keychain
-is on all your Macs. Run `osheaf key enroll` again after a rotation that
-did not unlock with the passkey, so that it opens the new keys too.
+<https://unlock.opensheaf.org/> in the browser, which creates a passkey for
+`unlock.opensheaf.org` ("OpenSheaf owner …") and derives a secret from it
+(the WebAuthn PRF extension, in browsers with X25519 in WebCrypto: known
+to work in Safari 17+, Chrome 133+ and Firefox 130+, with iCloud Keychain,
+Google Password Manager, 1Password or a security key that supports PRF).
+The page hands the secret to `osheaf` on your own computer, by going to
+`http://127.0.0.1:<port>/callback`, a listener that answers once, to the
+one page it opened. `osheaf` then opens the page a second time, to unlock
+with the new passkey alone and check that it gives the same secret, and
+only then gives every key of the owner in the wallet a second lock, under
+that secret, besides the passphrase. From then on, whenever `osheaf` needs
+a key of the wallet, it opens the page; a passkey in iCloud Keychain is on
+all your Macs. Run `osheaf key enroll` again after a rotation that did not
+unlock with the passkey, so that it opens the new keys too;
+`osheaf key enroll --new-passkey` adds a passkey of another provider (the
+page refuses to make a second one on a provider that has one already).
+
+**Check the code.** Each time, `osheaf` prints "Check that the browser
+shows the code 123 456", and the page shows a code too: the page does
+nothing until you tick "The terminal shows the same code". A page that
+shows another code was not opened by this `osheaf`: close it.
 
 The passphrase stays the way back: `osheaf` asks for it when the page
 reports an error, after two minutes without an answer, when you press
-Ctrl-C at "Waiting for the browser…", and always with
-`OPENSHEAF_UNLOCK=passphrase` or `OPENSHEAF_PASSPHRASE` set (scripts).
-`OPENSHEAF_PASSPHRASE_COMMAND` names a command that prints it, run before
-it is asked, e.g. `security find-generic-password -w -s
-opensheaf-passphrase` (the macOS keychain) or `op read
-op://Private/opensheaf/password`. Writing new keys into the wallet still
-needs the passphrase.
+Ctrl-C at "Waiting for the browser…", when the browser's answer does not
+open a key, and always with `OPENSHEAF_UNLOCK=passphrase` or
+`OPENSHEAF_PASSPHRASE` set (scripts). `OPENSHEAF_PASSPHRASE_COMMAND` names
+a command that prints it, run before it is asked, e.g. `security
+find-generic-password -w -s opensheaf-passphrase` (the macOS keychain) or
+`op read op://Private/opensheaf/password`. Writing new keys into the
+wallet still needs the passphrase.
 
-What you trust: the page at opensheaf.org (served by GitHub Pages from
-[opensheaf/manager](https://github.com/opensheaf/manager), plain
-JavaScript, no other server), which sees the secret, and the browser. The
-secret opens the wallet only together with the wallet's files, which stay
-behind your GitHub sign-in; it is never stored, by the page or by
-`osheaf`.
+**Passkeys enrolled on `opensheaf.org`.** The first version of the page
+was at `opensheaf.org/manager/unlock.html`, and made passkeys for
+`opensheaf.org`. Their locks still open with the passphrase, but `osheaf`
+no longer asks the browser for them, and says so. Move once:
+
+```
+osheaf key enroll --new-passkey          # a passkey for unlock.opensheaf.org
+osheaf key forget --rp opensheaf.org     # then remove the old locks (the passphrase lock stays)
+```
+
+What you trust: the page at unlock.opensheaf.org (served by GitHub Pages
+from [opensheaf/unlock](https://github.com/opensheaf/unlock), plain
+JavaScript, an origin that serves nothing else), which sees the secret,
+and the browser. The secret opens the wallet only together with the
+wallet's files, which stay behind your GitHub sign-in; it is never
+stored, by the page or by `osheaf`, and `osheaf` keeps it, for the rest of
+the command, only once it has opened a key.
 
 The secret never travels in clear, not even to `127.0.0.1`: `osheaf` puts
-a one-time X25519 public key in the address of the page; the page makes
-its own one-time X25519 key pair, and sends back its public key and the
-secret XOR HKDF-SHA256 of the shared X25519 secret (with the state of the
-request as the salt). Only `osheaf`, while it waits, can open it. It is
+a one-time X25519 public key in the fragment of the page's address (after
+`#`, which the browser sends to no server, and which the page takes out of
+the address at once); the page makes its own one-time X25519 key pair, and
+sends back its public key, the secret XOR an encryption key, and an
+HMAC-SHA256 tag over the request (mode, owner, credential, both public
+keys) and the ciphertext, both keys from HKDF-SHA256 of the shared X25519
+secret (with the state of the request as the salt). Only `osheaf`, while
+it waits, can open it, and anything changed on the way is refused. It is
 not a form: Safari warns that a form sent from an `https` page to
 `http://127.0.0.1` is "a non-secure form", and the address that the page
 goes to instead stays in the browser's history; it holds only a ciphertext,

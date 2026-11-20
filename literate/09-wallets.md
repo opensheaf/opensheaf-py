@@ -52,10 +52,14 @@ the user's.
     through which a key goes to and from a password manager such as the
     Passwords app of macOS.
 
-    The wallet is chosen with --keys github:OWNER/REPO or --keys command, or
-    configured in osheaf.json, "keys": {"wallet": "github:OWNER/REPO"} or
-    {"wallet": "command", "read": "...", "write": "..."}, or by the environment
-    variable OPENSHEAF_WALLET (the same, as text or JSON), which wins."""
+    The wallet is chosen with --keys (commands that make keys) or --wallet (the
+    key commands), github:OWNER/REPO or command; or configured: by the
+    environment variable OPENSHEAF_WALLET (text or JSON), which wins, then by
+    "keys" of the user's configuration file ~/.config/opensheaf/config.json
+    ($XDG_CONFIG_HOME/opensheaf/config.json), {"wallet": "github:OWNER/REPO"}
+    or {"wallet": "command", "read": "...", "write": "..."}, then by "keys" of
+    osheaf.json, which may name a GitHub wallet only: the commands of a command
+    wallet run on the user's machine, and are never read from an archive."""
 
     import base64
     import json
@@ -64,6 +68,7 @@ the user's.
     import shutil
     import subprocess
     import sys
+    from pathlib import Path
 
     from . import keys, names
 
@@ -120,13 +125,18 @@ the standard error whenever keys are put into a wallet.
 Choosing a wallet
 -----------------
 
-A wallet is named as `--keys` names it: `github:OWNER/REPO`, or `command`,
-whose commands are given by the configuration. The configuration of the
-archive, `osheaf.json`, may name the wallet the owner uses, under `keys`;
-the environment variable `OPENSHEAF_WALLET` overrides it, with the same
-value as text (`github:OWNER/REPO`, `offline`) or as JSON (an object like
-that of `osheaf.json`), for a user who keeps the name of its wallet out of
-a public archive, or uses another wallet on another machine.
+A wallet is named as `--keys` (or `--wallet`) names it:
+`github:OWNER/REPO`, or `command`, whose commands are given by the
+configuration. Three places may configure it, the first that does wins:
+
+1. the environment variable `OPENSHEAF_WALLET`, as text
+   (`github:OWNER/REPO`, `offline`, `command`) or as JSON (an object like
+   those below);
+2. `keys` in the user's configuration file, `config.json` in the folder
+   `opensheaf` of `$XDG_CONFIG_HOME` (by default `~/.config`), which
+   holds nothing else for now;
+3. `keys` in the configuration of the archive, `osheaf.json`, which may
+   name a GitHub wallet, and nothing else.
 
 ```json
 "keys": {"wallet": "github:mgubi/opensheaf-keys"}
@@ -135,12 +145,41 @@ a public archive, or uses another wallet on another machine.
          "write": "op item create --vault Private --category 'Secure Note' --title 'opensheaf-{owner}-{k}' \"notesPlain=$(cat)\""}
 ```
 
+The commands of a command wallet are run by the shell, on the user's
+machine; an archive is a folder that anyone may have written, cloned
+from anywhere. So they are read only from the user's own configuration,
+the file or the environment, never from `osheaf.json`: an `osheaf.json`
+that holds a command wallet is refused, with a message that says where to
+move it, before anything is run. A GitHub wallet in `osheaf.json` runs
+nothing but `gh`, on a repository that must be private and is not the
+archive's.
+
 `forbidden` lists the repositories of the archive itself, which the GitHub
 wallet refuses (below).
 
     # in wallet: choosing a wallet:
     WALLET = "OPENSHEAF_WALLET"
     REPO = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?/[A-Za-z0-9._-]+")
+    COMMANDS = ("read", "write", "list", "forget")
+
+
+    def user_config_path():
+        """The user's configuration file of opensheaf."""
+        base = os.environ.get("XDG_CONFIG_HOME") or str(Path.home() / ".config")
+        return Path(base) / "opensheaf" / "config.json"
+
+
+    def user_config():
+        """The `keys` of the user's configuration file, or {}."""
+        path = user_config_path()
+        if not path.is_file():
+            return {}
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as e:
+            raise WalletError(f"{path}: {e}") from None
+        found = data.get("keys") if isinstance(data, dict) else None
+        return found if isinstance(found, dict) else {}
 
 
     def parse(spec, config=None, *, forbidden=()):
@@ -161,17 +200,25 @@ wallet refuses (below).
                 raise WalletError(f"a GitHub wallet is github:OWNER/REPO: {spec}")
             return GitHubWallet(repo, forbidden)
         if spec == "command":
-            return CommandWallet(config or {})
+            return CommandWallet(config or user_config())
         raise WalletError(f"a security level is offline, github:OWNER/REPO or command: {spec}")
 
 
     def configured(config, *, forbidden=()):
-        """The wallet of OPENSHEAF_WALLET, or else of CONFIG (the `keys` of osheaf.json), or None."""
+        """The wallet of OPENSHEAF_WALLET, or else of the user's configuration, or else of CONFIG (the `keys`
+        of osheaf.json, a GitHub wallet only), or None."""
         config = config if isinstance(config, dict) else {}
+        if config.get("wallet") == "command" or any(c in config for c in COMMANDS):
+            raise WalletError(f'osheaf.json configures a command wallet ("keys"), whose commands would run on this '
+                              f"machine: they are read only from your own configuration. Move \"keys\" to "
+                              f"{user_config_path()} (or to {WALLET}), and leave osheaf.json without it")
         env = os.environ.get(WALLET, "").strip()
         if env:
-            return parse(env, config, forbidden=forbidden)
-        return parse(config.get("wallet"), config, forbidden=forbidden)
+            return parse(env, forbidden=forbidden)
+        user = user_config()
+        if user.get("wallet"):
+            return parse(str(user["wallet"]), user, forbidden=forbidden)
+        return parse(config.get("wallet"), forbidden=forbidden)
 
 The archive's own repositories
 ------------------------------
@@ -216,7 +263,7 @@ of [repository contents](https://docs.github.com/en/rest/repos/contents),
 through `gh api`: `GET repos/{owner}/{repo}/contents/{path}` reads a file
 (its content in base64, and its `sha`), `PUT` writes one (its content in
 base64, and the `sha` of the file it replaces, if any), and `DELETE`
-removes one, which only `osheaf key forget --wallet` asks for. A request
+removes one, which only `osheaf key forget --from-wallet` asks for. A request
 body goes on the standard input of `gh` (`--input -`), never on its
 command line. The variable `GH` names the command, so that the tests can
 put a double of their own in its place.
@@ -268,6 +315,9 @@ standard error; any other failure is an error, with what `gh` said.
 Before anything is written, the repository is checked, once per command:
 it must exist (the tools never create one: `gh repo create OWNER/REPO
 --private` does), be private, and not be a repository of the archive.
+Private means both fields of the API that say so: `private` true and
+`visibility` `private`, not `internal`, which every member of an
+enterprise can read.
 The last is checked without a call too, by name, so that even reading
 from the archive's repository is refused.
 
@@ -281,7 +331,7 @@ from the archive's repository is refused.
             if info is None:
                 raise WalletError(f"no repository {self.repo} that gh can reach: create it, private, with "
                                   f"gh repo create {self.repo} --private")
-            if info.get("private") is not True:
+            if info.get("private") is not True or info.get("visibility") != "private":
                 raise WalletError(f"{self.repo} is not a private repository: a wallet must be private")
             if str(info.get("full_name", self.repo)).lower() in self.forbidden:
                 raise WalletError(f"{self.repo} is a repository of the archive, which is public: a wallet is "
@@ -355,8 +405,9 @@ A command of the user's
 
 A user who keeps its secrets in a password manager with a command line
 (1Password's `op`, Bitwarden's `bw`, the standard Unix password manager
-`pass`) configures the commands that read and write a key, in
-`osheaf.json` or in `OPENSHEAF_WALLET`. Each is a shell command in which
+`pass`) configures the commands that read and write a key, in its
+configuration file or in `OPENSHEAF_WALLET` (never in `osheaf.json`,
+above). Each is a shell command in which
 `{owner}`, `{k}` and `{kind}` stand for the owner name, the 16 characters
 that name the key, and `current` or `rotation`. `read` prints the text of
 the key, as written, on its standard output, and fails, or prints nothing,
@@ -395,7 +446,7 @@ anything the shell would read as syntax; they are checked anyway.
             self.config = config
             if not config.get("read") or not config.get("write"):
                 raise WalletError('a command wallet needs "read" and "write" commands, in "keys" of '
-                                  f"osheaf.json or in {WALLET}")
+                                  f"{user_config_path()} or in {WALLET}")
 
         def _run(self, what, owner="", kid="", kind="", text=None):
             if owner or kid:
@@ -584,8 +635,9 @@ browser and the operating system, synchronised between the user's devices
 (by iCloud Keychain on a Mac, or by another passkey provider), checked by
 Touch ID or another check of the user. A command-line tool cannot reach a
 passkey itself: only a web page of the passkey's relying party can, here
-`https://opensheaf.org/manager/unlock.html`, a page of the
-[OpenSheaf Manager](https://github.com/opensheaf/manager). The module
+`https://unlock.opensheaf.org/`, an origin that serves this one page and
+nothing else (its source is the repository
+[opensheaf/unlock](https://github.com/opensheaf/unlock)). The module
 `passkey.py` is the command line's side of it.
 
     # in src/opensheaf/passkey.py:
@@ -606,17 +658,23 @@ passkey itself: only a web page of the passkey's relying party can, here
 The way there and back is this. The command starts a *listener*, a small
 web server on `127.0.0.1` only, on a port chosen by the system, with a
 `state`, 128 random bits, and a one-time X25519 key pair, which only this
-command knows. It opens the browser at the page, with the port, the state,
-the public key of the pair, the owner, the PRF salt of the owner
-(chapter 7) and, to unlock, the credentials of its passkeys. The page says
-what is asked, waits until the user clicks, then calls WebAuthn: to
-enroll, it creates a passkey for `opensheaf.org` and derives its PRF
-secret; to unlock, it derives the secret of one of the passkeys named. It
-hands the secret back by going to `http://127.0.0.1:<port>/callback`, a
-`GET` whose query holds the state, the credential and the secret
-*encrypted to the listener* (the hand-off, below), or an error. The answer
-is a page of the listener, shown in the tab, which says that the tab can
-be closed.
+command knows. It opens the browser at the page, with the mode, the port,
+the state, the public key of the pair, the owner and the credentials of
+the owner's passkeys, all in the *fragment* of the address (after `#`),
+which the browser never sends to a server; the page reads it, and at once
+takes it out of the address bar and of the history. The command prints a
+*confirmation code* of six digits, derived from the state and the public
+key; the page shows the same code, and does nothing until the user has
+checked that the two agree and clicked. It then calls WebAuthn: to
+enroll, it creates a passkey for `unlock.opensheaf.org` and derives its
+PRF secret; to unlock, it derives the secret of one of the passkeys named.
+The PRF salt is not sent: the page computes it from the owner, as chapter
+7 does, so that an address cannot have the page derive a secret for
+another salt. The page hands the secret back by going to
+`http://127.0.0.1:<port>/callback`, a `GET` whose query holds the state,
+the credential and the secret *encrypted and authenticated to the
+listener* (the hand-off, below), or an error. The answer is a page of the
+listener, shown in the tab, which says that the tab can be closed.
 
 Why an address, and not `fetch` or a form. Browsers block a page of the
 web from reading a local server, but let it navigate there. A form posted
@@ -630,28 +688,22 @@ a ciphertext that the one-time private key of the listener alone opens,
 and that key is forgotten when the command ends: in the history, the
 address is useless.
 
-The hand-off is an ephemeral Diffie-Hellman exchange, then a one-time pad.
-The page makes its own one-time X25519 key pair (WebCrypto), and derives
-the shared secret of its private key and the public key of the listener;
-HKDF-SHA256 (RFC 5869) of that shared secret, with the state (in UTF-8) as
-the salt and `opensheaf unlock hand-off v1` as the info, gives as many
-bytes as the PRF secret has, 32, and the ciphertext is the PRF secret XOR
-these bytes. The page sends its public key (`epk`) and the ciphertext
-(`ct`), in base64url; the listener derives the same bytes from its private
-key and `epk`, and recovers the secret. A key pair used once, for 32
-bytes, needs nothing more than XOR; a ciphertext changed on the way gives
-another secret, which opens no key. The credential is sent as it is: it is
-not secret, and the address of the page holds it already. A browser
-without X25519 in WebCrypto (before Safari 17, Chrome 133, Firefox 130)
-sends nothing but the error `x25519-unavailable`, and the passphrase is
-asked.
+Why a code. The address of the page is public in all but its state, and
+any program of the user's, or any page, could open the page with a key
+pair of its own, or send the listener an answer of its own. The code ties
+the page the user sees to this command (a page opened by someone else
+shows another code), and the authenticated hand-off ties the answer to
+the page that knew the state; the command line, besides, trusts a secret
+only once it has opened a key of the wallet (chapter 19), and checks a new
+passkey with a second unlock before it writes anything under it.
 
     # in passkey: the docstring and the imports:
     """Passkey unlock (opensheaf-py): the command line's side of the page
-    https://opensheaf.org/manager/unlock.html, which creates a passkey for
-    opensheaf.org or derives the PRF secret of one (WebAuthn), and hands the
-    secret back to a one-time listener on 127.0.0.1, encrypted to a one-time
-    X25519 key of the listener (X25519, HKDF-SHA256, XOR).
+    https://unlock.opensheaf.org/ (UNLOCK_PAGE), which creates a passkey for
+    unlock.opensheaf.org or derives the PRF secret of one (WebAuthn), and hands
+    the secret back to a one-time listener on 127.0.0.1, encrypted and
+    authenticated to a one-time X25519 key of the listener (X25519,
+    HKDF-SHA256, XOR and HMAC-SHA256).
 
     OPENSHEAF_UNLOCK=passphrase never asks the browser."""
 
@@ -677,15 +729,21 @@ asked.
 
 ### The page
 
-The address of the page carries everything it needs, in its query, and
+The address of the page carries everything it needs in its fragment, and
 nothing secret: the mode (`enroll` or `unlock`), the port, the state, the
-public key of the listener, the owner, the salt in base64url, and the
-credentials, separated by commas. The page refuses anything else, and
-answers only `127.0.0.1` at that port. `PAGE` is a variable, which the
-tests replace.
+public key of the listener, the owner, and the credentials, separated by
+commas: to unlock, those the page may use; to enroll, those the owner
+already has, which the page asks WebAuthn to exclude, so that enrolling
+again on a provider that holds one of them fails rather than replacing
+it. The page refuses anything else, and answers only `127.0.0.1` at that
+port.
+
+The page and the relying party are one origin, and one constant, here
+`keys.PASSKEY_RP`, and `RP_ID` in the page; `UNLOCK_PAGE` is a variable,
+which the tests replace.
 
     # in passkey: the page:
-    PAGE = "https://opensheaf.org/manager/unlock.html"
+    UNLOCK_PAGE = f"https://{keys.PASSKEY_RP}/"
     UNLOCK = "OPENSHEAF_UNLOCK"
     TIMEOUT = 120.0
     STILL = 10.0
@@ -697,28 +755,66 @@ tests replace.
 
 
     def from_b64url(text):
-        if not isinstance(text, str) or not B64URL.fullmatch(text):
+        if not isinstance(text, str) or not B64URL.fullmatch(text) or len(text) % 4 == 1:
             raise ValueError("not base64url")
         return base64.urlsafe_b64decode(text + "=" * (-len(text) % 4))
 
 
     def page_url(mode, port, state, pk, owner, creds=()):
         """The address of the page, in MODE, for the listener on PORT with STATE and public key PK."""
-        query = {"mode": mode, "port": str(port), "state": state, "pk": b64url(pk), "owner": owner,
-                 "salt": b64url(keys.passkey_salt(owner))}
+        fragment = {"mode": mode, "port": str(port), "state": state, "pk": b64url(pk), "owner": owner}
         if creds:
-            query["cred"] = ",".join(creds)
-        return PAGE + "?" + urllib.parse.urlencode(query)
+            fragment["cred"] = ",".join(creds)
+        return UNLOCK_PAGE + "#" + urllib.parse.urlencode(fragment)
+
+The confirmation code is the first four bytes of a SHA-256 digest, of
+`opensheaf unlock code v1`, the state (in UTF-8) and the public key of
+the listener, as a number, modulo a million: six digits, shown in two
+groups of three.
+
+    # in passkey: the page:
+    CODE_LABEL = b"opensheaf unlock code v1"
+
+
+    def confirmation_code(state, pk):
+        """The six digits that the page shows for the listener with STATE and public key PK, as `123 456`."""
+        n = int.from_bytes(hashlib.sha256(CODE_LABEL + state.encode("utf-8") + bytes(pk)).digest()[:4], "big")
+        digits = f"{n % 1000000:06d}"
+        return f"{digits[:3]} {digits[3:]}"
 
 ### The hand-off
 
-Both sides of the hand-off are here: `seal` is what the page does, which
-the tests play, and which a test vector, shared with the tests of the
-page, fixes; `unseal` is what the listener does. HKDF is written out, as
-in chapter 7: it is two lines of HMAC.
+The hand-off is an ephemeral Diffie-Hellman exchange, then a one-time pad
+and a MAC (encrypt-then-MAC). The page makes its own one-time X25519 key
+pair (WebCrypto, its private key not extractable), and derives the shared
+secret of its private key and the public key of the listener;
+HKDF-SHA256 (RFC 5869) of that shared secret, with the state (in UTF-8)
+as the salt and `opensheaf unlock hand-off v2` as the info, gives 64
+bytes: an encryption key, the first 32, and a MAC key, the last 32. The
+ciphertext is the PRF secret XOR the encryption key; the tag is
+HMAC-SHA256, under the MAC key, of the *associated data* followed by the
+ciphertext. The associated data is `mode|owner|cred|pk|epk` in UTF-8: the
+mode, the owner, the credential used, and the two public keys, in
+base64url. The page sends its public key (`epk`), the ciphertext (`ct`),
+the tag (`tag`) and the credential (`cred`), in base64url; the listener
+derives the same keys from its private key and `epk`, checks the tag, in
+constant time, and only then recovers the secret. A ciphertext, a
+credential, a mode or a key changed on the way is refused, rather than
+giving another secret.
+
+Why this, and not AES-GCM, which WebCrypto has. The Python side has
+PyNaCl, whose bindings have no AES-GCM (libsodium's needs hardware AES,
+and PyNaCl does not expose it), and the `cryptography` package would be a
+second cryptographic dependency for 32 bytes. HMAC-SHA256 and HKDF are in
+WebCrypto and in the standard library of Python: the construction needs
+no new dependency on either side, and each key is used once, for one
+message of 32 bytes. Both sides of the hand-off are here: `seal` is what
+the page does, which the tests play, and which a test vector, shared with
+the tests of the page, fixes; `unseal` is what the listener does. HKDF is
+written out, as in chapter 7: it is two lines of HMAC.
 
     # in passkey: the hand-off:
-    HAND_OFF_INFO = b"opensheaf unlock hand-off v1"
+    HAND_OFF_INFO = b"opensheaf unlock hand-off v2"
 
 
     def hkdf(ikm, salt, info, length):
@@ -731,47 +827,71 @@ in chapter 7: it is two lines of HMAC.
         return out[:length]
 
 
-    def _pad(private, other, state, length):
+    def _hand_off_keys(private, other, state):
         shared = bindings.crypto_scalarmult(bytes(private), bytes(other))
-        return hkdf(shared, state.encode("utf-8"), HAND_OFF_INFO, length)
+        both = hkdf(shared, state.encode("utf-8"), HAND_OFF_INFO, 64)
+        return both[:32], both[32:]
 
 
-    def seal(secret, pk, state, ephemeral=None):
-        """(epk, ct): SECRET encrypted to the X25519 public key PK, as the page does, with the one-time
-        private key EPHEMERAL (a fresh one by default)."""
+    def associated_data(mode, owner, cred, pk, epk):
+        """What the tag of the hand-off covers besides the ciphertext."""
+        return f"{mode}|{owner}|{cred}|{b64url(pk)}|{b64url(epk)}".encode("utf-8")
+
+
+    def _tag(mac_key, aad, ct):
+        return hmac.new(mac_key, aad + ct, hashlib.sha256).digest()
+
+
+    def seal(secret, pk, state, mode, owner, cred, ephemeral=None):
+        """(epk, ct, tag): SECRET encrypted and authenticated to the X25519 public key PK, as the page does,
+        with the one-time private key EPHEMERAL (a fresh one by default)."""
         ephemeral = ephemeral or public.PrivateKey.generate()
-        pad = _pad(ephemeral, pk, state, len(secret))
-        return bytes(ephemeral.public_key), bytes(a ^ b for a, b in zip(secret, pad))
+        epk = bytes(ephemeral.public_key)
+        enc, mac = _hand_off_keys(ephemeral, pk, state)
+        ct = bytes(a ^ b for a, b in zip(secret, enc))
+        return epk, ct, _tag(mac, associated_data(mode, owner, cred, pk, epk), ct)
 
 
-    def unseal(private, epk, ct, state):
-        """The secret that the page encrypted as CT, with its public key EPK, to the key pair PRIVATE."""
-        if len(epk) != 32 or len(ct) != 32:
+    def unseal(private, epk, ct, tag, state, mode, owner, cred):
+        """The secret that the page encrypted as CT, with its public key EPK and the tag TAG, to the key pair
+        PRIVATE; ValueError if anything was changed."""
+        if len(epk) != 32 or len(ct) != 32 or len(tag) != 32:
             raise ValueError("not a hand-off of 32 bytes")
-        pad = _pad(private, epk, state, len(ct))
-        return bytes(a ^ b for a, b in zip(ct, pad))
+        enc, mac = _hand_off_keys(private, epk, state)
+        aad = associated_data(mode, owner, cred, bytes(private.public_key), epk)
+        if not hmac.compare_digest(_tag(mac, aad, ct), tag):
+            raise ValueError("the answer of the page is not authentic")
+        return bytes(a ^ b for a, b in zip(ct, enc))
 
 ### The listener
 
 The listener answers one request, `GET /callback`, whose query holds the
-`state`, and either `epk`, `ct` and `cred` or an `error`, and nothing else
-(a few fields, a few kilobytes at most). A request with another state is
-refused (403), and the listener keeps waiting, as it does for any other
-path (404) or any other query (400). Once the state is right, the answer
-is opened: a damaged one (not base64url, not 32 bytes, a public key that
-X25519 refuses) counts as an error of the page. The first right answer
-ends the wait; the tab shows a short page. No `POST` is answered: the page
-never sends a form.
+`state`, and either `epk`, `ct`, `tag` and `cred` or an `error`, and
+nothing else (a few fields, a few kilobytes at most). A request with
+another state is refused (403), and the listener keeps waiting, as it
+does for any other path (404) or any other query (400). Once the state is
+right, the answer is opened: a damaged or forged one (not base64url, not
+32 bytes, a public key that X25519 refuses, a tag that does not match)
+counts as an error of the page. The first right answer ends the wait; the
+tab shows a short page. No `POST` is answered: the page never sends a
+form.
+
+The listener serves each connection in a thread of its own, which gives
+up after five seconds of silence: another program on the computer that
+opens a connection and says nothing cannot keep the browser's answer
+waiting. The first answer is taken under a lock.
 
     # in passkey: the listener:
     DONE = "osheaf has the key. You can close this tab."
     FAILED = "osheaf did not get the key ({}): it asks for the passphrase instead. You can close this tab."
-    NO_X25519 = ("this browser cannot hand the key to osheaf securely; use Safari 17+, Chrome 133+ "
-                 "or Firefox 130+, or the passphrase")
-    ANSWER = ({"state", "epk", "ct", "cred"}, {"state", "epk", "ct"}, {"state", "error"})
+    NO_X25519 = ("this browser has no X25519 in WebCrypto, and cannot hand the key to osheaf securely (known to "
+                 "work: Safari 17+, Chrome 133+, Firefox 130+); osheaf uses the passphrase")
+    ANSWER = ({"state", "epk", "ct", "tag", "cred"}, {"state", "error"})
 
 
     class _Handler(http.server.BaseHTTPRequestHandler):
+        timeout = 5
+
         def do_GET(self):
             url = urllib.parse.urlsplit(self.path)
             if url.path != "/callback":
@@ -781,13 +901,15 @@ never sends a form.
             except ValueError:
                 fields = {}
             if set(fields) not in ANSWER or any(len(v) != 1 for v in fields.values()) or len(url.query) > 8192:
-                return self._answer(400, "this is not an answer of the page")
+                return self._answer(400, "this is not an answer of the page (if osheaf or the page was just "
+                                         "updated, update the other too)")
             fields = {k: v[0] for k, v in fields.items()}
             if not hmac.compare_digest(fields["state"].encode(), self.server.state.encode()):
                 return self._answer(403, "this is not the answer osheaf is waiting for")
-            if self.server.result is not None:
-                return self._answer(409, "osheaf has its answer already")
-            self.server.result = result = self._open(fields)
+            with self.server.lock:
+                if self.server.result is not None:
+                    return self._answer(409, "osheaf has its answer already")
+                self.server.result = result = self._open(fields)
             if "error" in result:
                 error = NO_X25519 if result["error"] == "x25519-unavailable" else result["error"][:200]
                 self._answer(200, FAILED.format(error))
@@ -798,14 +920,14 @@ never sends a form.
         def _open(self, fields):
             if "error" in fields:
                 return {"error": fields["error"][:200] or "an error"}
+            s = self.server
             try:
-                epk, ct = from_b64url(fields["epk"]), from_b64url(fields["ct"])
-                if "cred" in fields:
-                    from_b64url(fields["cred"])
-                secret = unseal(self.server.key, epk, ct, self.server.state)
+                epk, ct, tag = from_b64url(fields["epk"]), from_b64url(fields["ct"]), from_b64url(fields["tag"])
+                from_b64url(fields["cred"])
+                secret = unseal(s.key, epk, ct, tag, s.state, s.mode, s.owner, fields["cred"])
             except Exception:
                 return {"error": "the page sent a damaged answer"}
-            return {"cred": fields.get("cred"), "secret": secret}
+            return {"cred": fields["cred"], "secret": secret}
 
         def _answer(self, status, text):
             page = (f"<!DOCTYPE html><html lang=en><meta charset=utf-8><title>osheaf</title>"
@@ -825,13 +947,13 @@ never sends a form.
 
 `ask` runs the way there and back. It opens the address with `OPEN` (the
 standard `webbrowser`, which the tests replace by a double that plays the
-page), and waits for the answer, two minutes at most, or until the user
-presses Ctrl-C (to type the passphrase instead, or to stop). It says what
-it does on the standard error, and shows the address, which is long, only
-when it is needed: when no browser opens (`--no-browser`, a remote shell),
-or after ten seconds without an answer, in case the browser did not come
-up. The listener is closed whatever happens, and its private key goes with
-it.
+page), prints the confirmation code, and waits for the answer, two
+minutes at most, or until the user presses Ctrl-C (to type the
+passphrase instead, or to stop). It says what it does on the standard
+error, and shows the address, which is long, only when it is needed: when
+no browser opens (`--no-browser`, a remote shell), or after ten seconds
+without an answer, in case the browser did not come up. The listener is
+closed whatever happens, and its private key goes with it.
 
     # in passkey: asking the browser:
     OPEN = webbrowser.open
@@ -839,16 +961,19 @@ it.
 
     def ask(mode, owner, creds=(), *, no_browser=False, timeout=None, ctrl_c="type the passphrase instead"):
         """The answer of the page ({cred, secret} or {error}), in MODE (enroll or unlock), for OWNER and
-        its credentials CREDS; UnlockFailed if none comes."""
-        if not names.OWNER_NAME.match(owner) or mode not in ("enroll", "unlock"):
+        CREDS (to unlock with, or to exclude when enrolling); UnlockFailed if none comes."""
+        if not names.OWNER_NAME.fullmatch(owner) or mode not in ("enroll", "unlock"):
             raise UnlockFailed(f"not an owner name: {owner}")
-        server = http.server.HTTPServer(("127.0.0.1", 0), _Handler)
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
+        server.daemon_threads = True
         server.state, server.result, server.done = secrets.token_urlsafe(16), None, threading.Event()
+        server.mode, server.owner, server.lock = mode, owner, threading.Lock()
         server.key = public.PrivateKey.generate()
         thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.1}, daemon=True)
         thread.start()
         try:
-            url = page_url(mode, server.server_port, server.state, bytes(server.key.public_key), owner, creds)
+            pk = bytes(server.key.public_key)
+            url = page_url(mode, server.server_port, server.state, pk, owner, creds)
             what = (f"create a passkey for {names.short(owner)}" if mode == "enroll"
                     else f"unlock the keys of {names.short(owner)} with your passkey")
             opened = False
@@ -860,6 +985,7 @@ it.
                     opened = False
             if not opened:
                 print(f"Go to this address in your browser, to {what} (Touch ID):\n  {url}", file=sys.stderr)
+            print(f"Check that the browser shows the code {confirmation_code(server.state, pk)}", file=sys.stderr)
             print(f"Waiting for the browser (Ctrl-C to {ctrl_c})…", file=sys.stderr)
             limit = TIMEOUT if timeout is None else timeout
             try:
@@ -880,7 +1006,8 @@ it.
         return server.result
 
 The answer is checked before it is used: a secret of 32 bytes, and a
-credential, one of those asked for when unlocking.
+credential, one of those asked for when unlocking, none of those excluded
+when enrolling.
 
     # in passkey: asking the browser:
     def _answer(result, creds=()):
@@ -892,11 +1019,11 @@ credential, one of those asked for when unlocking.
         return cred, secret
 
 
-    def enroll(owner, **kw):
-        """(the credential of a new passkey of OWNER, its PRF secret)."""
-        cred, secret = _answer(ask("enroll", owner, **kw))
-        if cred is None:
-            raise UnlockFailed("the page sent no credential")
+    def enroll(owner, exclude=(), **kw):
+        """(the credential of a new passkey of OWNER, its PRF secret); EXCLUDE, the credentials it has."""
+        cred, secret = _answer(ask("enroll", owner, exclude, **kw))
+        if cred is None or cred in exclude:
+            raise UnlockFailed("the page sent no new credential")
         return cred, secret
 
 

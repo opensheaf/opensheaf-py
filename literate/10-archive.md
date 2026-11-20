@@ -168,8 +168,8 @@ too.
             "htmlResources": ["max-html/resources/max-html.css", ...]   from the plugins
           },
           "index": {"template": "index-template.tm"},   optional: the readable index
-          "keys": {"wallet": "github:OWNER/REPO"}       optional: the key wallet (or "command",
-                                             with "read" and "write" commands; see osheaf key)
+          "keys": {"wallet": "github:OWNER/REPO"}       optional: the GitHub key wallet (a command
+                                             wallet only in ~/.config/opensheaf/config.json)
         }
 
     and, next to it, `ocfl/` (the OCFL 1.1 storage root), `opensheaf.json` (the
@@ -184,7 +184,8 @@ too.
     folder outside the archive (`osheaf owner init --export DIR`), unless the owner
     chooses a lower security level, a key wallet, which keeps them encrypted
     under a passphrase (`--keys github:OWNER/REPO`, a private repository, or
-    `--keys command`); OPENSHEAF_WALLET overrides "keys".
+    `--keys command`); OPENSHEAF_WALLET or ~/.config/opensheaf/config.json override
+    "keys", and only they may configure a command wallet.
 
     The index is either a TeXmacs document made from a template, as above, which
     osheaf init --index texmacs sets up, or the website (the profile website,

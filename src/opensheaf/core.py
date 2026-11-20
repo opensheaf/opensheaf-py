@@ -24,8 +24,8 @@ An archive is a folder with a configuration file `osheaf.json`:
         "htmlResources": ["max-html/resources/max-html.css", ...]   from the plugins
       },
       "index": {"template": "index-template.tm"},   optional: the readable index
-      "keys": {"wallet": "github:OWNER/REPO"}       optional: the key wallet (or "command",
-                                         with "read" and "write" commands; see osheaf key)
+      "keys": {"wallet": "github:OWNER/REPO"}       optional: the GitHub key wallet (a command
+                                         wallet only in ~/.config/opensheaf/config.json)
     }
 
 and, next to it, `ocfl/` (the OCFL 1.1 storage root), `opensheaf.json` (the
@@ -40,7 +40,8 @@ current key of this device is kept in the system's credential store (or in
 folder outside the archive (`osheaf owner init --export DIR`), unless the owner
 chooses a lower security level, a key wallet, which keeps them encrypted
 under a passphrase (`--keys github:OWNER/REPO`, a private repository, or
-`--keys command`); OPENSHEAF_WALLET overrides "keys".
+`--keys command`); OPENSHEAF_WALLET or ~/.config/opensheaf/config.json override
+"keys", and only they may configure a command wallet.
 
 The index is either a TeXmacs document made from a template, as above, which
 osheaf init --index texmacs sets up, or the website (the profile website,
@@ -2866,24 +2867,25 @@ def configured_wallet():
 
 
 def level_wallet(args):
-    """The wallet of the security level --keys, or None for offline (the default)."""
+    """The wallet of the security level --keys (or of --wallet), or None for offline (the default)."""
     from . import wallet
-    spec = getattr(args, "keys", None) or wallet.OFFLINE
+    spec = getattr(args, "keys", None) or getattr(args, "wallet", None) or wallet.OFFLINE
     try:
         if spec == "command":
             w = configured_wallet()
-            return w if isinstance(w, wallet.CommandWallet) else wallet.parse(spec, ARCHIVE.get("keys"))
+            return w if isinstance(w, wallet.CommandWallet) else wallet.parse(spec)
         return wallet.parse(spec, forbidden=archive_repositories())
     except wallet.WalletError as e:
         sys.exit(str(e))
 
 
 def wallet_for(args):
-    """The wallet a command reads or moves keys with: that of --keys, or the configured one."""
+    """The wallet a command reads or moves keys with: that of --wallet (--keys), or the configured one."""
+    from . import wallet
     w = level_wallet(args) or configured_wallet()
     if w is None:
-        sys.exit("no key wallet: give --keys github:OWNER/REPO (or command), or configure one in "
-                 'osheaf.json ("keys": {"wallet": ...}) or in OPENSHEAF_WALLET')
+        sys.exit("no key wallet: give --wallet github:OWNER/REPO (or command), or configure one in "
+                 f'{wallet.user_config_path()} or osheaf.json ("keys": {{"wallet": ...}}) or in OPENSHEAF_WALLET')
     return w
 
 
@@ -3124,9 +3126,9 @@ def owner_rotate(args, exposed=()):
     print(f"{owner}: v{v.number} of the key log, current keys: {', '.join(v.keys['keys'])}")
     if source is not None and w is None:
         print(f"moved up: the rotation keys kept in {source.name} are used up and sign nothing more "
-              "(section 6.2); the new ones are kept offline only. osheaf key forget --wallet --used removes "
+              "(section 6.2); the new ones are kept offline only. osheaf key forget --from-wallet --used removes "
               f"the used ones; current keys kept in {source.name} still sign until a version retires them "
-              "(osheaf owner rotate --retire) and osheaf key forget --wallet removes them", file=sys.stderr)
+              "(osheaf owner rotate --retire) and osheaf key forget --from-wallet removes them", file=sys.stderr)
     for did in exposed:
         print(f"exposed {did}: what it alone signed is contested (section 7.3)")
 
@@ -3313,6 +3315,12 @@ def passkey_keks(owner, wraps, force=False):
     failed = _ASKED.setdefault("failed", set())
     salt = keys.passkey_salt(owner)
     wraps = [p for p in wraps if p.salt == salt]
+    if any(p.rp == keys.OLD_PASSKEY_RP for p in wraps) and owner not in _ASKED.setdefault("old rp", set()):
+        _ASKED["old rp"].add(owner)
+        print(f"A passkey of {names.short(owner)} was enrolled on {keys.OLD_PASSKEY_RP}, which osheaf no longer "
+              f"asks: run osheaf key enroll --new-passkey to move it to {keys.PASSKEY_RP} (then osheaf key "
+              f"forget --rp {keys.OLD_PASSKEY_RP}).", file=sys.stderr)
+    wraps = [p for p in wraps if p.rp == keys.PASSKEY_RP]
     if not wraps:
         return None
     if any(p.cred in cache for p in wraps):
@@ -3332,7 +3340,14 @@ def passkey_keks(owner, wraps, force=False):
               file=sys.stderr)
         return None
     kek = keys.passkey_kek(prf)
-    for c in ([cred] if cred else creds):
+    opened = [c for c in ([cred] if cred else creds) if any(p.cred == c and p.opens(kek) for p in wraps)]
+    if not opened:
+        failed.add(owner)
+        if force:
+            sys.exit(f"the passkey's answer opens no key of {owner}: nothing was unlocked")
+        print("The passkey's answer opens no key: osheaf asks for the passphrase instead.", file=sys.stderr)
+        return None
+    for c in opened[:1]:
         cache[c] = keys.Passkey(c, salt, kek=kek)
     return {c: p.kek for c, p in cache.items()}
 
@@ -3401,6 +3416,7 @@ def key_owner(args):
 
 def key_enroll(args):
     """Let a passkey open the keys of the owner in the wallet."""
+    import hmac
     from . import passkey, wallet
     owner, w = key_owner(args), wallet_for(args)
     _ASKED["no_browser"] = bool(getattr(args, "no_browser", False))
@@ -3412,7 +3428,8 @@ def key_enroll(args):
     print(f"Reading the keys of {who} in {w.name}…", file=sys.stderr)
     entries = encrypted_entries(w, owner)
     salt = keys.passkey_salt(owner)
-    known = list(dict.fromkeys(p.cred for _, t in entries for p in keys.passkeys_of(t) if p.salt == salt))
+    known = list(dict.fromkeys(p.cred for _, t in entries for p in keys.passkeys_of(t)
+                               if p.salt == salt and p.rp == keys.PASSKEY_RP))
     new = bool(getattr(args, "new_passkey", False)) or not known
     todo = entries if new else [(kid, t) for kid, t in entries
                                 if not {p.cred for p in keys.passkeys_of(t)} & set(known)]
@@ -3430,8 +3447,14 @@ def key_enroll(args):
         print(f"  {i}/{n} {key_label(rk.kind, rk.key.did)}  opened", file=sys.stderr)
     stop = "stop: nothing is changed"
     try:
-        cred, prf = passkey.enroll(owner, no_browser=_ASKED["no_browser"], ctrl_c=stop) if new else \
-            passkey.unlock(owner, known, no_browser=_ASKED["no_browser"], ctrl_c=stop)
+        if new:
+            cred, prf = passkey.enroll(owner, known, no_browser=_ASKED["no_browser"], ctrl_c=stop)
+            print("The passkey is made. Once more, to check it…", file=sys.stderr)
+            again, prf2 = passkey.unlock(owner, [cred], no_browser=_ASKED["no_browser"], ctrl_c=stop)
+            if again not in (None, cred) or not hmac.compare_digest(prf, prf2):
+                sys.exit("the new passkey did not give the same secret twice: nothing was changed")
+        else:
+            cred, prf = passkey.unlock(owner, known, no_browser=_ASKED["no_browser"], ctrl_c=stop)
     except passkey.UnlockFailed as e:
         sys.exit(f"no passkey: {e}; nothing was changed")
     kek = keys.passkey_kek(prf)
@@ -3570,16 +3593,18 @@ def key_import(args):
 
 
 def key_forget(args):
-    """Remove keys from this device, and with --wallet from the wallet."""
+    """Remove keys from this device, and with --from-wallet from the wallet; or passkey wraps."""
     from . import wallet
+    if getattr(args, "passkey", None) or getattr(args, "rp", None):
+        return forget_passkey_wraps(args)
     owner, log = owner_of(args)
     latest = log.latest()
     listed = set(latest.keys["keys"]) if latest else set()
     committed = {d[:16] for d in latest.keys["next"]} if latest else set()
     dids = list(getattr(args, "did", None) or [])
     if getattr(args, "used", False):
-        if not getattr(args, "wallet", False) or dids:
-            sys.exit("--used goes with --wallet, and names no key")
+        if not getattr(args, "from_wallet", False) or dids:
+            sys.exit("--used goes with --from-wallet, and names no key")
     elif not dids:
         sys.exit("name the keys to forget, by their did:key")
     for did in dids:
@@ -3587,7 +3612,7 @@ def key_forget(args):
             names.did_key_public(did)
         except ValueError:
             sys.exit(f"not a did:key URI of an Ed25519 key: {did}")
-    if not getattr(args, "wallet", False):
+    if not getattr(args, "from_wallet", False):
         for did in dids:
             keys.forget_current_key(owner, did)
             print(f"{did}: forgotten on this device")
@@ -3619,6 +3644,44 @@ def key_forget(args):
         for o, kid, kind, did, _ in gone:
             w.forget(o, kid, kind)
             print(f"{did}: removed from {w.name}")
+    except wallet.WalletError as e:
+        sys.exit(str(e))
+
+
+def forget_passkey_wraps(args):
+    """Remove the passkey wraps of --passkey CRED or --rp RP from the keys of the owner in the wallet."""
+    from . import wallet
+    cred, rp = getattr(args, "passkey", None), getattr(args, "rp", None)
+    if getattr(args, "did", None) or getattr(args, "used", False):
+        sys.exit("--passkey and --rp remove passkey wraps, and name no key")
+    owner, w = key_owner(args), wallet_for(args)
+    try:
+        w.check_writable()
+    except wallet.WalletError as e:
+        sys.exit(str(e))
+    todo = []
+    for kid, text in wallet_entries(w, owner):
+        try:
+            new = keys.remove_passkeys(text, cred, rp)
+        except keys.KeyStoreError as e:
+            sys.exit(f"{w.name} {kid}: {e}: nothing was changed")
+        if new.strip() != text.strip():
+            todo.append((kid, wallet.describe(text), new))
+    what = " and ".join(x for x in (cred and f"of the passkey {cred}", rp and f"of {rp}") if x)
+    if not todo:
+        print(f"No key of {names.short(owner)} in {w.name} has a passkey wrap {what}.")
+        return
+    for _, f, _ in todo:
+        print(f"to remove from {w.name}: the passkey wrap {what} of the {f.get('kind', '?')} key {f.get('key', '?')}")
+    if not getattr(args, "yes", False) and input("type forget to remove them: ").strip() != "forget":
+        sys.exit("not confirmed: nothing was removed")
+    try:
+        for kid, f, new in todo:
+            kind = f.get("kind", keys.CURRENT)
+            w.write(owner, kid, kind, new)
+            if (w.read(owner, kid, kind) or "").strip() != new.strip():
+                raise wallet.WalletError(f"{w.name} did not keep the {kind} key {f.get('key')}")
+            print(f"{f.get('key', kid)}: passkey wrap {what} removed from {w.name}")
     except wallet.WalletError as e:
         sys.exit(str(e))
 
