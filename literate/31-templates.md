@@ -584,6 +584,6 @@ string of hexadecimal digits, and may be broken anywhere.
     .cite { background: var(--os-surface); border-radius: 4px; padding: 0.7rem 1rem; font-size: 0.92rem; }
     code { font-family: var(--os-mono); font-size: 0.75em; word-break: break-all;
            font-variant-ligatures: none; }
-    code.copy { cursor: copy; border-bottom: 1px dotted var(--os-faint); }
+    code.copy { border-bottom: 1px dotted transparent; }
     code.copy:hover { border-bottom-color: var(--os-ink); }
     code.copy.copied::after { content: " copied"; font-family: var(--os-sans); color: var(--os-ok); }
