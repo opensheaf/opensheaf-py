@@ -98,7 +98,7 @@ of identity.
 
     import pytest
 
-    from opensheaf import arxiv, core as P, keys, names, owners, sign
+    from opensheaf import arxiv, core as P, keys, names, owners, sign, wallet
 
 The keys of the tests
 ---------------------
@@ -106,8 +106,10 @@ The keys of the tests
 Every archive has an owner, and every version is signed, so every test
 makes keys. They must never touch the keys of the person running the tests:
 the key store is pinned to files (`OPENSHEAF_KEY_STORE=file`), in a
-configuration folder of the test (`XDG_CONFIG_HOME`), and no signing key or
-passphrase is taken from the environment. Keys are predictable, through the
+configuration folder of the test (`XDG_CONFIG_HOME`), and no signing key,
+passphrase or key wallet is taken from the environment; the commands of
+GitHub and of the clipboard are replaced by paths that do not exist, so
+that no test can reach the user's GitHub account or clipboard. Keys are predictable, through the
 hook of [chapter 7](07-keys.md), `OSHEAF_TEST_KEYS`, which pytest alone may
 use: each test gets labels of its own, made from its name, so that its keys
 differ from those of the other tests, and the same at every run.
@@ -119,6 +121,10 @@ differ from those of the other tests, and the same at every run.
         monkeypatch.setenv(keys.KEY_STORE, "file")
         monkeypatch.delenv(keys.SIGNING_KEY, raising=False)
         monkeypatch.delenv(P.PASSPHRASE, raising=False)
+        monkeypatch.delenv(wallet.WALLET, raising=False)
+        monkeypatch.setattr(wallet, "GH", "/nonexistent/gh")
+        monkeypatch.setattr(wallet, "COPY", ["/nonexistent/pbcopy"])
+        monkeypatch.setattr(wallet, "PASTE", ["/nonexistent/pbpaste"])
         monkeypatch.setenv(keys.TEST_KEYS, ",".join(f"{request.node.name} {i}" for i in range(80)))
 
 Archives built by hand

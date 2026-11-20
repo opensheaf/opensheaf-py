@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from opensheaf import arxiv, core as P, keys, names, owners, sign
+from opensheaf import arxiv, core as P, keys, names, owners, sign, wallet
 
 @pytest.fixture(autouse=True)
 def keys_of_the_tests(tmp_path, monkeypatch, request):
@@ -19,6 +19,10 @@ def keys_of_the_tests(tmp_path, monkeypatch, request):
     monkeypatch.setenv(keys.KEY_STORE, "file")
     monkeypatch.delenv(keys.SIGNING_KEY, raising=False)
     monkeypatch.delenv(P.PASSPHRASE, raising=False)
+    monkeypatch.delenv(wallet.WALLET, raising=False)
+    monkeypatch.setattr(wallet, "GH", "/nonexistent/gh")
+    monkeypatch.setattr(wallet, "COPY", ["/nonexistent/pbcopy"])
+    monkeypatch.setattr(wallet, "PASTE", ["/nonexistent/pbpaste"])
     monkeypatch.setenv(keys.TEST_KEYS, ",".join(f"{request.node.name} {i}" for i in range(80)))
 
 

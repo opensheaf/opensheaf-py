@@ -38,7 +38,8 @@ The helpers
 -----------
 
 The keys of the tests are those of the [other tests](70-tests.md):
-predictable, in a key store of files of the test. `locations` maps the
+predictable, in a key store of files of the test, with no wallet, GitHub
+or clipboard within reach. `locations` maps the
 base URLs to the folder of the test. `make` creates an archive named
 `name` in that folder, with a new owner whose rotation keys go to
 `<name>-keys`; `deposit` deposits a PDF alone, with a licence, as a new
@@ -60,7 +61,7 @@ and `uri` a `sheaf:` URI of it, with the archive's base URL as `at`.
 
     import pytest
 
-    from opensheaf import cli, core as P, keys, names, owners, remote, sign
+    from opensheaf import cli, core as P, keys, names, owners, remote, sign, wallet
 
 
     @pytest.fixture(autouse=True)
@@ -69,6 +70,10 @@ and `uri` a `sheaf:` URI of it, with the archive's base URL as `at`.
         monkeypatch.setenv(keys.KEY_STORE, "file")
         monkeypatch.delenv(keys.SIGNING_KEY, raising=False)
         monkeypatch.delenv(P.PASSPHRASE, raising=False)
+        monkeypatch.delenv(wallet.WALLET, raising=False)
+        monkeypatch.setattr(wallet, "GH", "/nonexistent/gh")
+        monkeypatch.setattr(wallet, "COPY", ["/nonexistent/pbcopy"])
+        monkeypatch.setattr(wallet, "PASTE", ["/nonexistent/pbpaste"])
         monkeypatch.setenv(keys.TEST_KEYS, ",".join(f"{request.node.name} {i}" for i in range(120)))
         monkeypatch.setenv(remote.LOCATIONS, f"https://example.org/={tmp_path}/")
 
