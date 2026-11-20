@@ -148,10 +148,12 @@ The landing page of a document receives, besides `{{archive_name}}`,
   not withdrawn (section 13.1), and `{{contested}}`, a warning that the
   version presented is contested, signed only with keys its owner has
   since exposed (section 7.3), empty otherwise;
-- `{{sheaf_uri}}`, the full `sheaf:` URI of the line, `{{sheaf_short}}`,
-  a short form of it for people (section 12.2), and `{{owner}}`, its owner,
-  linked to the owner's page, with its keeper and what a reader must know
-  of it (an end, exposed keys);
+- `{{sheaf_uri}}`, the full `sheaf:` URI of the line in canonical form
+  (`sheaf:<name>` for the originator's line), `{{sheaf_short}}`, a short
+  form of it for people (section 12.2), and `{{owner}}`, its owner, linked
+  to the owner's page, with its keeper, marked "(confirmed)" when the
+  keeper confirmed the link as the pages were written (section 6.6), and
+  what a reader must know of it (an end, exposed keys);
 - `{{versions}}`, the signed document versions, each with its status
   and pin, as items of a list;
 - `{{cite}}`, the suggested citation, and `{{licence}}`, the licence,

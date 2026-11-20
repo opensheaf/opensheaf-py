@@ -126,6 +126,7 @@ differ from those of the other tests, and the same at every run.
         monkeypatch.setattr(wallet, "GH", "/nonexistent/gh")
         monkeypatch.setattr(wallet, "COPY", ["/nonexistent/pbcopy"])
         monkeypatch.setattr(wallet, "PASTE", ["/nonexistent/pbpaste"])
+        monkeypatch.setattr(owners, "fetch_json", lambda url: pytest.fail(f"the network was read: {url}"))
         monkeypatch.setenv(keys.TEST_KEYS, ",".join(f"{request.node.name} {i}" for i in range(80)))
 
 Archives built by hand
@@ -1694,6 +1695,76 @@ relation was recorded with one; and a change note says what it is
 A featured collection, on the home page of the website, is a collection
 across archives, and is tested with the [tests across
 archives](72-tests-across.md).
+
+The address of a landing page is the label of its line, or its name, with
+the owner name added when the archive holds several lines of that name
+(appendix A.3).
+
+    # in test: the website:
+    def test_page_addresses(monkeypatch):
+        n, m, o1, o2 = "n" * 51 + "a", "m" * 51 + "a", "o" * 51 + "a", "p" * 51 + "a"
+        held = [f"sheaf:{n}:{o1}", f"sheaf:{n}:{o2}", f"sheaf:{m}:{o1}"]
+        monkeypatch.setattr(P, "objects", lambda: [(i, None, None) for i in held])
+        monkeypatch.setattr(P, "LABELS", {"lab": held[0]})
+        assert [P.page_address(i) for i in held] == ["lab", f"{n}-{o2}", m]
+        monkeypatch.setattr(P, "LABELS", {})
+        assert [P.page_address(i) for i in held] == [f"{n}-{o1}", f"{n}-{o2}", m]
+
+An owner may name a keeper, an ORCID iD here, who confirms the link in its
+ORCID record (section 6.6). The tests never read the network: `fetch_json`
+is replaced by the answers of the test. The pages mark the keeper
+"(confirmed)" when the record links the owner when they are written, and
+show nothing more when it does not or cannot be read; `osheaf owner show`
+says how the link stands, or that it was not checked with `--offline`; and
+`osheaf verify` reports it as a result with `--remote`, as not checked
+without, and as a warning when the record cannot be read.
+
+    # in test: the website:
+    def test_keeper_of_the_owner(tmp_path, monkeypatch, capsys):
+        orcid = "https://orcid.org/0000-0002-4014-2949"
+        record = {"researcher-url": []}
+        asked = []
+        monkeypatch.setattr(owners, "fetch_json", lambda url: asked.append(url) or record)
+        root = tmp_path / "a"
+        make_archive(root, "T", "--keeper", orcid)
+        owner = P.ARCHIVE["owner"]
+        record["researcher-url"] = [{"url-name": "OpenSheaf", "url": {"value": f"https://example.org/T/owner/{owner}/"}}]
+        pdf = tmp_path / "p.pdf"
+        pdf.write_bytes(b"%PDF-1.4 p")
+        r = ["--root", str(root)]
+        run(*r, "deposit", "p", "--pdf", str(pdf), "--no-source", "x", "--title", "On x", "--author", "Doe, Jane",
+            "--new")
+        run(*r, "collect")
+        assert set(asked) == {"https://pub.orcid.org/v3.0/0000-0002-4014-2949/researcher-urls"}
+        page = (root / "paper" / "p" / "index.html").read_text()
+        assert f'keeper <a href="{orcid}">{orcid}</a> (confirmed)' in page
+        owner_page = (root / "owner" / owner / "index.html").read_text()
+        assert f'Keeper: <a href="{orcid}">{orcid}</a> (confirmed)' in owner_page
+        capsys.readouterr()
+        run(*r, "owner", "show")
+        assert f"Keeper        {orcid}  confirmed (ORCID record links the owner)" in capsys.readouterr().out
+        run(*r, "owner", "show", "--offline")
+        assert f"Keeper        {orcid}  not checked (offline: --offline given)" in capsys.readouterr().out
+        messages = {x["message"]: x["severity"] for x in P.verify_findings()}
+        assert messages[f"keeper {orcid}: not checked (osheaf verify --remote reads its ORCID record or domain, "
+                        "section 6.6)"] == "result"
+        messages = {x["message"]: x["severity"] for x in P.verify_findings(remote=True)}
+        assert messages[f"keeper {orcid}: confirmed (ORCID record links the owner; section 6.6)"] == "result"
+        record["researcher-url"] = []
+        messages = {x["message"]: x["severity"] for x in P.verify_findings(remote=True)}
+        assert messages[f"keeper {orcid}: claimed only (the ORCID record has no link naming the owner; "
+                        "section 6.6)"] == "result"
+
+        def offline(url):
+            raise owners.KeeperUnreachable(f"{url}: no network")
+        found = P.verify_findings(remote=True, keeper_fetch=offline)
+        assert [x["severity"] for x in found if x["message"].startswith(f"keeper {orcid}: not checked (offline: ")] \
+            == ["warning"]
+        assert P.verify_errors() == []
+        from opensheaf import html
+        html.render(P.main_members(), keeper_fetch=offline)
+        page = (root / "paper" / "p" / "index.html").read_text()
+        assert f'keeper <a href="{orcid}">{orcid}</a>' in page and "(confirmed)" not in page
 
 Importing from arXiv
 --------------------

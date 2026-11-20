@@ -343,8 +343,10 @@ or from `--root`. They maintain:
 - the website (the profile `website`, appendix A.3): `index.html`, presenting
   the latest signed version of the main catalogue with the pin of every
   member (and a featured collection first, if one is set); a landing page
-  `paper/<label>/` per line held (its full `sheaf:` URI and a short form, its
-  owner, the current version, every signed document version in the order of
+  `paper/<label>/` per line held (`paper/<name>/` without a label, with
+  `-<owner>` added when several lines share the name; its full `sheaf:` URI
+  in canonical form and a short form, its owner and keeper, marked
+  confirmed when the keeper's ORCID record or domain links the owner, the current version, every signed document version in the order of
   the history with its status, contested ones marked, notices, files, pins,
   DOI, the withdrawal if any, the `citation_*` tags read by Google Scholar,
   JSON-LD, Signposting links); a page `owner/<owner>/` per owner, summarising
@@ -552,7 +554,9 @@ osheaf arxiv import DOWNLOADS [ARXIV-ID ...] [--update] [--versions v1,v3] [--ag
   tombstones and indexes, and, under the profile website, that the home page
   shows the pin of every member of the main catalogue and each landing page
   the `sheaf:` URI of its line; with `--remote`, the members of collections
-  held in other archives, resolved, with their statuses).
+  held in other archives, resolved, with their statuses, and the link of
+  each owner to its keeper, confirmed or claimed only, read from the
+  keeper's ORCID record or `https://<domain>/.well-known/opensheaf`).
 - **zenodo**: the Zenodo binding (appendix A.1): deposits the current
   document version of a line, signed (on the sandbox, on a copy of the line
   and of its owner's key log, unless `--production`). The version recording

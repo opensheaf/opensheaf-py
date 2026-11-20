@@ -39,6 +39,9 @@ They are in their own file, `tests/test_identity.py`.
     <<identity tests: key logs on disk>>
 
 
+    <<identity tests: keepers>>
+
+
     <<identity tests: signatures>>
 
 
@@ -657,6 +660,69 @@ after an ending version.
         after.versions[-1].number = 4
         errors, warnings = after.check()
         assert any("held after an ending version" in w for w in warnings)
+
+Keepers
+-------
+
+The link of an owner to its keeper (section 6.6) is read from the keeper's
+place, here from answers given by the test instead of the network. The
+ORCID record of the appendix's authors confirms their owner when one of
+its links names it, as `https://mgubi.org/papers/owner/<owner>/` does; a
+record whose links name other owners, or none, leaves the link claimed
+only; a link naming the owner and then another names a successor, which
+is accepted while the key log names none. A domain confirms through its
+`.well-known/opensheaf`, which must be of its format and list the owner.
+A place that cannot be read leaves the link not checked, and an owner
+without a keeper has no link.
+
+    # in identity tests: keepers:
+    def orcid_answer(*urls):
+        return {"researcher-url": [{"url-name": "OpenSheaf", "url": {"value": u}} for u in urls], "path": "x"}
+
+
+    def test_keeper_link():
+        log = authors_log(2)
+        assert owners.keeper_of(log) == ORCID_A
+        asked = []
+        def fetch(answer):
+            def f(url):
+                asked.append(url)
+                if isinstance(answer, Exception):
+                    raise answer
+                return answer
+            return f
+
+        link = owners.keeper_link(log, fetch(orcid_answer(f"https://mgubi.org/papers/owner/{A}/")))
+        assert (link.status, link.reason, link.successor) == (owners.CONFIRMED, "ORCID record links the owner", None)
+        assert asked == ["https://pub.orcid.org/v3.0/0000-0002-1234-5677/researcher-urls"]
+        assert owners.keeper_link(log, fetch(orcid_answer(f"sheaf:{A}"))).status == owners.CONFIRMED
+        assert owners.keeper_link(log, fetch(orcid_answer(f"https://x.org/{J}/", "https://x.org/"))).status \
+            == owners.CLAIMED
+        assert owners.keeper_link(log, fetch(orcid_answer(f"https://x.org/{A}x/"))).status == owners.CLAIMED
+        assert owners.keeper_link(log, fetch({})).status == owners.CLAIMED
+        link = owners.keeper_link(log, fetch(orcid_answer(f"https://x.org/owner/{A}/successor/{J}/")))
+        assert (link.status, link.successor) == (owners.CONFIRMED, J)
+        assert owners.successor_claim(log, link) == "named by the keeper (section 6.6)"
+        lines = owners.describe(log, (), link)
+        assert lines[1] == f"Keeper        {ORCID_A}  confirmed (ORCID record links the owner)"
+        assert lines[2] == f"Successor     {J}  named by the keeper (section 6.6)"
+        link = owners.keeper_link(log, fetch(owners.KeeperUnreachable("pub.orcid.org: no network")))
+        assert (link.status, link.reason) == (owners.NOT_CHECKED, "offline: pub.orcid.org: no network")
+        assert owners.describe(log, (), link)[1] == f"Keeper        {ORCID_A}  not checked (offline: pub.orcid.org: no network)"
+
+        journal = owners.new_owner([K1], [R[1]], next_threshold=1, keeper="https://journal.example.org/",
+                                   created="2026-01-15T10:00:00Z", nonce=nonce("J"))
+        o = journal.owner
+        asked.clear()
+        good = {"format": "opensheaf-keeper/0.2", "owners": [o], "successors": {o: A}}
+        link = owners.keeper_link(journal, fetch(good))
+        assert asked == ["https://journal.example.org/.well-known/opensheaf"]
+        assert (link.status, link.successor) == (owners.CONFIRMED, A)
+        assert owners.keeper_link(journal, fetch(dict(good, owners=[A]))).status == owners.CLAIMED
+        assert "format" in owners.keeper_link(journal, fetch(dict(good, format="x"))).reason
+        assert owners.keeper_link(journal, fetch(None)).reason.startswith("there is no ")
+        bare = owners.new_owner([K1], [R[1]], next_threshold=1, created="2026-01-15T10:00:00Z", nonce=nonce("B"))
+        assert owners.keeper_link(bare, lambda url: pytest.fail(url)).status == owners.ABSENT
 
 Signatures
 ----------

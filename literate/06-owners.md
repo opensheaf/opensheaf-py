@@ -47,6 +47,9 @@ the [keys](07-keys.md) module, and signatures are made and judged by the
     <<owners: creating an owner>>
 
 
+    <<owners: keepers>>
+
+
     <<owners: reading and writing a key log on disk>>
 
 The module builds on the names and on the signatures.
@@ -61,6 +64,8 @@ The module builds on the names and on the signatures.
     import json
     import os
     import re
+    import urllib.error
+    import urllib.request
     from dataclasses import dataclass, field
     from pathlib import Path
 
@@ -1053,16 +1058,23 @@ for every command that needs them.
 its keeper, each version with its digest and its keys (how many sign, in
 words rather than the fields `threshold` and `nextThreshold`), the current
 keys, marking those held on this computer, the exposed keys, the end, and
-the problems found. The command line shows it.
+the problems found. Given the link to the keeper, as `keeper_link` found
+it, the keeper's line says how it stands, with the successor the keeper
+names, if any. The command line shows it.
 
     # in owners: creating an owner:
-    def describe(log, here=()):
-        """Lines describing the key log LOG for a person; HERE, the did:keys held on this computer."""
+    def describe(log, here=(), link=None):
+        """Lines describing the key log LOG for a person; HERE, the did:keys held on this computer;
+        LINK, the KeeperLink to its keeper, if it was looked for."""
         errors, warnings = log.check()
         rec = _json_or_none(log.genesis) or {}
         out = [f"Owner         {log.owner}"]
         if rec.get("keeper"):
-            out.append(f"Keeper        {rec['keeper'][0]}")
+            how = f"  {link.status}" + (f" ({link.reason})" if link.reason else "") if link else ""
+            out.append(f"Keeper        {rec['keeper'][0]}{how}")
+            claim = successor_claim(log, link)
+            if claim:
+                out.append(f"Successor     {link.successor}  {claim}")
         for i, v in enumerate(log.versions):
             k = v.keys or {}
             what = ("fork record, carrying " + ", ".join(f"v{c.number}" for c in v.carried) if v.fork_record
@@ -1096,6 +1108,153 @@ the problems found. The command line shows it.
 
     def _count(items, noun):
         return f"{len(items)} {noun}" + ("" if len(items) == 1 else "s")
+
+Keepers
+-------
+
+An owner may name a keeper in its genesis record, a person or an
+institution who answers for it: an ORCID iD or a domain (section 6.6). The
+genesis record makes the claim, from the owner's side, and nothing can
+change it. The keeper confirms it, or not, in a place only the keeper
+controls, and a verifier MAY check both directions, reporting the link as
+*confirmed*, *claimed only* (the keeper does not confirm it) or *absent*
+(the owner names no keeper). When the keeper's place cannot be read (no
+network, a server down), the link is *not checked*, which says nothing
+either way. A confirmation is read as it is now: a keeper who withdraws it
+ends the link.
+
+The two places are:
+
+- for an ORCID iD, the public record of the iD, whose researcher URLs
+  (the "websites and social links" of the record) are read from ORCID's
+  public API, `https://pub.orcid.org/v3.0/<iD>/researcher-urls`, as JSON,
+  without authentication. A link names the owner when its URL holds the
+  owner name as a word of its own: `https://example.org/owner/<owner>/`
+  or `sheaf:<owner>`, which the specification leaves open until `sheaf:`
+  has an `https` form (section 6.6, open questions). A link naming two
+  owners names a successor (section 6.6: "on ORCID, a link naming both"):
+  the first is the owner, the second its successor;
+- for a domain, the file `https://<domain>/.well-known/opensheaf`, a JSON
+  object with `format` `"opensheaf-keeper/0.2"`, `owners`, the owner names
+  the keeper answers for, and optionally `successors`, mapping owner names
+  of `owners` to their successors.
+
+A keeper names a successor only for an owner it confirms. Whether that
+successor is the owner's *accepted* successor depends on the key log: an
+ending version before any fork point that names one wins, and a keeper
+naming another is then a claim (section 6.6). `KeeperLink` keeps what was
+found, and `successor_claim` says which.
+
+The fetching is a function, `fetch`, given to `keeper_link`, so that the
+tests and the website, which must build the same pages from the same
+files, decide whether the network is read. The default reads it, with a
+short timeout and at most 1 MB: a keeper's file is small. A missing file
+(HTTP 404 or 410) is an answer, the keeper confirming nothing; any other
+failure is `KeeperUnreachable`.
+
+    # in owners: keepers:
+    KEEPER_FORMAT = "opensheaf-keeper/0.2"
+    CONFIRMED, CLAIMED, ABSENT, NOT_CHECKED = "confirmed", "claimed only", "absent", "not checked"
+    ORCID_API = "https://pub.orcid.org/v3.0/{}/researcher-urls"
+    KEEPER_TIMEOUT = 15
+    USER_AGENT = "opensheaf-py (https://github.com/opensheaf/opensheaf-py)"
+    OWNER_WORD = re.compile(r"(?<![a-z0-9])[a-z2-7]{51}[aq](?![a-z0-9])")
+
+
+    class KeeperUnreachable(Exception):
+        """The place of a keeper cannot be read."""
+
+
+    def fetch_json(url):
+        """The JSON value at URL, or None if there is none (HTTP 404 or 410); KeeperUnreachable if it
+        cannot be read."""
+        req = urllib.request.Request(url, headers={"Accept": "application/json", "User-Agent": USER_AGENT})
+        try:
+            with urllib.request.urlopen(req, timeout=KEEPER_TIMEOUT) as r:
+                data = r.read((1 << 20) + 1)
+        except urllib.error.HTTPError as e:
+            if e.code in (404, 410):
+                return None
+            raise KeeperUnreachable(f"{url}: HTTP {e.code}") from None
+        except (urllib.error.URLError, OSError, ValueError) as e:
+            raise KeeperUnreachable(f"{url}: {getattr(e, 'reason', e)}") from None
+        if len(data) > 1 << 20:
+            raise KeeperUnreachable(f"{url}: more than 1 MB")
+        try:
+            return json.loads(data)
+        except ValueError:
+            raise KeeperUnreachable(f"{url}: not JSON") from None
+
+
+    @dataclass
+    class KeeperLink:
+        """The link between an owner and its keeper (section 6.6), as found."""
+        keeper: object                   # the keeper's URI, or None
+        status: str                      # CONFIRMED, CLAIMED, ABSENT or NOT_CHECKED
+        reason: str = ""                 # how it was confirmed, or why not
+        successor: object = None         # the successor the keeper names, if any
+
+
+    def keeper_of(log):
+        """The keeper named by the genesis record of the key log LOG, or None."""
+        try:
+            return (names.read_genesis(log.genesis).get("keeper") or [None])[0] if log else None
+        except ValueError:
+            return None
+
+`keeper_link` reads the keeper's place and judges the link. ORCID's
+answer is read leniently, as the public API writes it (`researcher-url`, a
+list of objects whose `url` has a `value`): anything else in it is
+ignored, and a record without links confirms nothing.
+
+    # in owners: keepers:
+    def keeper_link(log, fetch=None):
+        """The link between the owner of the key log LOG and its keeper (section 6.6), read with
+        FETCH (a function of a URL, like fetch_json, which it defaults to)."""
+        fetch = fetch or fetch_json
+        keeper, owner = keeper_of(log), log.owner
+        if keeper is None:
+            return KeeperLink(None, ABSENT, "the owner names no keeper")
+        orcid = keeper.startswith("https://orcid.org/")
+        url = ORCID_API.format(keeper.rsplit("/", 1)[1]) if orcid else keeper + ".well-known/opensheaf"
+        try:
+            data = fetch(url)
+        except KeeperUnreachable as e:
+            return KeeperLink(keeper, NOT_CHECKED, f"offline: {e}")
+        if orcid:
+            links = data.get("researcher-url") if isinstance(data, dict) else None
+            for item in links if isinstance(links, list) else []:
+                value = (item.get("url") or {}).get("value") if isinstance(item, dict) else None
+                words = OWNER_WORD.findall(value) if isinstance(value, str) else []
+                if words and words[0] == owner:
+                    others = [w for w in words[1:] if w != owner]
+                    return KeeperLink(keeper, CONFIRMED, "ORCID record links the owner", others[0] if others else None)
+            return KeeperLink(keeper, CLAIMED, "the ORCID record has no link naming the owner")
+        if data is None:
+            return KeeperLink(keeper, CLAIMED, f"there is no {url}")
+        if not isinstance(data, dict) or data.get("format") != KEEPER_FORMAT:
+            return KeeperLink(keeper, CLAIMED, f"{url} is not of format {KEEPER_FORMAT}")
+        listed = data.get("owners")
+        if not (isinstance(listed, list) and owner in listed):
+            return KeeperLink(keeper, CLAIMED, f"{url} does not list the owner")
+        succ = (data.get("successors") or {}).get(owner) if isinstance(data.get("successors"), dict) else None
+        succ = succ if isinstance(succ, str) and names.OWNER_NAME.match(succ) and succ != owner else None
+        return KeeperLink(keeper, CONFIRMED, f"{url} lists the owner", succ)
+
+The successor a keeper names is the accepted one when no ending version
+before any fork point names one, or names the same; otherwise it is a
+claim (section 6.6).
+
+    # in owners: keepers:
+    def successor_claim(log, link):
+        """How the successor named by the keeper in LINK stands, for a person: "named by the keeper"
+        (accepted), "claimed by the keeper (...)", or None when the keeper names none, or the one the
+        key log names."""
+        if link is None or link.successor is None or link.successor == log.successor:
+            return None
+        if log.successor:
+            return f"claimed by the keeper (the ending version names {log.successor}; section 6.6)"
+        return "named by the keeper (section 6.6)"
 
 Reading and writing a key log on disk
 -------------------------------------

@@ -262,12 +262,16 @@ def abstract_html(dc):
     return ""
 
 
-def render(members, home=True, featured=None):
+def render(members, home=True, featured=None, keeper_fetch=None):
     """Write index.html, paper/<label>/index.html for every line presented, owner/<owner>/,
     style.css and sitemap.xml; with home=False (a TeXmacs index is the home page),
     everything but index.html. FEATURED: the identifier of a collection of the archive
-    whose members the home page lists first."""
+    whose members the home page lists first. KEEPER_FETCH: how the places of keepers are
+    read (owners.fetch_json by default)."""
+    global KEEPER_FETCH
     LINES.clear()
+    KEEPERS.clear()
+    KEEPER_FETCH = keeper_fetch
     members = [m for m in members if not removed(m)]
     root_out = P.ROOT
     base = P.ARCHIVE["baseUrl"]
@@ -553,24 +557,37 @@ def local_entry(m, root=""):
         "</li>"])
 
 
+KEEPERS = {}
+KEEPER_FETCH = None
+
+
+def keeper_link(log):
+    """The link of the owner of LOG to its keeper, read once per run of render."""
+    if log.owner not in KEEPERS:
+        KEEPERS[log.owner] = owners.keeper_link(log, KEEPER_FETCH)
+    return KEEPERS[log.owner]
+
+
+def keeper_html(log):
+    """The keeper of the owner of LOG, linked, marked (confirmed) when it confirms the link; or ""."""
+    keeper = owners.keeper_of(log)
+    if not keeper:
+        return ""
+    mark = " (confirmed)" if keeper_link(log).status == owners.CONFIRMED else ""
+    return f'<a href="{esc(keeper)}">{esc(keeper)}</a>{mark}'
+
+
 def owner_html(owner, root):
     """The owner of a line, on a landing page: its name, linked to its page, its keeper and
     its state."""
     log = P.key_log(owner)
     name = f"<code>{esc(owner)}</code>"
     out = f'<a href="{root}owner/{owner}/">{name}</a>' if log else name
-    keeper = keeper_of(log)
+    keeper = keeper_html(log) if log else ""
     if keeper:
-        out += f' · keeper <a href="{esc(keeper)}">{esc(keeper)}</a>'
+        out += f" · keeper {keeper}"
     notes = owner_notes(log)
     return out + (f' · <span class="contested">{esc("; ".join(notes))}</span>' if notes else "")
-
-
-def keeper_of(log):
-    try:
-        return (names.read_genesis(log.genesis).get("keeper") or [None])[0] if log else None
-    except ValueError:
-        return None
 
 
 def owner_notes(log):
@@ -600,9 +617,12 @@ def owner_page(owner, lines):
              f"{'s' if len(log.versions) != 1 else ''}"
              + (f"; latest <code class=\"copy\">sheaf:{esc(owner)}/v{last.number}?sha512={last.digest}</code>" if last else "")
              + "</li>"]
-    keeper = keeper_of(log)
+    keeper = keeper_html(log)
     if keeper:
-        facts.append(f'<li>Keeper: <a href="{esc(keeper)}">{esc(keeper)}</a></li>')
+        facts.append(f"<li>Keeper: {keeper}</li>")
+        claim = owners.successor_claim(log, keeper_link(log))
+        if claim:
+            facts.append(f"<li>Successor {esc(claim)}: <code>{esc(keeper_link(log).successor)}</code></li>")
     latest = log.latest()
     if latest is not None:
         facts.append(f"<li>Current keys ({latest.keys['threshold']} of {len(latest.keys['keys'])} sign):"

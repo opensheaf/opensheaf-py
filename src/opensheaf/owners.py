@@ -8,6 +8,8 @@ import copy
 import json
 import os
 import re
+import urllib.error
+import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -685,13 +687,18 @@ ROTATION_KEYS_WARNING = (
     "log needs to sign can never change its keys or end (section 6.2).")
 
 
-def describe(log, here=()):
-    """Lines describing the key log LOG for a person; HERE, the did:keys held on this computer."""
+def describe(log, here=(), link=None):
+    """Lines describing the key log LOG for a person; HERE, the did:keys held on this computer;
+    LINK, the KeeperLink to its keeper, if it was looked for."""
     errors, warnings = log.check()
     rec = _json_or_none(log.genesis) or {}
     out = [f"Owner         {log.owner}"]
     if rec.get("keeper"):
-        out.append(f"Keeper        {rec['keeper'][0]}")
+        how = f"  {link.status}" + (f" ({link.reason})" if link.reason else "") if link else ""
+        out.append(f"Keeper        {rec['keeper'][0]}{how}")
+        claim = successor_claim(log, link)
+        if claim:
+            out.append(f"Successor     {link.successor}  {claim}")
     for i, v in enumerate(log.versions):
         k = v.keys or {}
         what = ("fork record, carrying " + ", ".join(f"v{c.number}" for c in v.carried) if v.fork_record
@@ -725,6 +732,101 @@ def _signers(items, threshold, noun, what):
 
 def _count(items, noun):
     return f"{len(items)} {noun}" + ("" if len(items) == 1 else "s")
+
+
+KEEPER_FORMAT = "opensheaf-keeper/0.2"
+CONFIRMED, CLAIMED, ABSENT, NOT_CHECKED = "confirmed", "claimed only", "absent", "not checked"
+ORCID_API = "https://pub.orcid.org/v3.0/{}/researcher-urls"
+KEEPER_TIMEOUT = 15
+USER_AGENT = "opensheaf-py (https://github.com/opensheaf/opensheaf-py)"
+OWNER_WORD = re.compile(r"(?<![a-z0-9])[a-z2-7]{51}[aq](?![a-z0-9])")
+
+
+class KeeperUnreachable(Exception):
+    """The place of a keeper cannot be read."""
+
+
+def fetch_json(url):
+    """The JSON value at URL, or None if there is none (HTTP 404 or 410); KeeperUnreachable if it
+    cannot be read."""
+    req = urllib.request.Request(url, headers={"Accept": "application/json", "User-Agent": USER_AGENT})
+    try:
+        with urllib.request.urlopen(req, timeout=KEEPER_TIMEOUT) as r:
+            data = r.read((1 << 20) + 1)
+    except urllib.error.HTTPError as e:
+        if e.code in (404, 410):
+            return None
+        raise KeeperUnreachable(f"{url}: HTTP {e.code}") from None
+    except (urllib.error.URLError, OSError, ValueError) as e:
+        raise KeeperUnreachable(f"{url}: {getattr(e, 'reason', e)}") from None
+    if len(data) > 1 << 20:
+        raise KeeperUnreachable(f"{url}: more than 1 MB")
+    try:
+        return json.loads(data)
+    except ValueError:
+        raise KeeperUnreachable(f"{url}: not JSON") from None
+
+
+@dataclass
+class KeeperLink:
+    """The link between an owner and its keeper (section 6.6), as found."""
+    keeper: object                   # the keeper's URI, or None
+    status: str                      # CONFIRMED, CLAIMED, ABSENT or NOT_CHECKED
+    reason: str = ""                 # how it was confirmed, or why not
+    successor: object = None         # the successor the keeper names, if any
+
+
+def keeper_of(log):
+    """The keeper named by the genesis record of the key log LOG, or None."""
+    try:
+        return (names.read_genesis(log.genesis).get("keeper") or [None])[0] if log else None
+    except ValueError:
+        return None
+
+
+def keeper_link(log, fetch=None):
+    """The link between the owner of the key log LOG and its keeper (section 6.6), read with
+    FETCH (a function of a URL, like fetch_json, which it defaults to)."""
+    fetch = fetch or fetch_json
+    keeper, owner = keeper_of(log), log.owner
+    if keeper is None:
+        return KeeperLink(None, ABSENT, "the owner names no keeper")
+    orcid = keeper.startswith("https://orcid.org/")
+    url = ORCID_API.format(keeper.rsplit("/", 1)[1]) if orcid else keeper + ".well-known/opensheaf"
+    try:
+        data = fetch(url)
+    except KeeperUnreachable as e:
+        return KeeperLink(keeper, NOT_CHECKED, f"offline: {e}")
+    if orcid:
+        links = data.get("researcher-url") if isinstance(data, dict) else None
+        for item in links if isinstance(links, list) else []:
+            value = (item.get("url") or {}).get("value") if isinstance(item, dict) else None
+            words = OWNER_WORD.findall(value) if isinstance(value, str) else []
+            if words and words[0] == owner:
+                others = [w for w in words[1:] if w != owner]
+                return KeeperLink(keeper, CONFIRMED, "ORCID record links the owner", others[0] if others else None)
+        return KeeperLink(keeper, CLAIMED, "the ORCID record has no link naming the owner")
+    if data is None:
+        return KeeperLink(keeper, CLAIMED, f"there is no {url}")
+    if not isinstance(data, dict) or data.get("format") != KEEPER_FORMAT:
+        return KeeperLink(keeper, CLAIMED, f"{url} is not of format {KEEPER_FORMAT}")
+    listed = data.get("owners")
+    if not (isinstance(listed, list) and owner in listed):
+        return KeeperLink(keeper, CLAIMED, f"{url} does not list the owner")
+    succ = (data.get("successors") or {}).get(owner) if isinstance(data.get("successors"), dict) else None
+    succ = succ if isinstance(succ, str) and names.OWNER_NAME.match(succ) and succ != owner else None
+    return KeeperLink(keeper, CONFIRMED, f"{url} lists the owner", succ)
+
+
+def successor_claim(log, link):
+    """How the successor named by the keeper in LINK stands, for a person: "named by the keeper"
+    (accepted), "claimed by the keeper (...)", or None when the keeper names none, or the one the
+    key log names."""
+    if link is None or link.successor is None or link.successor == log.successor:
+        return None
+    if log.successor:
+        return f"claimed by the keeper (the ending version names {log.successor}; section 6.6)"
+    return "named by the keeper (section 6.6)"
 
 
 def safe_relative(rel):

@@ -659,7 +659,9 @@ index ([chapter 16](16-index.md)), which other commands also keep up to
 date (below);
 `verify` makes the checks of section 14 of the specification, and with
 `--remote` also resolves the members of collections held in other
-archives, and gives their statuses (section 14.5).
+archives, and gives their statuses (section 14.5), and reads the keepers'
+ORCID records and domains, to say whether they confirm their owners
+(section 6.6).
 
 ```
 osheaf collect && osheaf index && osheaf verify
@@ -673,7 +675,8 @@ osheaf collect && osheaf index && osheaf verify
     i.set_defaults(func=core.index)
     v = sub.add_parser("verify", help="check the archive")
     v.add_argument("--remote", action="store_true",
-                   help="also resolve the members of collections held in other archives (section 14.5)")
+                   help="also resolve the members of collections held in other archives (section 14.5), "
+                        "and check the links of owners to their keepers (section 6.6)")
     v.add_argument("--json", action="store_true", help="print the findings as JSON")
     v.set_defaults(func=core.verify)
 
@@ -861,6 +864,8 @@ The options of making an owner are shared by `owner init` and
     rotation_options(oe, export=False)
     osh = osub.add_parser("show", help="the key log of the owner")
     osh.add_argument("--owner", help="an owner the archive hosts (default: the archive's)")
+    osh.add_argument("--offline", action="store_true",
+                     help="do not read the keeper's ORCID record or domain to check the link (section 6.6)")
     op = osub.add_parser("pull", help="meet another copy of the key log: extend it, or record a fork")
     op.add_argument("source", metavar="URL|PATH", help="an archive, or the folder of the owner object")
     op.add_argument("--owner", help="the owner (default: the archive's)")

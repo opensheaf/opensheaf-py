@@ -2208,6 +2208,28 @@ def check_key_logs(f, found, schema):
     return logs
 
 
+def check_keepers(f, logs, remote, fetch=None):
+    """The links of the owners of the key logs LOGS to their keepers (section 6.6), read with FETCH
+    when REMOTE."""
+    for log in logs.values():
+        keeper = owners.keeper_of(log)
+        if keeper is None:
+            continue
+        place = where(log.id)
+        if not remote:
+            f.result(place, f"keeper {keeper}: not checked (osheaf verify --remote reads its ORCID record "
+                     "or domain, section 6.6)")
+            continue
+        link = owners.keeper_link(log, fetch)
+        if link.status == owners.NOT_CHECKED:
+            f.warning(place, f"keeper {keeper}: not checked ({link.reason})")
+            continue
+        f.result(place, f"keeper {keeper}: {link.status} ({link.reason}; section 6.6)")
+        claim = owners.successor_claim(log, link)
+        if claim:
+            f.result(place, f"successor {link.successor} {claim}")
+
+
 def check_lines(f, found, logs, schema, disc, resolver=None):
     """The checks of sections 14.4 and 14.5; returns {identifier: statuses} of the lines."""
     statuses, genesis_names = {}, {}
@@ -2671,9 +2693,10 @@ def look_for_keys(f):
                       "(section 15.4)")
 
 
-def verify_findings(remote=False):
+def verify_findings(remote=False, keeper_fetch=None):
     """The findings of the checks of section 14 on the archive, in the order of 14.2 to 14.6;
-    REMOTE: also resolve the members of other archives (section 14.5)."""
+    REMOTE: also resolve the members of other archives (section 14.5) and read the places of
+    keepers (section 6.6), with KEEPER_FETCH (owners.fetch_json by default)."""
     f = Findings()
     if OLD:
         f.error("archive", "specification 0.1: rebuild (section 16.1)")
@@ -2693,6 +2716,7 @@ def verify_findings(remote=False):
         schema("opensheaf.json", disc, "archive")
     found = check_storage(f, schema, disc)
     logs = check_key_logs(f, found, schema)
+    check_keepers(f, logs, remote, keeper_fetch)
     resolver = None
     if remote:
         from . import remote as remote_
@@ -3298,7 +3322,11 @@ def owner_show(args):
             here = [k.did for k in keys.current_keys(owner, latest.keys["keys"])]
         except keys.KeyStoreError as e:
             warn(str(e))
-    for line in owners.describe(log, here):
+    if getattr(args, "offline", False):
+        link = owners.KeeperLink(owners.keeper_of(log), owners.NOT_CHECKED, "offline: --offline given")
+    else:
+        link = owners.keeper_link(log)
+    for line in owners.describe(log, here, link):
         print(line)
 
 

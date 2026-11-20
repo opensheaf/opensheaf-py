@@ -398,12 +398,16 @@ default one does, so that an archive whose template uses its own style
 sheets gets no stray `style.css`.
 
     # in writing the website:
-    def render(members, home=True, featured=None):
+    def render(members, home=True, featured=None, keeper_fetch=None):
         """Write index.html, paper/<label>/index.html for every line presented, owner/<owner>/,
         style.css and sitemap.xml; with home=False (a TeXmacs index is the home page),
         everything but index.html. FEATURED: the identifier of a collection of the archive
-        whose members the home page lists first."""
+        whose members the home page lists first. KEEPER_FETCH: how the places of keepers are
+        read (owners.fetch_json by default)."""
+        global KEEPER_FETCH
         LINES.clear()
+        KEEPERS.clear()
+        KEEPER_FETCH = keeper_fetch
         members = [m for m in members if not removed(m)]
         root_out = P.ROOT
         base = P.ARCHIVE["baseUrl"]
@@ -1133,25 +1137,46 @@ is held here, as it must be beside every line of the archive (section
 next to it: that the owner has ended, or exposed keys, which makes what
 those keys signed contested (sections 6.3 and 7.3).
 
+The keeper is followed by "(confirmed)" when its place, its ORCID record or
+its domain, confirmed the link when the pages were written (section 6.6;
+`keeper_link`, in the chapter on [owners](06-owners.md)); a link claimed
+only, or not checked (no network), shows nothing more, since a page cannot
+tell a reader more than the claim the genesis record makes. Each keeper is
+read once per run of `render`, and `render` is given the function that
+reads, so that the tests write the same pages from the same files.
+
     # in the owner of a line, on a landing page and on its own:
+    KEEPERS = {}
+    KEEPER_FETCH = None
+
+
+    def keeper_link(log):
+        """The link of the owner of LOG to its keeper, read once per run of render."""
+        if log.owner not in KEEPERS:
+            KEEPERS[log.owner] = owners.keeper_link(log, KEEPER_FETCH)
+        return KEEPERS[log.owner]
+
+
+    def keeper_html(log):
+        """The keeper of the owner of LOG, linked, marked (confirmed) when it confirms the link; or ""."""
+        keeper = owners.keeper_of(log)
+        if not keeper:
+            return ""
+        mark = " (confirmed)" if keeper_link(log).status == owners.CONFIRMED else ""
+        return f'<a href="{esc(keeper)}">{esc(keeper)}</a>{mark}'
+
+
     def owner_html(owner, root):
         """The owner of a line, on a landing page: its name, linked to its page, its keeper and
         its state."""
         log = P.key_log(owner)
         name = f"<code>{esc(owner)}</code>"
         out = f'<a href="{root}owner/{owner}/">{name}</a>' if log else name
-        keeper = keeper_of(log)
+        keeper = keeper_html(log) if log else ""
         if keeper:
-            out += f' · keeper <a href="{esc(keeper)}">{esc(keeper)}</a>'
+            out += f" · keeper {keeper}"
         notes = owner_notes(log)
         return out + (f' · <span class="contested">{esc("; ".join(notes))}</span>' if notes else "")
-
-
-    def keeper_of(log):
-        try:
-            return (names.read_genesis(log.genesis).get("keeper") or [None])[0] if log else None
-        except ValueError:
-            return None
 
 
     def owner_notes(log):
@@ -1173,7 +1198,8 @@ those keys signed contested (sections 6.3 and 7.3).
 The page of an owner, `owner/<owner>/`, from the template `owner.html`,
 summarises its key log as held here (section 6.1): the owner name and the
 `sheaf:` URI of its key log, `sheaf:<owner>` (section 12.1), with the pin
-of its latest version; the keeper; the current keys and how many sign; the
+of its latest version; the keeper, marked when it confirms the link, and
+the successor it names, if any (section 6.6); the current keys and how many sign; the
 number of rotation keys committed to and how many sign the next version;
 how many versions the key log has, every version after the first being a
 rotation, an exposure or an end; the keys exposed; the end, the fork point
@@ -1191,9 +1217,12 @@ page here. It shows the key log; it does not judge the person.
                  f"{'s' if len(log.versions) != 1 else ''}"
                  + (f"; latest <code class=\"copy\">sheaf:{esc(owner)}/v{last.number}?sha512={last.digest}</code>" if last else "")
                  + "</li>"]
-        keeper = keeper_of(log)
+        keeper = keeper_html(log)
         if keeper:
-            facts.append(f'<li>Keeper: <a href="{esc(keeper)}">{esc(keeper)}</a></li>')
+            facts.append(f"<li>Keeper: {keeper}</li>")
+            claim = owners.successor_claim(log, keeper_link(log))
+            if claim:
+                facts.append(f"<li>Successor {esc(claim)}: <code>{esc(keeper_link(log).successor)}</code></li>")
         latest = log.latest()
         if latest is not None:
             facts.append(f"<li>Current keys ({latest.keys['threshold']} of {len(latest.keys['keys'])} sign):"

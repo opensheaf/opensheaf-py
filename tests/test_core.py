@@ -24,6 +24,7 @@ def keys_of_the_tests(tmp_path, monkeypatch, request):
     monkeypatch.setattr(wallet, "GH", "/nonexistent/gh")
     monkeypatch.setattr(wallet, "COPY", ["/nonexistent/pbcopy"])
     monkeypatch.setattr(wallet, "PASTE", ["/nonexistent/pbpaste"])
+    monkeypatch.setattr(owners, "fetch_json", lambda url: pytest.fail(f"the network was read: {url}"))
     monkeypatch.setenv(keys.TEST_KEYS, ",".join(f"{request.node.name} {i}" for i in range(80)))
 
 
@@ -1157,6 +1158,63 @@ def test_texmacs_index_with_landing_pages(tmp_path):
     assert [x for x in found if x["severity"] == "error"] == []
     assert {"severity": "warning", "place": "paper/p/index.html", "message": f"no landing page giving the "
             f"sheaf: URI of p (appendix A.3) (the archive does not declare the profile website)"} in found
+
+
+def test_page_addresses(monkeypatch):
+    n, m, o1, o2 = "n" * 51 + "a", "m" * 51 + "a", "o" * 51 + "a", "p" * 51 + "a"
+    held = [f"sheaf:{n}:{o1}", f"sheaf:{n}:{o2}", f"sheaf:{m}:{o1}"]
+    monkeypatch.setattr(P, "objects", lambda: [(i, None, None) for i in held])
+    monkeypatch.setattr(P, "LABELS", {"lab": held[0]})
+    assert [P.page_address(i) for i in held] == ["lab", f"{n}-{o2}", m]
+    monkeypatch.setattr(P, "LABELS", {})
+    assert [P.page_address(i) for i in held] == [f"{n}-{o1}", f"{n}-{o2}", m]
+
+
+def test_keeper_of_the_owner(tmp_path, monkeypatch, capsys):
+    orcid = "https://orcid.org/0000-0002-4014-2949"
+    record = {"researcher-url": []}
+    asked = []
+    monkeypatch.setattr(owners, "fetch_json", lambda url: asked.append(url) or record)
+    root = tmp_path / "a"
+    make_archive(root, "T", "--keeper", orcid)
+    owner = P.ARCHIVE["owner"]
+    record["researcher-url"] = [{"url-name": "OpenSheaf", "url": {"value": f"https://example.org/T/owner/{owner}/"}}]
+    pdf = tmp_path / "p.pdf"
+    pdf.write_bytes(b"%PDF-1.4 p")
+    r = ["--root", str(root)]
+    run(*r, "deposit", "p", "--pdf", str(pdf), "--no-source", "x", "--title", "On x", "--author", "Doe, Jane",
+        "--new")
+    run(*r, "collect")
+    assert set(asked) == {"https://pub.orcid.org/v3.0/0000-0002-4014-2949/researcher-urls"}
+    page = (root / "paper" / "p" / "index.html").read_text()
+    assert f'keeper <a href="{orcid}">{orcid}</a> (confirmed)' in page
+    owner_page = (root / "owner" / owner / "index.html").read_text()
+    assert f'Keeper: <a href="{orcid}">{orcid}</a> (confirmed)' in owner_page
+    capsys.readouterr()
+    run(*r, "owner", "show")
+    assert f"Keeper        {orcid}  confirmed (ORCID record links the owner)" in capsys.readouterr().out
+    run(*r, "owner", "show", "--offline")
+    assert f"Keeper        {orcid}  not checked (offline: --offline given)" in capsys.readouterr().out
+    messages = {x["message"]: x["severity"] for x in P.verify_findings()}
+    assert messages[f"keeper {orcid}: not checked (osheaf verify --remote reads its ORCID record or domain, "
+                    "section 6.6)"] == "result"
+    messages = {x["message"]: x["severity"] for x in P.verify_findings(remote=True)}
+    assert messages[f"keeper {orcid}: confirmed (ORCID record links the owner; section 6.6)"] == "result"
+    record["researcher-url"] = []
+    messages = {x["message"]: x["severity"] for x in P.verify_findings(remote=True)}
+    assert messages[f"keeper {orcid}: claimed only (the ORCID record has no link naming the owner; "
+                    "section 6.6)"] == "result"
+
+    def offline(url):
+        raise owners.KeeperUnreachable(f"{url}: no network")
+    found = P.verify_findings(remote=True, keeper_fetch=offline)
+    assert [x["severity"] for x in found if x["message"].startswith(f"keeper {orcid}: not checked (offline: ")] \
+        == ["warning"]
+    assert P.verify_errors() == []
+    from opensheaf import html
+    html.render(P.main_members(), keeper_fetch=offline)
+    page = (root / "paper" / "p" / "index.html").read_text()
+    assert f'keeper <a href="{orcid}">{orcid}</a>' in page and "(confirmed)" not in page
 
 
 def arxiv_downloads(folder, aid="2611.00001", label="first-paper"):

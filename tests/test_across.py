@@ -26,6 +26,7 @@ def keys_of_the_tests(tmp_path, monkeypatch, request):
     monkeypatch.setattr(wallet, "GH", "/nonexistent/gh")
     monkeypatch.setattr(wallet, "COPY", ["/nonexistent/pbcopy"])
     monkeypatch.setattr(wallet, "PASTE", ["/nonexistent/pbpaste"])
+    monkeypatch.setattr(owners, "fetch_json", lambda url: pytest.fail(f"the network was read: {url}"))
     monkeypatch.setenv(keys.TEST_KEYS, ",".join(f"{request.node.name} {i}" for i in range(120)))
     monkeypatch.setenv(remote.LOCATIONS, f"https://example.org/={tmp_path}/")
 

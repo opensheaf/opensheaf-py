@@ -148,9 +148,10 @@ that such an archive is rebuilt, and these tools do not read it. Then the
 steps of section 14, in order.
 
     # in check an archive and list its findings:
-    def verify_findings(remote=False):
+    def verify_findings(remote=False, keeper_fetch=None):
         """The findings of the checks of section 14 on the archive, in the order of 14.2 to 14.6;
-        REMOTE: also resolve the members of other archives (section 14.5)."""
+        REMOTE: also resolve the members of other archives (section 14.5) and read the places of
+        keepers (section 6.6), with KEEPER_FETCH (owners.fetch_json by default)."""
         f = Findings()
         if OLD:
             f.error("archive", "specification 0.1: rebuild (section 16.1)")
@@ -170,6 +171,7 @@ steps of section 14, in order.
             schema("opensheaf.json", disc, "archive")
         found = check_storage(f, schema, disc)
         logs = check_key_logs(f, found, schema)
+        check_keepers(f, logs, remote, keeper_fetch)
         resolver = None
         if remote:
             from . import remote as remote_
@@ -444,6 +446,39 @@ ended owners, with their fork point and successor.
                 f.result(place, "ended (section 6.3)" + (f", successor {log.successor} (named by the ending "
                                                           "version)" if log.successor else ""))
         return logs
+
+A keeper named by an owner may confirm the link in a place it controls,
+its ORCID record or its domain, and a verifier MAY check both directions
+(section 6.6). That needs the network, so only `--remote` reads them
+(`keeper_link`, in the chapter on [owners](06-owners.md)). The link is a
+result, confirmed or claimed only, never an error: what the owner signed
+is authentic either way, and the keeper decides nothing about its lines. A
+place that cannot be read leaves the link not checked, a warning; without
+`--remote` it is not checked either, which is said once for each keeper.
+A successor that the keeper names is reported as section 6.6 says: named
+by the keeper, or a claim when an ending version names another.
+
+    # in check the key logs of an archive:
+    def check_keepers(f, logs, remote, fetch=None):
+        """The links of the owners of the key logs LOGS to their keepers (section 6.6), read with FETCH
+        when REMOTE."""
+        for log in logs.values():
+            keeper = owners.keeper_of(log)
+            if keeper is None:
+                continue
+            place = where(log.id)
+            if not remote:
+                f.result(place, f"keeper {keeper}: not checked (osheaf verify --remote reads its ORCID record "
+                         "or domain, section 6.6)")
+                continue
+            link = owners.keeper_link(log, fetch)
+            if link.status == owners.NOT_CHECKED:
+                f.warning(place, f"keeper {keeper}: not checked ({link.reason})")
+                continue
+            f.result(place, f"keeper {keeper}: {link.status} ({link.reason}; section 6.6)")
+            claim = owners.successor_claim(log, link)
+            if claim:
+                f.result(place, f"successor {link.successor} {claim}")
 
 Lines (14.4)
 ------------

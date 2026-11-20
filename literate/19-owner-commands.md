@@ -686,10 +686,15 @@ Showing
 
 `owner show` describes the key log, version by version, with its current
 keys, its end and its exposed keys, and its findings (section 14.3), and
-marks the current keys that this computer holds:
+marks the current keys that this computer holds. When the owner names a
+keeper, it reads the keeper's place and says whether the keeper confirms
+the link (section 6.6; `keeper_link` in the chapter on
+[owners](06-owners.md)); `--offline` leaves the network alone, and a
+place that cannot be read leaves the link not checked:
 
 ```
 Owner         em4v3kp5…(the full name)
+Keeper        https://orcid.org/0000-0002-4014-2949  confirmed (ORCID record links the owner)
 Key log       v1  20ac7d88772cd510  1 current key, 3 rotation keys (any 2 sign the next version)
               v2  0900f00f39defb0e  2 current keys (any 1 signs), 3 rotation keys (any 2 sign the next version)
 Current keys  did:key:z6MkpZ85…  (on this computer)
@@ -705,7 +710,11 @@ Current keys  did:key:z6MkpZ85…  (on this computer)
                 here = [k.did for k in keys.current_keys(owner, latest.keys["keys"])]
             except keys.KeyStoreError as e:
                 warn(str(e))
-        for line in owners.describe(log, here):
+        if getattr(args, "offline", False):
+            link = owners.KeeperLink(owners.keeper_of(log), owners.NOT_CHECKED, "offline: --offline given")
+        else:
+            link = owners.keeper_link(log)
+        for line in owners.describe(log, here, link):
             print(line)
 
 A new current key
