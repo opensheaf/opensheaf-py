@@ -4,7 +4,7 @@ The command line
 This chapter is the outer layer of opensheaf-py: the command `osheaf`,
 which reads the options of a command and calls the function that does the
 work. Almost nothing is decided here. Deposits, description-only versions,
-the main collection, the index and verification are explained in the
+the main catalogue, the index and verification are explained in the
 chapters on the core; collections, mirrors and accepted copies in the
 chapter on collections; arXiv and Zenodo in chapters of their own. Two
 modules are tangled from this chapter: `cli.py`, the command itself, and
@@ -81,19 +81,19 @@ core.
                              catalogues and selections, with members of any archive
       resolve URI            find and check what a sheaf: URI names, in any archive
       mirror URI | --all     copy a line written elsewhere, with its owner's key log
-      branch URI --label L   a branch of a signed version of another line, or move its branch point
-      accept URI --selection S   an accepted copy (a branch) listed by a selection
+      branch URI --label LABEL   a branch of a signed version of another line, or move its branch point
+      accept URI --selection LABEL   an accepted copy (a branch) listed by a selection
       owner pull URL|PATH    meet another copy of a key log: extend it, or record a fork
       sign LABEL --version vN    sign again a version contested by an exposed key
-      draft new|deposit|delete ID   unsigned work in progress, at draft/<id>/
-      seal ID --label L      seal the work of a draft as a new line
+      draft new|deposit|delete DRAFT   unsigned work in progress, at draft/<id>/
+      seal DRAFT --label LABEL   seal the work of a draft as a new line
       takedown LABEL --reason TEXT   delete an object, leaving a tombstone
       index                  write opensheaf.json, the indexes and the website (or the TeXmacs index)
       verify                 check the archive (section 14 of the specification)
       zenodo LABEL           a DOI for the current version (sandbox, or --production)
       arxiv fetch            download papers from arXiv (no archive needed)
       arxiv import DOWNLOADS import the downloads, one signed line per paper
-      help-config            describe osheaf.json
+      help-config            describe osheaf.json and ~/.config/opensheaf/config.json
 
     The website (osheaf.json "index": {"html": ...}) is written again after every
     command that changes the archive.
@@ -163,11 +163,22 @@ the order in which `osheaf --help` lists them.
         <<the options of osheaf init>>
 
         <<the options of osheaf owner and key>>
-        sub.add_parser("help-config", help="describe osheaf.json").set_defaults(func=None)
+        sub.add_parser("help-config", help="describe osheaf.json and your own configuration (key wallets)"
+                       ).set_defaults(func=None)
         return p
 
+The names on the command line are the same everywhere: a line of the
+archive, a collection among them, is named by its label, `LABEL`, as a
+positional argument (`deposit`, `relicense`, `notice`, `withdraw`,
+`collection new`, `sign`, `takedown`, `zenodo`, ...) or as the value of an
+option (`--label`, `--selection`); a draft by its identifier, `DRAFT`. The
+commands that make keys take the security level with `--keys LEVEL`, and
+the `key` commands the wallet with `--wallet WALLET`.
+
 The last command, `help-config`, prints the docstring of the core, which
-describes the configuration file `osheaf.json`.
+describes the configuration file `osheaf.json`, and the summary of the
+user's own configuration, `~/.config/opensheaf/config.json`, and of command
+wallets, from [chapter 9](09-wallets.md).
 
 ### Depositing: `osheaf deposit`
 
@@ -212,8 +223,19 @@ own; `--new` and `--owner`, which seal a new work, and `--from` belong to
 The function that adds the four groups:
 
     # in the parser of osheaf:
-    def deposit_options(d):
-        """The options of a deposit, shared by osheaf deposit and osheaf draft."""
+    RIGHTS_HELP = "an SPDX key, one of " + ", ".join(sorted(core.RIGHTS)) + ", or a statement in plain text"
+
+
+    def rights_option(value):
+        """--rights, checked as core.check_rights does."""
+        try:
+            return core.check_rights(value)
+        except ValueError as e:
+            raise argparse.ArgumentTypeError(str(e)) from None
+
+
+    def deposit_options(d, draft=False):
+        """The options of a deposit, shared by osheaf deposit and osheaf draft (DRAFT: a draft's)."""
         <<the sources and renditions of a deposit>>
         <<the description of a deposited version>>
         <<the dates and the place of a deposited version>>
@@ -224,7 +246,8 @@ sources, and the media type of the source when its extension does not
 tell it.
 
     # in the sources and renditions of a deposit:
-    d.add_argument("id", nargs="?", metavar="LABEL", help="the label of the line in the archive")
+    d.add_argument("id", nargs="?", metavar="DRAFT" if draft else "LABEL",
+                   help="the identifier of the draft" if draft else "the label of the line in the archive")
     d.add_argument("source", nargs="?", help="the main source (.tm: typeset by the archive; "
                    "anything else: give the PDF with --pdf)")
     d.add_argument("--pdf", help="the PDF of this version (required unless the source is TeXmacs)")
@@ -282,8 +305,8 @@ or are contested, once the depositor has looked at them (section 7.3).
 
     # in the licence, relations and agreement of a deposit:
     d.add_argument("--type", default="Preprint")
-    d.add_argument("--rights", help="free text, or one of " + ", ".join(sorted(core.RIGHTS))
-                   + " (default: as the previous version, or 'All rights reserved')")
+    d.add_argument("--rights", type=rights_option,
+                   help=RIGHTS_HELP + " (default: as the previous version, or 'All rights reserved')")
     d.add_argument("--related", action="append",
                    help="arxiv=ID (IsVariantFormOf), or RELATION:doi:DOI, RELATION:arxiv:ID")
     d.add_argument("--extra-source", action="append",
@@ -309,14 +332,15 @@ records how they agreed, and `--date` when.
 osheaf relicense kpz-uniqueness --rights cc-by-4.0 --method "confirmed by email"
 ```
 
-Here `--rights` must be one of the licences the core knows. `argparse`
-checks the choice only for a value given on the command line; a value from
-a file is checked again after the file is read (below).
+`--rights` takes the same values as for `deposit`: a licence the core
+knows by its SPDX key, or a statement (`core.check_rights`). `argparse`
+checks a value given on the command line; a value from a file is checked
+again after the file is read (below).
 
     # in the options of osheaf relicense:
     r = sub.add_parser("relicense", help="description-only version with a new licence")
-    r.add_argument("id", nargs="?")
-    r.add_argument("--rights", choices=sorted(core.RIGHTS))
+    r.add_argument("id", nargs="?", metavar="LABEL", help="the label of the line")
+    r.add_argument("--rights", type=rights_option, help=RIGHTS_HELP)
     r.add_argument("--method", help="how the authors agreed, e.g. 'confirmed by email'")
     r.add_argument("--date", help="date of the agreement (default today)")
     r.add_argument("--message")
@@ -337,7 +361,7 @@ osheaf relate kpz-uniqueness --to arxiv:1508.07764 --issued 2015-08-31
 
     # in the options of osheaf relate:
     rl = sub.add_parser("relate", help="description-only version linking the same work elsewhere")
-    rl.add_argument("id", nargs="?")
+    rl.add_argument("id", nargs="?", metavar="LABEL", help="the label of the line")
     rl.add_argument("--to", help="arxiv:ID or doi:DOI")
     rl.add_argument("--relation", default="IsIdenticalTo",
                     choices=["IsIdenticalTo", "IsVariantFormOf", "IsPreprintOf", "IsVersionOf"])
@@ -370,7 +394,7 @@ command line and the core again after a file is merged.
     # in the options of osheaf describe:
     ds = sub.add_parser("describe", help="description-only version correcting the title, abstract,"
                         " keywords or authors")
-    ds.add_argument("id", nargs="?")
+    ds.add_argument("id", nargs="?", metavar="LABEL", help="the label of the line")
     ds.add_argument("--title", help="the corrected title (plain text, mathematics in $...$)")
     abstract = ds.add_mutually_exclusive_group()
     abstract.add_argument("--abstract", help="the corrected abstract (plain text, mathematics in $...$)")
@@ -389,8 +413,9 @@ command line and the core again after a file is merged.
 
 A document version cannot change once deposited, but things can be said
 about it later. A notice (section 4.2), such as an erratum, is about one
-document version, given with `--about`; it has a short text, a file with
-the full statement, or both, as every note of section 4.3.
+document version, given with `--about`; it has a short text, `--text`,
+always, which every page that shows the version shows, and may have a file
+with the full statement besides (section 4.3).
 
 ```
 osheaf notice kpz-uniqueness --about 2 --text "Theorem 2 is wrong as stated." --file erratum.pdf
@@ -398,9 +423,9 @@ osheaf notice kpz-uniqueness --about 2 --text "Theorem 2 is wrong as stated." --
 
     # in the options of osheaf notice:
     nt = sub.add_parser("notice", help="a notice about a document version (description-only)")
-    nt.add_argument("id")
+    nt.add_argument("id", metavar="LABEL", help="the label of the line")
     nt.add_argument("--about", type=int, required=True, help="the document version it is about")
-    nt.add_argument("--text", help="the notice (plain text)")
+    nt.add_argument("--text", required=True, help="the notice (plain text)")
     nt.add_argument("--file", help="a file with the full statement (PDF, Markdown, ...)")
     nt.add_argument("--date", help="default: today")
     nt.add_argument("--message")
@@ -409,8 +434,8 @@ osheaf notice kpz-uniqueness --about 2 --text "Theorem 2 is wrong as stated." --
     nt.set_defaults(func=core.notice)
 
 A withdrawal (section 13.1) is about the whole line. Its reason is
-again a note, a text or a file; the content stays, and the document gets
-no new versions.
+again a note: a text, `--reason`, always, and a file besides if wanted;
+the content stays, and the document gets no new versions.
 
 ```
 osheaf withdraw kpz-uniqueness --reason "The main result is wrong."
@@ -418,8 +443,8 @@ osheaf withdraw kpz-uniqueness --reason "The main result is wrong."
 
     # in the options of osheaf withdraw:
     w = sub.add_parser("withdraw", help="withdraw a document (description-only; the content stays)")
-    w.add_argument("id")
-    w.add_argument("--reason", help="why (plain text)")
+    w.add_argument("id", metavar="LABEL", help="the label of the line")
+    w.add_argument("--reason", required=True, help="why (plain text)")
     w.add_argument("--file", help="a file with the full statement")
     w.add_argument("--date", help="default: today")
     w.add_argument("--message")
@@ -438,7 +463,7 @@ osheaf complete old-notes --version 1 --source notes.tex --extra-source fig1.pdf
 
     # in the options of osheaf complete:
     c = sub.add_parser("complete", help="add the sources of a version deposited without them")
-    c.add_argument("id")
+    c.add_argument("id", metavar="LABEL", help="the label of the line")
     c.add_argument("--version", type=int, required=True, help="the document version")
     c.add_argument("--source", required=True, help="the main source")
     c.add_argument("--extra-source", action="append", help="FILE[=LOGICAL/PATH]")
@@ -492,7 +517,7 @@ osheaf collection sync issue-1 --from issue-1.yaml
     co = sub.add_parser("collection", help="catalogues and selections, with members of any archive")
     cosub = co.add_subparsers(dest="action", required=True)
     cn = cosub.add_parser("new", help="a new, empty collection")
-    cn.add_argument("label")
+    cn.add_argument("label", metavar="LABEL", help="the label of the new collection")
     cn.add_argument("--type", choices=["catalogue", "selection"], required=True)
     cn.add_argument("--title", required=True)
     cn.add_argument("--description")
@@ -591,14 +616,14 @@ osheaf seal notes --label lecture-notes
     for name, helptext in (("new", "make a draft with a first deposit"),
                            ("deposit", "deposit a new version into a draft")):
         x = drsub.add_parser(name, help=helptext)
-        deposit_options(x)
+        deposit_options(x, draft=True)
         if name == "deposit":
             x.add_argument("--replace", action="store_true", help="rewrite the head of the draft")
     x = drsub.add_parser("delete", help="delete a draft (no tombstone)")
-    x.add_argument("id", metavar="ID")
+    x.add_argument("id", metavar="DRAFT", help="the identifier of the draft")
     dr.set_defaults(func=None)
     se = sub.add_parser("seal", help="seal the work of a draft as a new line (section 10.2)")
-    se.add_argument("id", metavar="DRAFT")
+    se.add_argument("id", metavar="DRAFT", help="the identifier of the draft")
     se.add_argument("--label", required=True, help="the label of the new line")
     se.add_argument("--owner", help="the owner of the new line, an owner the archive hosts")
     se.add_argument("--delete-draft", action="store_true", help="delete the draft once sealed")
@@ -641,9 +666,10 @@ osheaf collect && osheaf index && osheaf verify
 ```
 
     # in the options of osheaf collect, index and verify:
-    sub.add_parser("collect", help="new version of the main collection when needed").set_defaults(func=core.collect)
+    sub.add_parser("collect", help="new version of the main catalogue when needed").set_defaults(func=core.collect)
     i = sub.add_parser("index", help="write opensheaf.json, the indexes and the readable index")
-    i.add_argument("--no-html", action="store_true")
+    i.add_argument("--no-html", action="store_true",
+                   help="do not write the HTML of the website (opensheaf.json and the indexes only)")
     i.set_defaults(func=core.index)
     v = sub.add_parser("verify", help="check the archive")
     v.add_argument("--remote", action="store_true",
@@ -840,7 +866,7 @@ The options of making an owner are shared by `owner init` and
     op.add_argument("--owner", help="the owner (default: the archive's)")
     ow.set_defaults(func=None)
     sg = sub.add_parser("sign", help="sign again a version contested by an exposed key (section 7.1)")
-    sg.add_argument("id", metavar="LABEL")
+    sg.add_argument("id", metavar="LABEL", help="the label of the line")
     sg.add_argument("--version", required=True, help="the object version, e.g. v2")
     sg.add_argument("--yes", action="store_true", help="do not ask to confirm that the owner made it")
     sg.set_defaults(func=core.sign_again)
@@ -853,7 +879,8 @@ The options of making an owner are shared by `owner init` and
     kp.add_argument("--plain-current", action="store_true", help="keep them unencrypted in the wallet")
     kl = ksub.add_parser("pull", help="keep on this device the owner's current keys that the wallet holds")
     kls = ksub.add_parser("list", help="what the key wallet holds: owner, key, kind, did:key (no secrets)")
-    kf = ksub.add_parser("forget", help="remove keys from this device, and with --wallet from the wallet")
+    kf = ksub.add_parser("forget", help="remove keys from this device, and with --from-wallet from the wallet; "
+                         "or passkey wraps (--passkey, --rp)")
     kf.add_argument("did", nargs="*", metavar="DID", help="the keys to forget")
     kf.add_argument("--from-wallet", action="store_true", help="also remove them from the key wallet")
     kf.add_argument("--used", action="store_true",
@@ -976,8 +1003,11 @@ first deposit.
             missing = [k for k in REQUIRED.get(args.cmd, ()) if getattr(ns, k, None) in (None, [])]
             if missing:
                 p.error(f"{args.cmd}: missing " + ", ".join(m.replace("_", "-") for m in missing))
-            if args.cmd == "relicense" and ns.rights not in core.RIGHTS:
-                p.error(f"relicense: rights must be one of {', '.join(sorted(core.RIGHTS))}")
+            if args.cmd in ("deposit", "relicense") and getattr(ns, "rights", None) is not None:
+                try:
+                    core.check_rights(ns.rights)
+                except ValueError as e:
+                    p.error(f"{args.cmd}: {e}")
             out.append(ns)
         return out
 
@@ -994,7 +1024,8 @@ paths of the core), and a few must not:
   the archive, so it is run before any archive is configured, and only on
   the first entry: one archive per command. The others configure the
   archive once and run every entry;
-- `arxiv fetch` only downloads into a folder, and needs no archive;
+- `arxiv fetch` only downloads into a folder, and needs no archive; nor
+  does the help of `arxiv import`;
 - `resolve` works in an archive, whose storage root and locations it then
   uses, or anywhere else;
 - `key list`, `key import`, `key export`, `key enroll` and `key unlock`
@@ -1059,7 +1090,9 @@ when it ends.
     def dispatch(p, args):
         """Run the command ARGS."""
         if args.cmd == "help-config":
+            from . import wallet
             print(core.__doc__)
+            print(wallet.CONFIG_HELP)
             return
         if args.cmd in REQUIRED:
             todo = runs(p, args)
@@ -1072,6 +1105,9 @@ when it ends.
         if args.cmd == "arxiv" and args.action == "fetch":
             from . import arxiv
             return arxiv.fetch_main(args.rest)
+        if args.cmd == "arxiv" and ({"-h", "--help"} & set(args.rest)):
+            from . import arxiv
+            return arxiv.main(args.rest)
         if args.cmd == "resolve":
             from . import remote
             try:

@@ -167,6 +167,25 @@ access, not reuse.
             return prev_dc["rightsList"]
         return [{"rights": "All rights reserved"}]
 
+`--rights` takes the same values in `deposit` and `relicense`, checked by
+one function: a key of `RIGHTS`, or a statement in plain text on one line
+("All rights reserved", the address of a licence). A value that looks like
+an SPDX key, lower case without spaces, but is not one of `RIGHTS` is
+refused: it is most likely a mistyped key, which would otherwise be
+recorded as a statement.
+
+    # in the licence of a new document version:
+    def check_rights(rights):
+        """RIGHTS as --rights takes it: a key of RIGHTS, or a statement on one line; ValueError if not."""
+        known = ", ".join(sorted(RIGHTS))
+        if not isinstance(rights, str) or not rights.strip() or len(rights) > 1000 \
+                or any(ord(c) < 32 or ord(c) == 127 for c in rights):
+            raise ValueError(f"--rights is one of {known}, or a statement on one line")
+        if rights not in RIGHTS and re.fullmatch(r"[a-z0-9][a-z0-9.+-]*", rights):
+            raise ValueError(f"--rights {rights}: not a licence known by its SPDX key ({known}); give one of "
+                             "them, or the licence as a statement, by its name or its address")
+        return rights
+
 ### The landing address
 
 The `url` of `datacite.json` is where readers are sent: the landing page,

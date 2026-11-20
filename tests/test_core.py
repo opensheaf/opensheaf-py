@@ -500,6 +500,14 @@ def test_init_with_a_new_owner(tmp_path):
     assert disc["mainCollection"] == P.LABELS["main"]
     assert (tmp_path / "config" / "opensheaf" / "keys" / owner).is_dir()
     assert P.verify_errors() == []
+    attrs = (root / ".gitattributes").read_text()
+    assert "ocfl/**        -text -filter -ident -working-tree-encoding -export-subst -merge" in attrs
+    assert "requests/" not in attrs and "key-log/" not in attrs
+    mine = tmp_path / "b"
+    mine.mkdir()
+    (mine / ".gitattributes").write_text("* text=auto\n")
+    make_archive(mine, "U")
+    assert (mine / ".gitattributes").read_text() == "* text=auto\n"
 
 
 def test_init_with_the_hashed_layout(tmp_path):

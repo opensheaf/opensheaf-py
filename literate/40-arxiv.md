@@ -320,7 +320,7 @@ file, the next run tries again. The list of failures is printed at the end.
     def fetch(downloads, ids, refresh=False):
         """Download the record, and the PDF and source of every version, of each
         paper; and the licence and comments of each version. Resumable: what is
-        present is not fetched again (records are refreshed with REFRESH)."""
+        present is not fetched again (the records are fetched again with --refresh)."""
         import datetime
         import html as htmllib
         dl = Path(downloads)
@@ -412,8 +412,8 @@ command line.
     # in arXiv: the fetch command:
     def fetch_main(argv=None):
         ap = argparse.ArgumentParser(prog="osheaf arxiv fetch", description=fetch.__doc__)
-        ap.add_argument("downloads")
-        ap.add_argument("ids", nargs="*", help="arXiv identifiers")
+        ap.add_argument("downloads", metavar="DOWNLOADS", help="the folder of the downloads")
+        ap.add_argument("ids", nargs="*", metavar="ARXIV-ID", help="arXiv identifiers")
         ap.add_argument("--author", help="all papers of an arXiv author page, e.g. gubinelli_m_1")
         ap.add_argument("--refresh", action="store_true", help="fetch the records again (new versions)")
         a = ap.parse_args(argv)

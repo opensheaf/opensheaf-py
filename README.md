@@ -353,6 +353,11 @@ or from `--root`. They maintain:
   landing pages, owner pages and `sitemap.xml` as the website (from the
   archive's own `templates/paper.html`, if it has one).
 
+`init` also writes a `.gitattributes`, unless the folder has one, which
+keeps the archive files byte for byte in git (never converted or merged as
+text; OpenSheaf archives in git, section 4.1), as the archive template's
+does.
+
 ## Commands
 
 ```
@@ -360,8 +365,9 @@ osheaf init FOLDER --name NAME --base-url URL --curator "Family, Given" --new-ow
 osheaf init FOLDER ... --owner OWNER --key-log DIR             (an existing owner)
 osheaf init FOLDER ... --index texmacs --index-template FILE   (a TeXmacs index, profile texmacs)
 osheaf owner init|rotate|expose|end|show ; owner pull URL|PATH ; key new
-osheaf owner init|rotate ... --keys offline|github:OWNER/REPO|command [--plain-current]
-osheaf key push|pull|list [--keys WALLET] ; key forget [--wallet [--used]] DID...
+osheaf owner init|rotate|expose|end ... --keys offline|github:OWNER/REPO|command [--plain-current]
+osheaf key push|pull|list|enroll|unlock [--wallet WALLET] ; key forget [--from-wallet [--used]] DID...
+osheaf key enroll [--new-passkey] ; key unlock ; key forget --rp opensheaf.org | --passkey CRED
 osheaf key export --clipboard|--stdout [DID] [--encrypt] ; key import --clipboard|--stdin
 osheaf deposit LABEL SOURCE --pdf PAPER.pdf --title T --author "Family, Given|Affiliation" --new ...
 osheaf deposit LABEL SOURCE --pdf PAPER.pdf ...               (a new version of the line LABEL)
@@ -371,7 +377,7 @@ osheaf deposit ... --stage VoR --agreement "the journal's publication terms"
 osheaf notice LABEL --about N --text "..." [--file erratum.pdf]
 osheaf withdraw LABEL --reason "..."
 osheaf complete LABEL --version N --source paper.tex [--extra-source ...]
-osheaf relicense LABEL --rights cc-by-4.0 --method "..."
+osheaf relicense LABEL --rights cc-by-4.0|"a statement" --method "..."
 osheaf relate LABEL --to arxiv:ID|doi:DOI [--relation IsIdenticalTo]
 osheaf describe LABEL [--title T] [--abstract TEXT | --abstract-file F] [--keyword K ...] [--author A ...]
 osheaf collect
@@ -380,16 +386,17 @@ osheaf collection new LABEL --type catalogue|selection --title T [--description 
 osheaf collection add LABEL URI... [--at URL]... [--follow] [--revision N]...
 osheaf collection remove|follow LABEL URI... ; collection update [LABEL...] ; collection status LABEL
 osheaf collection sync LABEL --from collection.yaml
-osheaf mirror URI [--at URL]... [--label L] [--licence-checked] | --all
-osheaf branch URI [--at URL]... --label L [--owner OWNER]
-osheaf accept URI [--at URL]... --selection S [--label L] [--with-original]
+osheaf mirror URI [--at URL]... [--label LABEL] [--licence-checked] | --all
+osheaf branch URI [--at URL]... --label LABEL [--owner OWNER]
+osheaf accept URI [--at URL]... --selection LABEL [--label LABEL] [--with-original]
 osheaf owner pull URL|PATH [--owner OWNER]
 osheaf sign LABEL --version vN
-osheaf draft new|deposit ID [SOURCE] [the options of deposit] ; draft delete ID
-osheaf seal ID --label L [--delete-draft]
+osheaf draft new|deposit DRAFT [SOURCE] [the options of deposit] ; draft delete DRAFT
+osheaf seal DRAFT --label LABEL [--delete-draft]
 osheaf takedown LABEL --reason TEXT [--by-law | --keeper]
-osheaf index
+osheaf index [--no-html]
 osheaf verify [--remote]
+osheaf help-config                                            (osheaf.json, ~/.config/opensheaf/config.json)
 osheaf zenodo LABEL [--production]
 osheaf arxiv fetch DOWNLOADS --author AUTHOR-ID | ARXIV-ID ...
 osheaf arxiv import DOWNLOADS [ARXIV-ID ...] [--update] [--versions v1,v3] [--agreement METHOD]
@@ -427,6 +434,11 @@ osheaf arxiv import DOWNLOADS [ARXIV-ID ...] [--update] [--versions v1,v3] [--ag
   available: 2015-08-31
   related: ["IsIdenticalTo:arxiv:1508.07764"]
   ```
+- **--rights** (deposit, relicense): a licence known by its SPDX key
+  (`cc-by-4.0`, `cc-by-sa-4.0`, `cc0-1.0`, `gpl-3.0-only`,
+  `gpl-3.0-or-later`), or a statement in plain text, such as the address of
+  another licence; a lower-case word that is not a known key is refused as
+  a likely typo.
 - **notice**, **withdraw**: later statements about a version (an erratum, by
   a description-only version; notices stay in every later version) and the
   withdrawal of a line (the content stays; no new versions; every page

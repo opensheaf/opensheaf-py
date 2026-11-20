@@ -216,14 +216,14 @@ same version may correct the `Issued` date.
 Changing the licence of a document (typically from "All rights reserved"
 to a Creative Commons licence) changes no file: the content is the same,
 and only its terms change. The authors' agreement is recorded with it, in
-`object.json` (section 4.3), with the names of the creators. Only the
-licences known by name may be chosen here.
+`object.json` (section 4.3), with the names of the creators. The licence
+is given as to a deposit: a licence known by its SPDX key, or a statement.
 
     # in change the licence of a document:
     def relicense(args):
         """A description-only version with a new licence in datacite.json and the
         authors' agreement in object.json."""
-        new = RIGHTS[args.rights]
+        new = rights_list(check_rights(args.rights))[0]
 
         def change(dc, obj):
             if dc.get("rightsList") == [new]:

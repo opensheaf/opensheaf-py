@@ -788,7 +788,8 @@ text file that describes the layout and no `ocfl_layout.json`; its main
 catalogue, a signed line of the owner; and a discovery document of
 version 0.2 listing both, with the label of the catalogue and the owner.
 The current key is kept in the configuration of the test, the rotation keys
-in the folder of the export; the archive verifies.
+in the folder of the export; the archive verifies. Its `.gitattributes`
+has the lines of the archive files; one that is there already is kept.
 
     # in test: making an archive with osheaf init:
     def test_init_with_a_new_owner(tmp_path):
@@ -811,6 +812,14 @@ in the folder of the export; the archive verifies.
         assert disc["mainCollection"] == P.LABELS["main"]
         assert (tmp_path / "config" / "opensheaf" / "keys" / owner).is_dir()
         assert P.verify_errors() == []
+        attrs = (root / ".gitattributes").read_text()
+        assert "ocfl/**        -text -filter -ident -working-tree-encoding -export-subst -merge" in attrs
+        assert "requests/" not in attrs and "key-log/" not in attrs
+        mine = tmp_path / "b"
+        mine.mkdir()
+        (mine / ".gitattributes").write_text("* text=auto\n")
+        make_archive(mine, "U")
+        assert (mine / ".gitattributes").read_text() == "* text=auto\n"
 
 The hashed layout (section 3.2) is chosen with `--layout hashed`: the
 storage root then has `ocfl_layout.json` naming it, and every object is at

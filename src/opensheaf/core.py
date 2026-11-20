@@ -873,6 +873,18 @@ def rights_list(rights, prev_dc=None):
     return [{"rights": "All rights reserved"}]
 
 
+def check_rights(rights):
+    """RIGHTS as --rights takes it: a key of RIGHTS, or a statement on one line; ValueError if not."""
+    known = ", ".join(sorted(RIGHTS))
+    if not isinstance(rights, str) or not rights.strip() or len(rights) > 1000 \
+            or any(ord(c) < 32 or ord(c) == 127 for c in rights):
+        raise ValueError(f"--rights is one of {known}, or a statement on one line")
+    if rights not in RIGHTS and re.fullmatch(r"[a-z0-9][a-z0-9.+-]*", rights):
+        raise ValueError(f"--rights {rights}: not a licence known by its SPDX key ({known}); give one of "
+                         "them, or the licence as a statement, by its name or its address")
+    return rights
+
+
 def landing_url(label):
     """The address readers are sent to: the landing page, written with either
     kind of index, or else the HTML version of a TeXmacs document."""
@@ -1303,7 +1315,7 @@ def relate(args):
 def relicense(args):
     """A description-only version with a new licence in datacite.json and the
     authors' agreement in object.json."""
-    new = RIGHTS[args.rights]
+    new = rights_list(check_rights(args.rights))[0]
 
     def change(dc, obj):
         if dc.get("rightsList") == [new]:
@@ -2690,6 +2702,20 @@ def verify(args):
     sys.exit(1 if found.count("error") else 0)
 
 
+GITATTRIBUTES = """# OpenSheaf archive files: stored and checked out byte for byte,
+# never merged as text (OpenSheaf archives in git, section 4.1). Every
+# attribute is named, so that no attribute of the user's own settings (a
+# user-wide `*.pdf filter=lfs`, for instance) applies to them.
+opensheaf.json -text -filter -ident -working-tree-encoding -export-subst -merge
+ocfl/**        -text -filter -ident -working-tree-encoding -export-subst -merge
+indexes.json   -text -filter -ident -working-tree-encoding -export-subst -merge
+names/**       -text -filter -ident -working-tree-encoding -export-subst -merge
+owners/**      -text -filter -ident -working-tree-encoding -export-subst -merge
+sha512/**      -text -filter -ident -working-tree-encoding -export-subst -merge
+*.pdf binary
+"""
+
+
 def init(args):
     """Create an archive in the folder: osheaf.json, the storage root, the owner and its
     key log (made, or copied), the empty main catalogue, the discovery document, and the
@@ -2749,6 +2775,8 @@ def init(args):
     if getattr(args, "new_owner", False) and wallet_config(args):
         cfg["keys"] = wallet_config(args)
     (root / CONFIG_NAME).write_text(json.dumps(cfg, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    if not (root / ".gitattributes").exists():
+        (root / ".gitattributes").write_text(GITATTRIBUTES, encoding="utf-8")
     if kind == "website":
         from . import html
         (root / "templates").mkdir(exist_ok=True)

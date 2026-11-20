@@ -594,10 +594,10 @@ def import_paper(folder, taken, report, dry, texmacs=None, licences=None, existi
 
 
 def main(argv=None):
-    ap = argparse.ArgumentParser(prog="osheaf import-arxiv", description=__doc__,
+    ap = argparse.ArgumentParser(prog="osheaf arxiv import", description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("downloads")
-    ap.add_argument("ids", nargs="*")
+    ap.add_argument("downloads", metavar="DOWNLOADS", help="the folder of osheaf arxiv fetch")
+    ap.add_argument("ids", nargs="*", metavar="ARXIV-ID", help="arXiv identifiers (default: all those downloaded)")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--texmacs", action="append", help="JSON: arXiv id+version -> {tm, bib, ...}, TeXmacs sources of"
                     " versions for which arXiv has only a PDF")
@@ -725,7 +725,7 @@ def author_papers(author):
 def fetch(downloads, ids, refresh=False):
     """Download the record, and the PDF and source of every version, of each
     paper; and the licence and comments of each version. Resumable: what is
-    present is not fetched again (records are refreshed with REFRESH)."""
+    present is not fetched again (the records are fetched again with --refresh)."""
     import datetime
     import html as htmllib
     dl = Path(downloads)
@@ -784,8 +784,8 @@ def fetch(downloads, ids, refresh=False):
 
 def fetch_main(argv=None):
     ap = argparse.ArgumentParser(prog="osheaf arxiv fetch", description=fetch.__doc__)
-    ap.add_argument("downloads")
-    ap.add_argument("ids", nargs="*", help="arXiv identifiers")
+    ap.add_argument("downloads", metavar="DOWNLOADS", help="the folder of the downloads")
+    ap.add_argument("ids", nargs="*", metavar="ARXIV-ID", help="arXiv identifiers")
     ap.add_argument("--author", help="all papers of an arXiv author page, e.g. gubinelli_m_1")
     ap.add_argument("--refresh", action="store_true", help="fetch the records again (new versions)")
     a = ap.parse_args(argv)

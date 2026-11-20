@@ -656,10 +656,10 @@ of source, number of files, main source, notes and object version.
 
     # in arXiv: the import command:
     def main(argv=None):
-        ap = argparse.ArgumentParser(prog="osheaf import-arxiv", description=__doc__,
+        ap = argparse.ArgumentParser(prog="osheaf arxiv import", description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
-        ap.add_argument("downloads")
-        ap.add_argument("ids", nargs="*")
+        ap.add_argument("downloads", metavar="DOWNLOADS", help="the folder of osheaf arxiv fetch")
+        ap.add_argument("ids", nargs="*", metavar="ARXIV-ID", help="arXiv identifiers (default: all those downloaded)")
         ap.add_argument("--dry-run", action="store_true")
         ap.add_argument("--texmacs", action="append", help="JSON: arXiv id+version -> {tm, bib, ...}, TeXmacs sources of"
                         " versions for which arXiv has only a PDF")

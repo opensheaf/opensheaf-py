@@ -25,19 +25,19 @@ Commands:
                          catalogues and selections, with members of any archive
   resolve URI            find and check what a sheaf: URI names, in any archive
   mirror URI | --all     copy a line written elsewhere, with its owner's key log
-  branch URI --label L   a branch of a signed version of another line, or move its branch point
-  accept URI --selection S   an accepted copy (a branch) listed by a selection
+  branch URI --label LABEL   a branch of a signed version of another line, or move its branch point
+  accept URI --selection LABEL   an accepted copy (a branch) listed by a selection
   owner pull URL|PATH    meet another copy of a key log: extend it, or record a fork
   sign LABEL --version vN    sign again a version contested by an exposed key
-  draft new|deposit|delete ID   unsigned work in progress, at draft/<id>/
-  seal ID --label L      seal the work of a draft as a new line
+  draft new|deposit|delete DRAFT   unsigned work in progress, at draft/<id>/
+  seal DRAFT --label LABEL   seal the work of a draft as a new line
   takedown LABEL --reason TEXT   delete an object, leaving a tombstone
   index                  write opensheaf.json, the indexes and the website (or the TeXmacs index)
   verify                 check the archive (section 14 of the specification)
   zenodo LABEL           a DOI for the current version (sandbox, or --production)
   arxiv fetch            download papers from arXiv (no archive needed)
   arxiv import DOWNLOADS import the downloads, one signed line per paper
-  help-config            describe osheaf.json
+  help-config            describe osheaf.json and ~/.config/opensheaf/config.json
 
 The website (osheaf.json "index": {"html": ...}) is written again after every
 command that changes the archive.
@@ -74,8 +74,8 @@ def build_parser():
     d.set_defaults(func=core.deposit)
 
     r = sub.add_parser("relicense", help="description-only version with a new licence")
-    r.add_argument("id", nargs="?")
-    r.add_argument("--rights", choices=sorted(core.RIGHTS))
+    r.add_argument("id", nargs="?", metavar="LABEL", help="the label of the line")
+    r.add_argument("--rights", type=rights_option, help=RIGHTS_HELP)
     r.add_argument("--method", help="how the authors agreed, e.g. 'confirmed by email'")
     r.add_argument("--date", help="date of the agreement (default today)")
     r.add_argument("--message")
@@ -86,7 +86,7 @@ def build_parser():
     r.set_defaults(func=core.relicense)
 
     rl = sub.add_parser("relate", help="description-only version linking the same work elsewhere")
-    rl.add_argument("id", nargs="?")
+    rl.add_argument("id", nargs="?", metavar="LABEL", help="the label of the line")
     rl.add_argument("--to", help="arxiv:ID or doi:DOI")
     rl.add_argument("--relation", default="IsIdenticalTo",
                     choices=["IsIdenticalTo", "IsVariantFormOf", "IsPreprintOf", "IsVersionOf"])
@@ -100,7 +100,7 @@ def build_parser():
 
     ds = sub.add_parser("describe", help="description-only version correcting the title, abstract,"
                         " keywords or authors")
-    ds.add_argument("id", nargs="?")
+    ds.add_argument("id", nargs="?", metavar="LABEL", help="the label of the line")
     ds.add_argument("--title", help="the corrected title (plain text, mathematics in $...$)")
     abstract = ds.add_mutually_exclusive_group()
     abstract.add_argument("--abstract", help="the corrected abstract (plain text, mathematics in $...$)")
@@ -116,9 +116,9 @@ def build_parser():
     ds.set_defaults(func=core.describe)
 
     nt = sub.add_parser("notice", help="a notice about a document version (description-only)")
-    nt.add_argument("id")
+    nt.add_argument("id", metavar="LABEL", help="the label of the line")
     nt.add_argument("--about", type=int, required=True, help="the document version it is about")
-    nt.add_argument("--text", help="the notice (plain text)")
+    nt.add_argument("--text", required=True, help="the notice (plain text)")
     nt.add_argument("--file", help="a file with the full statement (PDF, Markdown, ...)")
     nt.add_argument("--date", help="default: today")
     nt.add_argument("--message")
@@ -126,8 +126,8 @@ def build_parser():
                      help="extend versions that are not signed, or are contested (section 7.3)")
     nt.set_defaults(func=core.notice)
     w = sub.add_parser("withdraw", help="withdraw a document (description-only; the content stays)")
-    w.add_argument("id")
-    w.add_argument("--reason", help="why (plain text)")
+    w.add_argument("id", metavar="LABEL", help="the label of the line")
+    w.add_argument("--reason", required=True, help="why (plain text)")
     w.add_argument("--file", help="a file with the full statement")
     w.add_argument("--date", help="default: today")
     w.add_argument("--message")
@@ -135,7 +135,7 @@ def build_parser():
                     help="extend versions that are not signed, or are contested (section 7.3)")
     w.set_defaults(func=core.withdraw)
     c = sub.add_parser("complete", help="add the sources of a version deposited without them")
-    c.add_argument("id")
+    c.add_argument("id", metavar="LABEL", help="the label of the line")
     c.add_argument("--version", type=int, required=True, help="the document version")
     c.add_argument("--source", required=True, help="the main source")
     c.add_argument("--extra-source", action="append", help="FILE[=LOGICAL/PATH]")
@@ -152,7 +152,7 @@ def build_parser():
     co = sub.add_parser("collection", help="catalogues and selections, with members of any archive")
     cosub = co.add_subparsers(dest="action", required=True)
     cn = cosub.add_parser("new", help="a new, empty collection")
-    cn.add_argument("label")
+    cn.add_argument("label", metavar="LABEL", help="the label of the new collection")
     cn.add_argument("--type", choices=["catalogue", "selection"], required=True)
     cn.add_argument("--title", required=True)
     cn.add_argument("--description")
@@ -209,14 +209,14 @@ def build_parser():
     for name, helptext in (("new", "make a draft with a first deposit"),
                            ("deposit", "deposit a new version into a draft")):
         x = drsub.add_parser(name, help=helptext)
-        deposit_options(x)
+        deposit_options(x, draft=True)
         if name == "deposit":
             x.add_argument("--replace", action="store_true", help="rewrite the head of the draft")
     x = drsub.add_parser("delete", help="delete a draft (no tombstone)")
-    x.add_argument("id", metavar="ID")
+    x.add_argument("id", metavar="DRAFT", help="the identifier of the draft")
     dr.set_defaults(func=None)
     se = sub.add_parser("seal", help="seal the work of a draft as a new line (section 10.2)")
-    se.add_argument("id", metavar="DRAFT")
+    se.add_argument("id", metavar="DRAFT", help="the identifier of the draft")
     se.add_argument("--label", required=True, help="the label of the new line")
     se.add_argument("--owner", help="the owner of the new line, an owner the archive hosts")
     se.add_argument("--delete-draft", action="store_true", help="delete the draft once sealed")
@@ -230,9 +230,10 @@ def build_parser():
     who.add_argument("--keeper", action="store_true", help="a key log taken down at its keeper's request")
     td.add_argument("--yes", action="store_true", help="do not ask to confirm")
     td.set_defaults(func=None)
-    sub.add_parser("collect", help="new version of the main collection when needed").set_defaults(func=core.collect)
+    sub.add_parser("collect", help="new version of the main catalogue when needed").set_defaults(func=core.collect)
     i = sub.add_parser("index", help="write opensheaf.json, the indexes and the readable index")
-    i.add_argument("--no-html", action="store_true")
+    i.add_argument("--no-html", action="store_true",
+                   help="do not write the HTML of the website (opensheaf.json and the indexes only)")
     i.set_defaults(func=core.index)
     v = sub.add_parser("verify", help="check the archive")
     v.add_argument("--remote", action="store_true",
@@ -299,7 +300,7 @@ def build_parser():
     op.add_argument("--owner", help="the owner (default: the archive's)")
     ow.set_defaults(func=None)
     sg = sub.add_parser("sign", help="sign again a version contested by an exposed key (section 7.1)")
-    sg.add_argument("id", metavar="LABEL")
+    sg.add_argument("id", metavar="LABEL", help="the label of the line")
     sg.add_argument("--version", required=True, help="the object version, e.g. v2")
     sg.add_argument("--yes", action="store_true", help="do not ask to confirm that the owner made it")
     sg.set_defaults(func=core.sign_again)
@@ -312,7 +313,8 @@ def build_parser():
     kp.add_argument("--plain-current", action="store_true", help="keep them unencrypted in the wallet")
     kl = ksub.add_parser("pull", help="keep on this device the owner's current keys that the wallet holds")
     kls = ksub.add_parser("list", help="what the key wallet holds: owner, key, kind, did:key (no secrets)")
-    kf = ksub.add_parser("forget", help="remove keys from this device, and with --wallet from the wallet")
+    kf = ksub.add_parser("forget", help="remove keys from this device, and with --from-wallet from the wallet; "
+                         "or passkey wraps (--passkey, --rp)")
     kf.add_argument("did", nargs="*", metavar="DID", help="the keys to forget")
     kf.add_argument("--from-wallet", action="store_true", help="also remove them from the key wallet")
     kf.add_argument("--used", action="store_true",
@@ -345,13 +347,26 @@ def build_parser():
         wallet_option(x)
         x.add_argument("--no-browser", action="store_true", help="print the address of the page, do not open it")
     k.set_defaults(func=None)
-    sub.add_parser("help-config", help="describe osheaf.json").set_defaults(func=None)
+    sub.add_parser("help-config", help="describe osheaf.json and your own configuration (key wallets)"
+                   ).set_defaults(func=None)
     return p
 
 
-def deposit_options(d):
-    """The options of a deposit, shared by osheaf deposit and osheaf draft."""
-    d.add_argument("id", nargs="?", metavar="LABEL", help="the label of the line in the archive")
+RIGHTS_HELP = "an SPDX key, one of " + ", ".join(sorted(core.RIGHTS)) + ", or a statement in plain text"
+
+
+def rights_option(value):
+    """--rights, checked as core.check_rights does."""
+    try:
+        return core.check_rights(value)
+    except ValueError as e:
+        raise argparse.ArgumentTypeError(str(e)) from None
+
+
+def deposit_options(d, draft=False):
+    """The options of a deposit, shared by osheaf deposit and osheaf draft (DRAFT: a draft's)."""
+    d.add_argument("id", nargs="?", metavar="DRAFT" if draft else "LABEL",
+                   help="the identifier of the draft" if draft else "the label of the line in the archive")
     d.add_argument("source", nargs="?", help="the main source (.tm: typeset by the archive; "
                    "anything else: give the PDF with --pdf)")
     d.add_argument("--pdf", help="the PDF of this version (required unless the source is TeXmacs)")
@@ -378,8 +393,8 @@ def deposit_options(d):
     d.add_argument("--after", type=int, help="place this version after document version N in the"
                    " history (a version found later); otherwise it becomes the current version")
     d.add_argument("--type", default="Preprint")
-    d.add_argument("--rights", help="free text, or one of " + ", ".join(sorted(core.RIGHTS))
-                   + " (default: as the previous version, or 'All rights reserved')")
+    d.add_argument("--rights", type=rights_option,
+                   help=RIGHTS_HELP + " (default: as the previous version, or 'All rights reserved')")
     d.add_argument("--related", action="append",
                    help="arxiv=ID (IsVariantFormOf), or RELATION:doi:DOI, RELATION:arxiv:ID")
     d.add_argument("--extra-source", action="append",
@@ -457,8 +472,11 @@ def runs(p, args):
         missing = [k for k in REQUIRED.get(args.cmd, ()) if getattr(ns, k, None) in (None, [])]
         if missing:
             p.error(f"{args.cmd}: missing " + ", ".join(m.replace("_", "-") for m in missing))
-        if args.cmd == "relicense" and ns.rights not in core.RIGHTS:
-            p.error(f"relicense: rights must be one of {', '.join(sorted(core.RIGHTS))}")
+        if args.cmd in ("deposit", "relicense") and getattr(ns, "rights", None) is not None:
+            try:
+                core.check_rights(ns.rights)
+            except ValueError as e:
+                p.error(f"{args.cmd}: {e}")
         out.append(ns)
     return out
 
@@ -501,7 +519,9 @@ LAZY = {"collection": ("collections", None), "mirror": ("mirror", "main"), "bran
 def dispatch(p, args):
     """Run the command ARGS."""
     if args.cmd == "help-config":
+        from . import wallet
         print(core.__doc__)
+        print(wallet.CONFIG_HELP)
         return
     if args.cmd in REQUIRED:
         todo = runs(p, args)
@@ -514,6 +534,9 @@ def dispatch(p, args):
     if args.cmd == "arxiv" and args.action == "fetch":
         from . import arxiv
         return arxiv.fetch_main(args.rest)
+    if args.cmd == "arxiv" and ({"-h", "--help"} & set(args.rest)):
+        from . import arxiv
+        return arxiv.main(args.rest)
     if args.cmd == "resolve":
         from . import remote
         try:

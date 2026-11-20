@@ -241,6 +241,25 @@ def entry_path(owner, kid):
     return f"{owner}/{kid}{ENTRY_SUFFIX}"
 
 
+CONFIG_HELP = """Your own configuration: ~/.config/opensheaf/config.json ($XDG_CONFIG_HOME/opensheaf/config.json)
+
+{"keys": {"wallet": "github:OWNER/REPO"}}         a key wallet in a private GitHub repository, or
+{"keys": {"wallet": "command",                      a key wallet in your password manager:
+          "read":   "op read 'op://Private/opensheaf-{owner}-{k}/notesPlain'",
+          "write":  "...",                          receives the key file on its standard input
+          "list":   "...",                          optional: prints "<owner> <k>" per key
+          "forget": "..."}}                         optional: removes a key
+
+The commands run in the shell; {owner} is the owner name, {k} the 16 characters
+that name the key, {kind} current or rotation. read prints the key file as it was
+written, and fails or prints nothing for a key it does not hold. A command wallet is
+read only from this file or from OPENSHEAF_WALLET (the same JSON, or text such as
+github:OWNER/REPO), which wins; never from an archive's osheaf.json, which may name a
+GitHub wallet only. Examples for 1Password, Bitwarden and pass: chapter 9 of the
+literate program of opensheaf-py ("A command of the user's"), and its README,
+section "Keys and security levels"."""
+
+
 class CommandWallet:
     """Keys kept by commands of the user's, configured with {owner}, {k} and {kind}."""
 
