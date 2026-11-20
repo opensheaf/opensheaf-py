@@ -3,7 +3,8 @@
 as RFC 8032 says; current keys kept in the system's credential store (or a
 file of the user's configuration); rotation keys exported once, to files
 outside the archive (encrypted under a passphrase) and to a printed sheet,
-and read back; predictable keys for the tests only.
+and read back; keys as the encrypted files of a key wallet and as a text for
+a password manager; predictable keys for the tests only.
 
 Current keys are found, in this order: the environment variable
 OPENSHEAF_SIGNING_KEY (the base64 seed of one key, for continuous
@@ -214,8 +215,49 @@ def forget_current_key(owner, did):
             (key_folder(owner) / f"{kid}.key").unlink(missing_ok=True)
 
 
-ROTATION_FORMAT = "opensheaf-rotation-key/0.2"
 OPSLIMIT, MEMLIMIT = pwhash.argon2id.OPSLIMIT_MODERATE, pwhash.argon2id.MEMLIMIT_MODERATE
+
+
+class PassphraseNeeded(KeyStoreError):
+    """A key encrypted under a passphrase, read without one."""
+
+
+def encrypt_seed(seed, passphrase, *, opslimit=None, memlimit=None):
+    """(the encryption field, the bytes kept): SEED encrypted under PASSPHRASE, or as it is if None."""
+    if passphrase is None:
+        return "none", seed
+    opslimit = OPSLIMIT if opslimit is None else opslimit
+    memlimit = MEMLIMIT if memlimit is None else memlimit
+    salt = utils.random(pwhash.argon2id.SALTBYTES)
+    box = secret.SecretBox(pwhash.argon2id.kdf(secret.SecretBox.KEY_SIZE, passphrase.encode("utf-8"), salt,
+                                               opslimit=opslimit, memlimit=memlimit))
+    return (f"argon2id-secretbox opslimit={opslimit} memlimit={memlimit} "
+            f"salt={base64.b64encode(salt).decode('ascii')}", box.encrypt(seed))
+
+
+def decrypt_seed(encryption, data, passphrase):
+    """The seed kept as DATA, with the encryption field ENCRYPTION, under PASSPHRASE."""
+    encryption = encryption.split()
+    if encryption == ["none"]:
+        return data
+    if not encryption or encryption[0] != "argon2id-secretbox":
+        raise KeyStoreError(f"unknown encryption: {' '.join(encryption)!r}")
+    if passphrase is None:
+        raise PassphraseNeeded("this key is encrypted: a passphrase is needed")
+    params = dict(p.partition("=")[::2] for p in encryption[1:])
+    try:
+        salt = base64.b64decode(params["salt"], validate=True)
+        box = secret.SecretBox(pwhash.argon2id.kdf(secret.SecretBox.KEY_SIZE, passphrase.encode("utf-8"), salt,
+                                                   opslimit=int(params["opslimit"]),
+                                                   memlimit=int(params["memlimit"])))
+        return box.decrypt(data)
+    except (KeyError, ValueError, binascii.Error):
+        raise KeyStoreError("the encryption of the key is damaged") from None
+    except CryptoError:
+        raise KeyStoreError("wrong passphrase, or a damaged key") from None
+
+
+ROTATION_FORMAT = "opensheaf-rotation-key/0.2"
 
 
 def rotation_file_name(owner, key):
@@ -235,23 +277,21 @@ def archive_above(path, archive_root=None):
     return None
 
 
-def rotation_key_text(key, owner, version, passphrase=None, *, opslimit=OPSLIMIT, memlimit=MEMLIMIT):
+def rotation_key_text(key, owner, version, passphrase=None, *, opslimit=None, memlimit=None):
     """The text of the exported file of the rotation key KEY of OWNER, committed in VERSION."""
-    lines = [ROTATION_FORMAT, f"owner {owner}", f"version v{version}", f"key {key.did}", f"digest {key.digest}"]
-    if passphrase is None:
-        lines += ["encryption none", "seed " + base64.b64encode(key.seed).decode("ascii")]
-    else:
-        salt = utils.random(pwhash.argon2id.SALTBYTES)
-        box = secret.SecretBox(pwhash.argon2id.kdf(secret.SecretBox.KEY_SIZE, passphrase.encode("utf-8"),
-                                                   salt, opslimit=opslimit, memlimit=memlimit))
-        lines += [f"encryption argon2id-secretbox opslimit={opslimit} memlimit={memlimit} "
-                  f"salt={base64.b64encode(salt).decode('ascii')}",
-                  "seed " + base64.b64encode(box.encrypt(key.seed)).decode("ascii")]
+    return _file_text([ROTATION_FORMAT], key, owner, version, passphrase, opslimit, memlimit)
+
+
+def _file_text(head, key, owner, version, passphrase, opslimit, memlimit):
+    encryption, data = encrypt_seed(key.seed, passphrase, opslimit=opslimit, memlimit=memlimit)
+    lines = head + [f"owner {owner}"] + ([f"version v{version}"] if version else [])
+    lines += [f"key {key.did}", f"digest {key.digest}", f"encryption {encryption}",
+              "seed " + base64.b64encode(data).decode("ascii")]
     return "\n".join(lines) + "\n"
 
 
 def export_rotation_keys(keys, owner, version, folder, *, passphrase=None, archive_root=None,
-                         opslimit=OPSLIMIT, memlimit=MEMLIMIT):
+                         opslimit=None, memlimit=None):
     """Write the rotation keys KEYS of OWNER, committed in VERSION, to FOLDER, one file each."""
     inside = archive_above(folder, archive_root)
     if inside is not None:
@@ -295,58 +335,81 @@ def rotation_key_sheet(key, owner, version):
     ]) + "\n"
 
 
-class RotationKey:
-    """A rotation key read back, with what its file or sheet says about it."""
+KEY_FORMAT = "opensheaf-key/0.2"
+CURRENT, ROTATION = "current", "rotation"
+KINDS = (CURRENT, ROTATION)
 
-    def __init__(self, key, owner=None, version=None):
-        self.key, self.owner, self.version = key, owner, version
+
+def key_file_text(key, owner, kind, version=None, passphrase=None, *, opslimit=None, memlimit=None):
+    """The text of the wallet file of the key KEY of OWNER, of KIND, committed in VERSION (or None)."""
+    if kind not in KINDS:
+        raise KeyStoreError(f"a key is {' or '.join(KINDS)}")
+    return _file_text([KEY_FORMAT, f"kind {kind}"], key, owner, version, passphrase, opslimit, memlimit)
+
+
+TEXT_FORMAT = "opensheaf-key-text/0.2"
+
+
+def key_text(key, owner, kind=CURRENT, passphrase=None, *, opslimit=None, memlimit=None):
+    """The text of the key KEY of OWNER, for a password manager, its seed encrypted under PASSPHRASE
+    unless None."""
+    encryption, data = encrypt_seed(key.seed, passphrase, opslimit=opslimit, memlimit=memlimit)
+    groups = names.b32(data).upper()
+    lines = [TEXT_FORMAT, f"kind {kind}", f"owner {owner}", f"key {key.did}"]
+    if passphrase is not None:
+        lines.append(f"encryption {encryption}")
+    lines += ["seed " + " ".join(groups[i:i + 4] for i in range(0, len(groups), 4)),
+              f"check {sheet_check(data)}"]
+    return "\n".join(lines) + "\n"
+
+
+class ReadKey:
+    """A key read back, with what its file, sheet or text says about it."""
+
+    def __init__(self, key, owner=None, version=None, kind=ROTATION):
+        self.key, self.owner, self.version, self.kind = key, owner, version, kind
+
+
+def read_key(source, passphrase=None):
+    """The key of a file, a sheet or a text (a path, or its text), checked against its fields."""
+    text = Path(source).read_text(encoding="utf-8") if isinstance(source, Path) else source
+    lines = text.splitlines()
+    formats = (ROTATION_FORMAT, KEY_FORMAT, TEXT_FORMAT)
+    start = next((i for i, line in enumerate(lines) if line.strip() in formats), None)
+    fmt = lines[start].strip() if start is not None else None
+    fields = {}
+    for line in lines[start + 1 if start is not None else 0:]:
+        name, _, value = line.strip().partition(" ")
+        if name and name not in fields:
+            fields[name] = value.strip()
+    if fmt in (ROTATION_FORMAT, KEY_FORMAT):
+        try:
+            data = base64.b64decode(fields.get("seed", ""), validate=True)
+        except (binascii.Error, ValueError):
+            raise KeyStoreError("the seed of the file is not base64") from None
+    else:
+        try:
+            data = names.b32decode(fields.get("seed", "").replace(" ", ""))
+        except ValueError:
+            data = b""
+        if not data or fields.get("check", "").upper() != sheet_check(data):
+            raise KeyStoreError("the seed does not match its check: a character is mistyped")
+    seed = decrypt_seed(fields.get("encryption", "none"), data, passphrase)
+    if len(seed) != 32:
+        raise KeyStoreError("not the seed of an Ed25519 key")
+    key = Key(seed)
+    if fields.get("key", key.did) != key.did or fields.get("digest", key.digest) != key.digest:
+        raise KeyStoreError("the seed is not that of the key the file or sheet names")
+    kind = fields.get("kind", ROTATION)
+    if kind not in KINDS:
+        raise KeyStoreError(f"unknown kind of key: {kind!r}")
+    version = fields.get("version", "").split(" ")[0]
+    return ReadKey(key, fields.get("owner"), int(version[1:]) if version[1:].isdigit() else None, kind)
 
 
 def read_rotation_key(source, passphrase=None):
     """The rotation key of a file or a sheet (a path, or its text), checked against its fields."""
-    text = Path(source).read_text(encoding="utf-8") if isinstance(source, Path) else source
-    fields = {}
-    for line in text.splitlines():
-        name, _, value = line.strip().partition(" ")
-        if name and name not in fields:
-            fields[name] = value.strip()
-    if text.startswith(ROTATION_FORMAT):
-        key = Key(_seed_of_file(fields, passphrase))
-    else:
-        groups = fields.get("seed", "").replace(" ", "")
-        try:
-            seed = names.b32decode(groups)
-        except ValueError:
-            seed = b""
-        if len(seed) != 32 or fields.get("check", "").upper() != sheet_check(seed):
-            raise KeyStoreError("the seed does not match its check: a character is mistyped")
-        key = Key(seed)
-    if fields.get("key", key.did) != key.did or fields.get("digest", key.digest) != key.digest:
-        raise KeyStoreError("the seed is not that of the key the file or sheet names")
-    version = fields.get("version", "").split(" ")[0]
-    return RotationKey(key, fields.get("owner"), int(version[1:]) if version[1:].isdigit() else None)
-
-
-def _seed_of_file(fields, passphrase):
-    encryption = fields.get("encryption", "").split()
-    try:
-        data = base64.b64decode(fields.get("seed", ""), validate=True)
-    except (binascii.Error, ValueError):
-        raise KeyStoreError("the seed of the file is not base64") from None
-    if encryption == ["none"]:
-        return data
-    if not encryption or encryption[0] != "argon2id-secretbox":
-        raise KeyStoreError(f"unknown encryption: {' '.join(encryption)!r}")
-    if passphrase is None:
-        raise KeyStoreError("this rotation key is encrypted: a passphrase is needed")
-    params = dict(p.partition("=")[::2] for p in encryption[1:])
-    try:
-        salt = base64.b64decode(params["salt"], validate=True)
-        box = secret.SecretBox(pwhash.argon2id.kdf(secret.SecretBox.KEY_SIZE, passphrase.encode("utf-8"), salt,
-                                                   opslimit=int(params["opslimit"]),
-                                                   memlimit=int(params["memlimit"])))
-        return box.decrypt(data)
-    except (KeyError, ValueError, binascii.Error):
-        raise KeyStoreError("the encryption of the file is damaged") from None
-    except CryptoError:
-        raise KeyStoreError("wrong passphrase, or a damaged file") from None
+    rk = read_key(source, passphrase)
+    if rk.kind != ROTATION:
+        raise KeyStoreError(f"{rk.key.did} is a {rk.kind} key, not a rotation key")
+    return rk

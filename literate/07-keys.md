@@ -13,8 +13,10 @@ This chapter is the module `keys.py`. It makes keys, as RFC 8032 says;
 keeps current keys in the system's credential store, or failing that in a
 file of the user's configuration; exports rotation keys once, when they are
 made, to files outside the archive, encrypted under a passphrase, and to a
-sheet to print; reads them back when they are needed; and, for the tests
-only, makes predictable keys.
+sheet to print; writes keys as the encrypted files that a key wallet keeps
+([key wallets](09-wallets.md)) and as a short text for a password manager;
+reads them back when they are needed; and, for the tests only, makes
+predictable keys.
 
     # in src/opensheaf/keys.py:
     <<keys: the docstring and the imports>>
@@ -29,13 +31,22 @@ only, makes predictable keys.
     <<keys: where current keys are kept>>
 
 
+    <<keys: encrypting a seed>>
+
+
     <<keys: exporting rotation keys>>
 
 
     <<keys: the printed sheet>>
 
 
-    <<keys: reading a rotation key back>>
+    <<keys: key files for wallets>>
+
+
+    <<keys: a key as text, for a password manager>>
+
+
+    <<keys: reading a key back>>
 
 Ed25519 and the encryption of exported keys are those of libsodium, through
 PyNaCl, a dependency of the package; the credential store is that of the
@@ -46,7 +57,8 @@ optional package keyring, as for the tokens of [Zenodo](50-zenodo.md).
     as RFC 8032 says; current keys kept in the system's credential store (or a
     file of the user's configuration); rotation keys exported once, to files
     outside the archive (encrypted under a passphrase) and to a printed sheet,
-    and read back; predictable keys for the tests only.
+    and read back; keys as the encrypted files of a key wallet and as a text for
+    a password manager; predictable keys for the tests only.
 
     Current keys are found, in this order: the environment variable
     OPENSHEAF_SIGNING_KEY (the base64 seed of one key, for continuous
@@ -334,6 +346,63 @@ every store.
             elif store == "file":
                 (key_folder(owner) / f"{kid}.key").unlink(missing_ok=True)
 
+Encrypting a seed
+-----------------
+
+Whatever keeps a key outside the device's credential store, an exported
+file, a key wallet, a password manager, keeps its seed encrypted under a
+passphrase, unless the user chooses otherwise: Argon2id derives a key from
+the passphrase and a random salt, and libsodium's SecretBox (XSalsa20 and
+Poly1305) encrypts the seed, with a random nonce, and authenticates it, so
+that a wrong passphrase or a damaged text is found at once. The
+`encryption` field names the method and records the cost of Argon2id and
+the salt, so that the tests can use the cheapest cost and users the
+default, libsodium's "moderate" (the module's `OPSLIMIT` and `MEMLIMIT`,
+read when a seed is encrypted, so that the tests can lower them); `none`
+means a seed kept as it is.
+
+    # in keys: encrypting a seed:
+    OPSLIMIT, MEMLIMIT = pwhash.argon2id.OPSLIMIT_MODERATE, pwhash.argon2id.MEMLIMIT_MODERATE
+
+
+    class PassphraseNeeded(KeyStoreError):
+        """A key encrypted under a passphrase, read without one."""
+
+
+    def encrypt_seed(seed, passphrase, *, opslimit=None, memlimit=None):
+        """(the encryption field, the bytes kept): SEED encrypted under PASSPHRASE, or as it is if None."""
+        if passphrase is None:
+            return "none", seed
+        opslimit = OPSLIMIT if opslimit is None else opslimit
+        memlimit = MEMLIMIT if memlimit is None else memlimit
+        salt = utils.random(pwhash.argon2id.SALTBYTES)
+        box = secret.SecretBox(pwhash.argon2id.kdf(secret.SecretBox.KEY_SIZE, passphrase.encode("utf-8"), salt,
+                                                   opslimit=opslimit, memlimit=memlimit))
+        return (f"argon2id-secretbox opslimit={opslimit} memlimit={memlimit} "
+                f"salt={base64.b64encode(salt).decode('ascii')}", box.encrypt(seed))
+
+
+    def decrypt_seed(encryption, data, passphrase):
+        """The seed kept as DATA, with the encryption field ENCRYPTION, under PASSPHRASE."""
+        encryption = encryption.split()
+        if encryption == ["none"]:
+            return data
+        if not encryption or encryption[0] != "argon2id-secretbox":
+            raise KeyStoreError(f"unknown encryption: {' '.join(encryption)!r}")
+        if passphrase is None:
+            raise PassphraseNeeded("this key is encrypted: a passphrase is needed")
+        params = dict(p.partition("=")[::2] for p in encryption[1:])
+        try:
+            salt = base64.b64decode(params["salt"], validate=True)
+            box = secret.SecretBox(pwhash.argon2id.kdf(secret.SecretBox.KEY_SIZE, passphrase.encode("utf-8"), salt,
+                                                       opslimit=int(params["opslimit"]),
+                                                       memlimit=int(params["memlimit"])))
+            return box.decrypt(data)
+        except (KeyError, ValueError, binascii.Error):
+            raise KeyStoreError("the encryption of the key is damaged") from None
+        except CryptoError:
+            raise KeyStoreError("wrong passphrase, or a damaged key") from None
+
 Exporting rotation keys
 -----------------------
 
@@ -350,11 +419,7 @@ The file is plain text, one field per line: the format, the owner, the
 key-log version whose `next` commits the key, the `did:key` and its digest,
 so that the file says what it is without being decrypted; then the
 encryption and the seed. Unless the user chooses otherwise, the seed is
-encrypted under a passphrase: Argon2id derives a key from the passphrase
-and a random salt, and libsodium's SecretBox (XSalsa20 and Poly1305)
-encrypts the seed. The cost of Argon2id is recorded in the file, so that
-the tests can use the cheapest and users the default, libsodium's
-"moderate".
+encrypted under a passphrase, as the section above says.
 
 ```
 opensheaf-rotation-key/0.2
@@ -368,7 +433,6 @@ seed ...
 
     # in keys: exporting rotation keys:
     ROTATION_FORMAT = "opensheaf-rotation-key/0.2"
-    OPSLIMIT, MEMLIMIT = pwhash.argon2id.OPSLIMIT_MODERATE, pwhash.argon2id.MEMLIMIT_MODERATE
 
 
     def rotation_file_name(owner, key):
@@ -388,18 +452,16 @@ seed ...
         return None
 
 
-    def rotation_key_text(key, owner, version, passphrase=None, *, opslimit=OPSLIMIT, memlimit=MEMLIMIT):
+    def rotation_key_text(key, owner, version, passphrase=None, *, opslimit=None, memlimit=None):
         """The text of the exported file of the rotation key KEY of OWNER, committed in VERSION."""
-        lines = [ROTATION_FORMAT, f"owner {owner}", f"version v{version}", f"key {key.did}", f"digest {key.digest}"]
-        if passphrase is None:
-            lines += ["encryption none", "seed " + base64.b64encode(key.seed).decode("ascii")]
-        else:
-            salt = utils.random(pwhash.argon2id.SALTBYTES)
-            box = secret.SecretBox(pwhash.argon2id.kdf(secret.SecretBox.KEY_SIZE, passphrase.encode("utf-8"),
-                                                       salt, opslimit=opslimit, memlimit=memlimit))
-            lines += [f"encryption argon2id-secretbox opslimit={opslimit} memlimit={memlimit} "
-                      f"salt={base64.b64encode(salt).decode('ascii')}",
-                      "seed " + base64.b64encode(box.encrypt(key.seed)).decode("ascii")]
+        return _file_text([ROTATION_FORMAT], key, owner, version, passphrase, opslimit, memlimit)
+
+
+    def _file_text(head, key, owner, version, passphrase, opslimit, memlimit):
+        encryption, data = encrypt_seed(key.seed, passphrase, opslimit=opslimit, memlimit=memlimit)
+        lines = head + [f"owner {owner}"] + ([f"version v{version}"] if version else [])
+        lines += [f"key {key.did}", f"digest {key.digest}", f"encryption {encryption}",
+                  "seed " + base64.b64encode(data).decode("ascii")]
         return "\n".join(lines) + "\n"
 
 Exporting writes one file per key, readable only by its user, never over
@@ -409,7 +471,7 @@ is written, that they are where the user wants them.
 
     # in keys: exporting rotation keys:
     def export_rotation_keys(keys, owner, version, folder, *, passphrase=None, archive_root=None,
-                             opslimit=OPSLIMIT, memlimit=MEMLIMIT):
+                             opslimit=None, memlimit=None):
         """Write the rotation keys KEYS of OWNER, committed in VERSION, to FOLDER, one file each."""
         inside = archive_above(folder, archive_root)
         if inside is not None:
@@ -464,69 +526,144 @@ printed, before the version that commits the key is written.
             f"check    {sheet_check(key.seed)}",
         ]) + "\n"
 
-Reading a rotation key back
----------------------------
+Key files for wallets
+---------------------
 
-A rotation key is read back to sign the next version of the key log: from
-its file, with the passphrase if it is encrypted, or from its sheet, typed
-back (only the lines `seed` and `check` are needed then). Either way the key
-is rebuilt from the seed and compared with the fields that come with it, so
-that a wrong passphrase, a damaged file or a mistyped seed is found here,
-not by a verifier later.
+A key wallet ([chapter 9](09-wallets.md)) keeps the keys of owners, current
+keys and rotation keys, one file each, `<owner>/<k>.key.enc`. The file is
+that of an exported rotation key, with another format name and one more
+field, `kind`, `current` or `rotation`, so that a key read back from a
+wallet cannot be used as the other kind. The `version` is that of the key
+log which commits the key (in `keys` for a current key, in `next` for a
+rotation key), when it is known: a current key made with `osheaf key new`
+is pushed before any version lists it.
 
-    # in keys: reading a rotation key back:
-    class RotationKey:
-        """A rotation key read back, with what its file or sheet says about it."""
+```
+opensheaf-key/0.2
+kind current
+owner 56wo6cdpjsxk7ddgnqfp2quipfghukhtmvjuahvwzko7m4tkz3pa
+version v1
+key did:key:z6Mkh5i2epG9LsWNnYbBHG7ctEiNLZPjsBNXxNUcsaYgEtNm
+digest oxthfb6b4q3sqathmcpnciqggfxlr3aekgfg2tpm2lgrm2qnalha
+encryption argon2id-secretbox opslimit=3 memlimit=268435456 salt=...
+seed ...
+```
 
-        def __init__(self, key, owner=None, version=None):
-            self.key, self.owner, self.version = key, owner, version
+    # in keys: key files for wallets:
+    KEY_FORMAT = "opensheaf-key/0.2"
+    CURRENT, ROTATION = "current", "rotation"
+    KINDS = (CURRENT, ROTATION)
 
 
-    def read_rotation_key(source, passphrase=None):
-        """The rotation key of a file or a sheet (a path, or its text), checked against its fields."""
+    def key_file_text(key, owner, kind, version=None, passphrase=None, *, opslimit=None, memlimit=None):
+        """The text of the wallet file of the key KEY of OWNER, of KIND, committed in VERSION (or None)."""
+        if kind not in KINDS:
+            raise KeyStoreError(f"a key is {' or '.join(KINDS)}")
+        return _file_text([KEY_FORMAT, f"kind {kind}"], key, owner, version, passphrase, opslimit, memlimit)
+
+A key as text, for a password manager
+-------------------------------------
+
+A password manager such as the Passwords app of macOS keeps passwords and
+notes, synchronised between the user's devices; a command-line tool cannot
+write its items (those of the iCloud keychain), but the user can paste a
+text into a note and copy it back. `key_text` is that text: the format, the
+kind of key, the owner, the `did:key`, and the seed in base32 capitals in
+groups of four, with the check of the printed sheet, so that it can also be
+typed back by hand. Encrypted under a passphrase, the groups are those of
+the encrypted seed, and the text has an `encryption` field; the check is
+then of the encrypted bytes, and catches a damaged copy before the
+passphrase is asked for.
+
+```
+opensheaf-key-text/0.2
+kind current
+owner 56wo6cdpjsxk7ddgnqfp2quipfghukhtmvjuahvwzko7m4tkz3pa
+key did:key:z6Mkh5i2epG9LsWNnYbBHG7ctEiNLZPjsBNXxNUcsaYgEtNm
+seed ABCD EFGH ...
+check WXYZ
+```
+
+    # in keys: a key as text, for a password manager:
+    TEXT_FORMAT = "opensheaf-key-text/0.2"
+
+
+    def key_text(key, owner, kind=CURRENT, passphrase=None, *, opslimit=None, memlimit=None):
+        """The text of the key KEY of OWNER, for a password manager, its seed encrypted under PASSPHRASE
+        unless None."""
+        encryption, data = encrypt_seed(key.seed, passphrase, opslimit=opslimit, memlimit=memlimit)
+        groups = names.b32(data).upper()
+        lines = [TEXT_FORMAT, f"kind {kind}", f"owner {owner}", f"key {key.did}"]
+        if passphrase is not None:
+            lines.append(f"encryption {encryption}")
+        lines += ["seed " + " ".join(groups[i:i + 4] for i in range(0, len(groups), 4)),
+                  f"check {sheet_check(data)}"]
+        return "\n".join(lines) + "\n"
+
+Reading a key back
+------------------
+
+A key is read back from any of these texts: an exported file of a rotation
+key, a file of a wallet, a printed sheet typed back (only the lines `seed`
+and `check` are needed then), or the text of a password manager, which may
+come with other lines around it, pasted from a note: reading starts at its
+format line. Either way the key is rebuilt from the seed and compared with
+the fields that come with it, so that a wrong passphrase, a damaged file or
+a mistyped seed is found here, not by a verifier later. A key without a
+`kind` field is a rotation key: the exported files and the sheets hold
+rotation keys only.
+
+    # in keys: reading a key back:
+    class ReadKey:
+        """A key read back, with what its file, sheet or text says about it."""
+
+        def __init__(self, key, owner=None, version=None, kind=ROTATION):
+            self.key, self.owner, self.version, self.kind = key, owner, version, kind
+
+
+    def read_key(source, passphrase=None):
+        """The key of a file, a sheet or a text (a path, or its text), checked against its fields."""
         text = Path(source).read_text(encoding="utf-8") if isinstance(source, Path) else source
+        lines = text.splitlines()
+        formats = (ROTATION_FORMAT, KEY_FORMAT, TEXT_FORMAT)
+        start = next((i for i, line in enumerate(lines) if line.strip() in formats), None)
+        fmt = lines[start].strip() if start is not None else None
         fields = {}
-        for line in text.splitlines():
+        for line in lines[start + 1 if start is not None else 0:]:
             name, _, value = line.strip().partition(" ")
             if name and name not in fields:
                 fields[name] = value.strip()
-        if text.startswith(ROTATION_FORMAT):
-            key = Key(_seed_of_file(fields, passphrase))
-        else:
-            groups = fields.get("seed", "").replace(" ", "")
+        if fmt in (ROTATION_FORMAT, KEY_FORMAT):
             try:
-                seed = names.b32decode(groups)
+                data = base64.b64decode(fields.get("seed", ""), validate=True)
+            except (binascii.Error, ValueError):
+                raise KeyStoreError("the seed of the file is not base64") from None
+        else:
+            try:
+                data = names.b32decode(fields.get("seed", "").replace(" ", ""))
             except ValueError:
-                seed = b""
-            if len(seed) != 32 or fields.get("check", "").upper() != sheet_check(seed):
+                data = b""
+            if not data or fields.get("check", "").upper() != sheet_check(data):
                 raise KeyStoreError("the seed does not match its check: a character is mistyped")
-            key = Key(seed)
+        seed = decrypt_seed(fields.get("encryption", "none"), data, passphrase)
+        if len(seed) != 32:
+            raise KeyStoreError("not the seed of an Ed25519 key")
+        key = Key(seed)
         if fields.get("key", key.did) != key.did or fields.get("digest", key.digest) != key.digest:
             raise KeyStoreError("the seed is not that of the key the file or sheet names")
+        kind = fields.get("kind", ROTATION)
+        if kind not in KINDS:
+            raise KeyStoreError(f"unknown kind of key: {kind!r}")
         version = fields.get("version", "").split(" ")[0]
-        return RotationKey(key, fields.get("owner"), int(version[1:]) if version[1:].isdigit() else None)
+        return ReadKey(key, fields.get("owner"), int(version[1:]) if version[1:].isdigit() else None, kind)
 
+A rotation key is read back to sign the next version of the key log;
+`read_rotation_key` refuses a current key, which never signs one.
 
-    def _seed_of_file(fields, passphrase):
-        encryption = fields.get("encryption", "").split()
-        try:
-            data = base64.b64decode(fields.get("seed", ""), validate=True)
-        except (binascii.Error, ValueError):
-            raise KeyStoreError("the seed of the file is not base64") from None
-        if encryption == ["none"]:
-            return data
-        if not encryption or encryption[0] != "argon2id-secretbox":
-            raise KeyStoreError(f"unknown encryption: {' '.join(encryption)!r}")
-        if passphrase is None:
-            raise KeyStoreError("this rotation key is encrypted: a passphrase is needed")
-        params = dict(p.partition("=")[::2] for p in encryption[1:])
-        try:
-            salt = base64.b64decode(params["salt"], validate=True)
-            box = secret.SecretBox(pwhash.argon2id.kdf(secret.SecretBox.KEY_SIZE, passphrase.encode("utf-8"), salt,
-                                                       opslimit=int(params["opslimit"]),
-                                                       memlimit=int(params["memlimit"])))
-            return box.decrypt(data)
-        except (KeyError, ValueError, binascii.Error):
-            raise KeyStoreError("the encryption of the file is damaged") from None
-        except CryptoError:
-            raise KeyStoreError("wrong passphrase, or a damaged file") from None
+    # in keys: reading a key back:
+    def read_rotation_key(source, passphrase=None):
+        """The rotation key of a file or a sheet (a path, or its text), checked against its fields."""
+        rk = read_key(source, passphrase)
+        if rk.kind != ROTATION:
+            raise KeyStoreError(f"{rk.key.did} is a {rk.kind} key, not a rotation key")
+        return rk
