@@ -361,8 +361,9 @@ class Resolver:
                 out.append(w)
         return out
 
-    def folder(self, where, obj_id, witness_names=None):
-        """The folder holding the object OBJ_ID at WHERE ('here': this archive), or None."""
+    def folder(self, where, obj_id, witness_names=None, upto=None):
+        """The folder holding the object OBJ_ID at WHERE ('here': this archive), or None; over
+        HTTP, a copy of v1 to UPTO (default: the head), kept apart from the whole copy."""
         if where == "here":
             d = P.obj_dir(obj_id) if self.here else None
             return d if d is not None and (d / "inventory.json").is_file() else None
@@ -374,11 +375,11 @@ class Resolver:
                 return src.object_folder(obj_id)
             except ValueError:
                 return None
-        key = (where, obj_id)
+        key = (where, obj_id) if upto is None else (where, obj_id, upto)
         if key not in self.fetched:
             dest = self.cache / str(len(self.fetched))
             try:
-                fetch_object(src, obj_id, dest, witness_names=witness_names)
+                fetch_object(src, obj_id, dest, upto=upto, witness_names=witness_names)
                 self.fetched[key] = dest
             except Unavailable as e:
                 if "no object" not in str(e):
@@ -627,7 +628,7 @@ class Resolver:
 
     def originator(self, where, obj_id):
         """The originator of the genesis record of the object OBJ_ID at WHERE, or None."""
-        d = self.folder(where, obj_id)
+        d = self.folder(where, obj_id, upto=1)
         inv = P.load_inventory(d) if d else None
         g = P.read_logical(d, inv, P.GENESIS, "v1") if inv else None
         try:

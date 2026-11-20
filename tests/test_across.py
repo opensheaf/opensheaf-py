@@ -205,6 +205,23 @@ def test_resolution_over_http(tmp_path, monkeypatch, server):
         assert found.copy.src.folder is None and found.copy.statuses == [sign.SIGNED, sign.SIGNED]
 
 
+def test_short_uri_over_http(tmp_path, monkeypatch, server):
+    h = make(tmp_path, "h", "--layout", "hashed")
+    deposit(h, "paper", "one", new=True)
+    deposit(h, "paper", "two")
+    _, nm, owner = line(h, "paper").split(":")
+    at = "?at=" + urllib.parse.quote("https://example.org/h/", safe="")
+    monkeypatch.setenv(remote.LOCATIONS, f"https://example.org/={server}")
+    c = make(tmp_path, "c")
+    P.configure(c)
+    for text in (f"sheaf:{nm}", f"sheaf:{nm[:16]}", f"sheaf:{nm[:16]}:{owner[:16]}"):
+        with remote.Resolver() as r:
+            obj_id, found = r.resolve(text + at)
+            assert obj_id == f"sheaf:{nm}:{owner}"
+            assert (found.status, found.version) == ("verified", "v2")
+            assert found.copy.statuses == [sign.SIGNED, sign.SIGNED]
+
+
 def test_curated_collection_across_archives(tmp_path, capsys):
     a = make(tmp_path, "papers")
     for label in ("one", "two"):
@@ -297,6 +314,12 @@ def test_selection_pins_revisions(tmp_path, capsys):
     assert [x for x in found if x["severity"] == "error"] == []
     with pytest.raises(SystemExit):
         run("--root", str(s), "collection", "add", "digest", uri(a, "paper"), "--revision", "9")
+    run("--root", str(s), "collection", "remove", "digest", uri(a, "paper"), "--revision", "2")
+    assert [x["documentVersion"] for x in members(s, "digest")["members"][0]["revisions"]] == [1, 3]
+    with pytest.raises(SystemExit, match="no member matches"):
+        run("--root", str(s), "collection", "remove", "digest", uri(a, "paper"), "--revision", "2")
+    run("--root", str(s), "collection", "remove", "digest", uri(a, "paper"), "--revision", "1", "--revision", "3")
+    assert members(s, "digest")["members"] == []
 
 
 def test_featured_collection_on_the_home_page(tmp_path):

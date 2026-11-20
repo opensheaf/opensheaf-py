@@ -280,6 +280,28 @@ URL there.
             assert (found.status, found.version) == ("verified", "v2")
             assert found.copy.src.folder is None and found.copy.statuses == [sign.SIGNED, sign.SIGNED]
 
+A short form is expanded first: without an owner part, the reader copies
+the first version of each candidate to read the originator of its genesis
+record. That copy serves only the expansion; the line is then copied
+whole, with its witnesses, and resolves as its full URI does.
+
+    # in across: resolution:
+    def test_short_uri_over_http(tmp_path, monkeypatch, server):
+        h = make(tmp_path, "h", "--layout", "hashed")
+        deposit(h, "paper", "one", new=True)
+        deposit(h, "paper", "two")
+        _, nm, owner = line(h, "paper").split(":")
+        at = "?at=" + urllib.parse.quote("https://example.org/h/", safe="")
+        monkeypatch.setenv(remote.LOCATIONS, f"https://example.org/={server}")
+        c = make(tmp_path, "c")
+        P.configure(c)
+        for text in (f"sheaf:{nm}", f"sheaf:{nm[:16]}", f"sheaf:{nm[:16]}:{owner[:16]}"):
+            with remote.Resolver() as r:
+                obj_id, found = r.resolve(text + at)
+                assert obj_id == f"sheaf:{nm}:{owner}"
+                assert (found.status, found.version) == ("verified", "v2")
+                assert found.copy.statuses == [sign.SIGNED, sign.SIGNED]
+
 Collections
 -----------
 
@@ -367,7 +389,9 @@ A selection pins the revisions its curator vetted (section 8.4). Archive
 kept in the order of the paper's history, each with the object version
 that held it and its digest. Later versions of the paper change nothing:
 `update` only reports the versions not vetted, and vetting one more is
-the curator's act, a new version of the selection.
+the curator's act, a new version of the selection. Removing one revision
+keeps the member with the others; removing its last revision removes the
+member; a revision the member does not have is refused.
 
     # in across: collections:
     def test_selection_pins_revisions(tmp_path, capsys):
@@ -397,6 +421,12 @@ the curator's act, a new version of the selection.
         assert [x for x in found if x["severity"] == "error"] == []
         with pytest.raises(SystemExit):
             run("--root", str(s), "collection", "add", "digest", uri(a, "paper"), "--revision", "9")
+        run("--root", str(s), "collection", "remove", "digest", uri(a, "paper"), "--revision", "2")
+        assert [x["documentVersion"] for x in members(s, "digest")["members"][0]["revisions"]] == [1, 3]
+        with pytest.raises(SystemExit, match="no member matches"):
+            run("--root", str(s), "collection", "remove", "digest", uri(a, "paper"), "--revision", "2")
+        run("--root", str(s), "collection", "remove", "digest", uri(a, "paper"), "--revision", "1", "--revision", "3")
+        assert members(s, "digest")["members"] == []
 
 ### A featured collection
 
