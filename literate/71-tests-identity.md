@@ -768,6 +768,10 @@ not reach is unchecked, not invalid.
         assert status(b"not json")[0] == sign.INVALID
         assert status(json.dumps(dict(d, extra=1)).encode())[0] == sign.INVALID
         assert status(good, "signature-aaaaaaaaaaaaaaaa.json")[1].startswith("its name")
+        assert d["signature"].endswith("g==")
+        loose = dict(d, signature=d["signature"][:-3] + "h==")
+        assert base64.b64decode(loose["signature"]) == base64.b64decode(d["signature"])
+        assert status(json.dumps(loose).encode()) == (sign.INVALID, "malformed: signature is not of its form")
         forged = dict(d, signature=base64.b64encode(bytes(64)).decode())
         assert "does not verify" in status(json.dumps(forged).encode())[1]
         assert "another version" in status(good, inventory=D1)[1]

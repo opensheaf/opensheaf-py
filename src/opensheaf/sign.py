@@ -59,7 +59,9 @@ def verify(did, msg, signature):
         return False
     if len(signature) != 64 or int.from_bytes(signature[32:], "little") >= L:
         return False
-    if _y(public) >= P or _y(public) in SMALL_ORDER_Y or _y(signature[:32]) in SMALL_ORDER_Y:
+    if _y(public) >= P or _y(public) in SMALL_ORDER_Y:
+        return False
+    if _y(signature[:32]) >= P or _y(signature[:32]) in SMALL_ORDER_Y:
         return False
     try:
         VerifyKey(public).verify(msg, signature)
@@ -76,7 +78,7 @@ FIELDS = {
     "signer": names.OWNER_NAME,
     "key": names.DID_KEY,
     "keyLog": re.compile(r"^sheaf:([a-z2-7]{51}[aq])/v([1-9][0-9]*)\?sha512=([0-9a-f]{128})\Z"),
-    "signature": re.compile(r"^[A-Za-z0-9+/]{86}==\Z"),
+    "signature": re.compile(r"^[A-Za-z0-9+/]{85}[AQgw]==\Z"),
 }
 
 

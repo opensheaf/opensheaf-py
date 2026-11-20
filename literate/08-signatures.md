@@ -105,7 +105,8 @@ archive and not in another, so section 7.2 fixes the verification: the
 cofactorless equation of RFC 8032, section 5.1.7, and the rejection of a
 signature whose `S` is not less than the group order L, of a key that is
 not the canonical encoding of a point or is a point of small order, and of
-an `R` of small order. These are libsodium's rules, which PyNaCl applies;
+an `R` that is not the canonical encoding of a point or is of small order.
+These are libsodium's rules, which PyNaCl applies;
 the function also checks them itself, before calling it, so that the rules
 stand written here and do not depend on the version of libsodium.
 
@@ -135,7 +136,9 @@ encoding has `y` less than p.
             return False
         if len(signature) != 64 or int.from_bytes(signature[32:], "little") >= L:
             return False
-        if _y(public) >= P or _y(public) in SMALL_ORDER_Y or _y(signature[:32]) in SMALL_ORDER_Y:
+        if _y(public) >= P or _y(public) in SMALL_ORDER_Y:
+            return False
+        if _y(signature[:32]) >= P or _y(signature[:32]) in SMALL_ORDER_Y:
             return False
         try:
             VerifyKey(public).verify(msg, signature)
@@ -149,7 +152,14 @@ Reading a signature file
 A signature file must have exactly the fields of section 7.2, each of its
 form: an identifier, a version, a digest, owner names, a `did:key`, a pin
 of a key-log version whose owner is the signer, and 64 bytes of signature
-in base64 with padding. Anything else makes it malformed, and so invalid.
+in canonical base64: with padding, and the unused bits of the last
+character zero, so 86 characters, the last of them `A`, `Q`, `g` or `w`,
+then `==` (section 7.2). Anything else makes it malformed, and so invalid.
+The canonical encoding matters because a signature file is kept byte for
+byte and timestamps cover its bytes: with one encoding per signature, the
+bytes of the file are fixed by what it says. Python's `b64encode`, which
+writes the files, always gives the canonical form; `b64decode` accepts the
+others, which is why the pattern checks it.
 
     # in signatures: reading a signature file:
     FIELDS = {
@@ -160,7 +170,7 @@ in base64 with padding. Anything else makes it malformed, and so invalid.
         "signer": names.OWNER_NAME,
         "key": names.DID_KEY,
         "keyLog": re.compile(r"^sheaf:([a-z2-7]{51}[aq])/v([1-9][0-9]*)\?sha512=([0-9a-f]{128})\Z"),
-        "signature": re.compile(r"^[A-Za-z0-9+/]{86}==\Z"),
+        "signature": re.compile(r"^[A-Za-z0-9+/]{85}[AQgw]==\Z"),
     }
 
 
