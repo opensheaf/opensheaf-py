@@ -594,7 +594,7 @@ change note of the version, labelled, follows the dates.
     # in the TeXmacs index entry of a member:
     def index_entry(member):
         obj_id = names.object_id(member["name"], member["owner"])
-        d, at, label = obj_dir(obj_id), path_of(obj_id), label_of(obj_id) or member["name"]
+        d, at, label = obj_dir(obj_id), path_of(obj_id), page_address(obj_id)
         inv = load_inventory(d)
         ver = presented_version(member, d, inv)
         pin_ver, pin = member_pins(member)[-1][:2]

@@ -1058,11 +1058,12 @@ def test_landing_page_of_a_line(tmp_path):
     _, nm, owner = obj_id.split(":")
     d = P.obj_dir(obj_id)
     page = (root / "paper" / "p" / "index.html").read_text()
-    assert f"<code class=\"copy\">{obj_id}</code>" in page and f"sheaf:{nm[:16]}:{owner[:16]}" in page
+    assert f"<code class=\"copy\">sheaf:{nm}</code>" in page and f">sheaf:{nm[:16]}</code>" in page
+    assert obj_id not in page and f"sheaf:{nm[:16]}:{owner[:16]}" not in page
     assert f'href="../../owner/{owner}/"' in page
     assert "Version 2" in page and "Version 1" in page and "Lemma 2 is wrong as stated." in page
-    assert f"{obj_id}/v2?sha512={P.digest(d / 'v3' / 'inventory.json')}" in page
-    assert f"{obj_id}/v1?sha512={P.digest(d / 'v1' / 'inventory.json')}" in page
+    assert f"sheaf:{nm}/v2?sha512={P.digest(d / 'v3' / 'inventory.json')}" in page
+    assert f"sheaf:{nm}/v1?sha512={P.digest(d / 'v1' / 'inventory.json')}" in page
     assert "contested" not in page and "Withdrawn" not in page
     owner_page = (root / "owner" / owner / "index.html").read_text()
     assert "Current keys (1 of 1 sign)" in owner_page and "Rotation keys committed to: 3" in owner_page
@@ -1135,7 +1136,8 @@ def test_texmacs_index_with_landing_pages(tmp_path):
     assert "changes: Typos." in tm
     page = (root / "paper" / "p" / "index.html").read_text()
     assert "class=house" in page and "Jane Doe, Richard Roe and Ann Poe" in page
-    assert P.LABELS["p"] in page
+    canonical = P.LABELS["p"].rsplit(":", 1)[0]
+    assert canonical in page and P.LABELS["p"] not in page
     assert 'name="citation_author" content="Roe, Richard"' in page
     assert 'href="../../site/p/p.html">HTML</a>' in page
     assert '>arXiv:2607.08385</a>' in page and "changes: Typos." in page
@@ -1148,7 +1150,9 @@ def test_texmacs_index_with_landing_pages(tmp_path):
                            "external": [{"role": "source", "service": "arXiv"}]}) == "arXiv comments: 61 pages"
     assert P.verify_errors() == []
     assert not [x for x in P.verify_findings() if x["place"].startswith(("paper/", "index.html"))]
-    (root / "paper" / "p" / "index.html").write_text(page.replace(P.LABELS["p"], "a line"))
+    (root / "paper" / "p" / "index.html").write_text(page.replace(f"{canonical}<ol>", f"{P.LABELS['p']}<ol>"))
+    assert not [x for x in P.verify_findings() if x["place"].startswith(("paper/", "index.html"))]
+    (root / "paper" / "p" / "index.html").write_text(page.replace(canonical, "a line"))
     found = P.verify_findings()
     assert [x for x in found if x["severity"] == "error"] == []
     assert {"severity": "warning", "place": "paper/p/index.html", "message": f"no landing page giving the "

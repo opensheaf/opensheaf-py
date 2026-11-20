@@ -170,6 +170,17 @@ def label_of(obj_id):
     return next((lb for lb, i in LABELS.items() if i == obj_id), None)
 
 
+def page_address(obj_id):
+    """The address of the landing page of the line OBJ_ID below paper/ (appendix A.3): its label,
+    or its name, followed by -<owner> when the archive holds several lines of that name."""
+    label = label_of(obj_id)
+    if label:
+        return label
+    _, nm, owner = obj_id.split(":")
+    same = [i for i, _, _ in objects() if isinstance(i, str) and i.startswith(f"sheaf:{nm}:")]
+    return nm if len(same) <= 1 else f"{nm}-{owner}"
+
+
 def digest(path, algo="sha512"):
     h = hashlib.new(algo)
     with open(path, "rb") as f:
@@ -1742,7 +1753,7 @@ def abstract_block(paras):
 
 def index_entry(member):
     obj_id = names.object_id(member["name"], member["owner"])
-    d, at, label = obj_dir(obj_id), path_of(obj_id), label_of(obj_id) or member["name"]
+    d, at, label = obj_dir(obj_id), path_of(obj_id), page_address(obj_id)
     inv = load_inventory(d)
     ver = presented_version(member, d, inv)
     pin_ver, pin = member_pins(member)[-1][:2]
@@ -2617,11 +2628,24 @@ def check_presentation(f, disc):
         except (ValueError, TypeError):
             continue
         if held_here:
-            landing = ROOT / "paper" / (label_of(obj_id) or m["name"]) / "index.html"
+            landing = ROOT / "paper" / page_address(obj_id) / "index.html"
             text = landing.read_text(encoding="utf-8", errors="replace") if landing.is_file() else ""
-            if f"sheaf:{m['name']}:{m['owner']}" not in text:
+            if not landing_names(text, m["name"], m["owner"], obj_id):
                 report(landing.relative_to(ROOT).as_posix(), f"no landing page giving the sheaf: URI of "
                        f"{where(obj_id)} (appendix A.3)" + note)
+
+
+def landing_names(text, nm, owner, obj_id):
+    """Whether the landing page TEXT gives the sheaf: URI of the line (NM, OWNER), in canonical form
+    or with its owner part."""
+    if f"sheaf:{nm}:{owner}" in text:
+        return True
+    g = read_logical(obj_dir(obj_id), load_inventory(obj_dir(obj_id)), GENESIS, "v1")
+    try:
+        originator = names.read_genesis(g.read_bytes()).get("originator") if g else None
+    except ValueError:
+        return False
+    return originator == owner and re.search(rf"sheaf:{nm}(?![a-z0-9:/])", text) is not None
 
 
 def look_for_keys(f):

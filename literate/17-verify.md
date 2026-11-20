@@ -1180,8 +1180,13 @@ main catalogue: it shows the pin of every member, the beginning of its
 digest, as the [website](30-website.md) and the [TeXmacs index](16-index.md)
 write it, which tells a stale home page from a current one. Each member
 whose line is held here has a landing page at `paper/<label>/` (or
-`paper/<name>/` without a label), which gives the full `sheaf:` URI of its
-line (appendix A.3, section 12.2). Under the profile, what is missing is an
+`paper/<name>/` without a label, `paper/<name>-<owner>/` when several lines
+of that name are held, `page_address`), which gives the full `sheaf:` URI
+of its line in canonical form (appendix A.3, sections 12.1 and 12.2):
+`sheaf:<name>` for the originator's line, `sheaf:<name>:<owner>` for
+another. The form with an owner part is accepted too for the originator's
+line: it names the same line, and pages written before the canonical form
+was asked for gave it. Under the profile, what is missing is an
 error. An archive that presents pages without declaring the profile is
 told the same as warnings: one with an `index.html`, and one whose landing
 pages are written with a TeXmacs index (the profile `texmacs`, a readable
@@ -1222,11 +1227,29 @@ the takedown removed it from the pages (section 13.2).
             except (ValueError, TypeError):
                 continue
             if held_here:
-                landing = ROOT / "paper" / (label_of(obj_id) or m["name"]) / "index.html"
+                landing = ROOT / "paper" / page_address(obj_id) / "index.html"
                 text = landing.read_text(encoding="utf-8", errors="replace") if landing.is_file() else ""
-                if f"sheaf:{m['name']}:{m['owner']}" not in text:
+                if not landing_names(text, m["name"], m["owner"], obj_id):
                     report(landing.relative_to(ROOT).as_posix(), f"no landing page giving the sheaf: URI of "
                            f"{where(obj_id)} (appendix A.3)" + note)
+
+The canonical form of the originator's line is `sheaf:<name>`, which is
+a prefix of every other line of the work: it is found in the page only
+when it is not followed by more of a URI (`:`, `/` or a character of a
+name).
+
+    # in check the presentation files of the profile website:
+    def landing_names(text, nm, owner, obj_id):
+        """Whether the landing page TEXT gives the sheaf: URI of the line (NM, OWNER), in canonical form
+        or with its owner part."""
+        if f"sheaf:{nm}:{owner}" in text:
+            return True
+        g = read_logical(obj_dir(obj_id), load_inventory(obj_dir(obj_id)), GENESIS, "v1")
+        try:
+            originator = names.read_genesis(g.read_bytes()).get("originator") if g else None
+        except ValueError:
+            return False
+        return originator == owner and re.search(rf"sheaf:{nm}(?![a-z0-9:/])", text) is not None
 
 Keys left in the archive
 ------------------------

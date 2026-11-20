@@ -392,6 +392,24 @@ Commands name lines by their labels; a full identifier is accepted too.
         """The label of the line OBJ_ID, or None."""
         return next((lb for lb, i in LABELS.items() if i == obj_id), None)
 
+A line held here has a landing page (appendix A.3) at an address of the
+archive's choice, different for each line: `paper/<label>/`, or, for a
+line without a label, `paper/<name>/`, unless the archive holds several
+lines of that name (the originator's line and a branch of it, a mirror of
+another owner's), which would share it: their pages are then at
+`paper/<name>-<owner>/`. The address is presentation, not an identifier.
+
+    # in load the configuration and set the paths of the archive:
+    def page_address(obj_id):
+        """The address of the landing page of the line OBJ_ID below paper/ (appendix A.3): its label,
+        or its name, followed by -<owner> when the archive holds several lines of that name."""
+        label = label_of(obj_id)
+        if label:
+            return label
+        _, nm, owner = obj_id.split(":")
+        same = [i for i, _, _ in objects() if isinstance(i, str) and i.startswith(f"sheaf:{nm}:")]
+        return nm if len(same) <= 1 else f"{nm}-{owner}"
+
 The storage root
 ----------------
 

@@ -453,7 +453,7 @@ index`.
         assert "A catalogue curated by" in part and "3 members" in part and "The first part." in part
         assert 'href="../../paper/mine/"' in part and 'href="../../paper/part-two/"' in part
         assert ">One</a>" in part and "PDF</a>" not in part.split("<h2>Members</h2>")[0]
-        assert line(a, "part-one") in part
+        assert line(a, "part-one").rsplit(":", 1)[0] + "</code>" in part
         assert (a / "paper" / "part-two" / "index.html").exists() and (a / "paper" / "mine" / "index.html").exists()
         assert errors(a) == []
         cfg["index"]["html"]["featured"] = "mine"

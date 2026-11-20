@@ -90,7 +90,12 @@ class Line:
         _, self.name, self.owner = obj_id.split(":")
         self.dir = P.obj_dir(obj_id)
         self.inv = P.load_inventory(self.dir)
-        self.slug = P.label_of(obj_id) or self.name
+        self.slug = P.page_address(obj_id)
+        g = P.read_logical(self.dir, self.inv, P.GENESIS, "v1")
+        try:
+            self.originator = names.read_genesis(g.read_bytes()).get("originator") if g else None
+        except ValueError:
+            self.originator = None
         self.log = P.key_log(self.owner)
         self.statuses = P.line_statuses(self.dir, self.inv, self.log)[1]
         n = sign.latest_signed(self.statuses)
@@ -130,11 +135,11 @@ def held(m):
 
 
 def full_uri(line):
-    return f"sheaf:{line.name}:{line.owner}"
+    return names.SheafURI(line.name, line.owner).canonical(line.originator)
 
 
 def short_uri(line):
-    return f"sheaf:{line.name[:16]}:{line.owner[:16]}"
+    return f"sheaf:{line.name[:16]}" + ("" if line.owner == line.originator else f":{line.owner[:16]}")
 
 
 def pin_uri(line, ver):

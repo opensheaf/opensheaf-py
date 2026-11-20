@@ -35,9 +35,11 @@ versions (sections 6 and 7). An archive may give a line a *label*, a short
 readable name for its URLs (section 3.1); the labels stay the addresses of
 the pages, `paper/<label>/`, as before, but they are the archive's choice
 and may change, and the permanent name of the line is its `sheaf:` URI,
-which every landing page gives in full, with a short form for people
-(section 12.2). A line held here without a label (a mirror copied without
-one) has its page at `paper/<name>/`.
+which every landing page gives in full and in canonical form, with a short
+form for people (section 12.2). A line held here without a label (a mirror
+copied without one) has its page at `paper/<name>/`, or, when the archive
+holds several lines of that name (the originator's line and a branch, say),
+at `paper/<name>-<owner>/`, so that each line has its own (appendix A.3).
 
 Only signed versions count (section 7.3): a landing page lists the document
 versions of the history read from the latest signed version of the line
@@ -280,7 +282,10 @@ its head instead. Statuses take a little work, so each line is read once
 per run of `render`, and kept in `LINES`.
 
 The address of its pages, `slug`, is its label, or its name when it has
-none.
+none, followed by its owner name when the archive holds several lines of
+that name (`page_address`, in the chapter on the [archive](10-archive.md)).
+The originator of its work, read from its genesis record, tells whether
+its `sheaf:` URI needs an owner part (below).
 
     # in a line held in this archive:
     LINES = {}
@@ -294,7 +299,12 @@ none.
             _, self.name, self.owner = obj_id.split(":")
             self.dir = P.obj_dir(obj_id)
             self.inv = P.load_inventory(self.dir)
-            self.slug = P.label_of(obj_id) or self.name
+            self.slug = P.page_address(obj_id)
+            g = P.read_logical(self.dir, self.inv, P.GENESIS, "v1")
+            try:
+                self.originator = names.read_genesis(g.read_bytes()).get("originator") if g else None
+            except ValueError:
+                self.originator = None
             self.log = P.key_log(self.owner)
             self.statuses = P.line_statuses(self.dir, self.inv, self.log)[1]
             n = sign.latest_signed(self.statuses)
@@ -342,22 +352,25 @@ The `sheaf:` URIs of a line
 ---------------------------
 
 A landing page gives the full `sheaf:` URI of its line (appendix A.3,
-section 12.2), with complete parts: its identifier, `sheaf:<name>:<owner>`,
-which names the line in every archive. Section 12.2 allows a short form for
-people, a prefix of each part, and asks for at least 16 characters in each
-part of a short form printed where it cannot be corrected; the pages, which
-may be printed, give that one. The pin of a version is written as the URI
-naming exactly that object version (section 12.1), the document version
-with the digest of the inventory, which is what a citation of a fixed
-version should carry.
+section 12.2), with complete parts, in canonical form (section 12.1): the
+originator's line is `sheaf:<name>`, without an owner part, and any other
+line, a branch, `sheaf:<name>:<owner>`. The citation and the metadata for
+search engines give the same form, so that a citation compares byte for
+byte with the relations recorded in files, which use the canonical form
+too. Section 12.2 allows a short form for people, a prefix of each part,
+and asks for at least 16 characters in each part of a short form printed
+where it cannot be corrected; the pages, which may be printed, give that
+one. The pin of a version is written as the URI naming exactly that object
+version (section 12.1), the document version with the digest of the
+inventory, which is what a citation of a fixed version should carry.
 
     # in the sheaf: URIs of a line:
     def full_uri(line):
-        return f"sheaf:{line.name}:{line.owner}"
+        return names.SheafURI(line.name, line.owner).canonical(line.originator)
 
 
     def short_uri(line):
-        return f"sheaf:{line.name[:16]}:{line.owner[:16]}"
+        return f"sheaf:{line.name[:16]}" + ("" if line.owner == line.originator else f":{line.owner[:16]}")
 
 
     def pin_uri(line, ver):
