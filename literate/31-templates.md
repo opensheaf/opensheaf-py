@@ -380,7 +380,8 @@ The colours and the faces are the block of variables `--os-*` of the
 site's stylesheet (`resources/opensheaf.css`), copied whole, never one
 value at a time: the paper, the surface of tinted blocks, the hairlines,
 the ink, the secondary text, the faint grey of bullets and underlines,
-the three states with their tints; light, dark (following the reader's
+the three states with their tints, the four muted tones of code
+(`--os-code-*`, unused here: the pages show no code blocks); light, dark (following the reader's
 system) and print.
 
     /* in the colours of the default style: */
@@ -398,6 +399,10 @@ system) and print.
         --os-bad-bg: #f6e4e0;
         --os-warn: #7d5200;
         --os-warn-bg: #f5ecd6;
+        --os-code-keyword: #7b3f8c;
+        --os-code-title: #1f5b8f;
+        --os-code-type: #2c6a64;
+        --os-code-literal: #8a5a14;
         --os-serif: "CMU Serif", "Latin Modern Roman", "Computer Modern", "Times New Roman", serif;
         --os-sans: "IBM Plex Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
         --os-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
@@ -417,6 +422,10 @@ system) and print.
             --os-bad-bg: #342025;
             --os-warn: #e7c277;
             --os-warn-bg: #2d281c;
+            --os-code-keyword: #cfa6dd;
+            --os-code-title: #9cc3ea;
+            --os-code-type: #8ccbc1;
+            --os-code-literal: #e2bd7e;
         }
     }
     :root[data-theme="dark"] {
@@ -433,6 +442,10 @@ system) and print.
         --os-bad-bg: #342025;
         --os-warn: #e7c277;
         --os-warn-bg: #2d281c;
+        --os-code-keyword: #cfa6dd;
+        --os-code-title: #9cc3ea;
+        --os-code-type: #8ccbc1;
+        --os-code-literal: #e2bd7e;
     }
     @media print {
         :root, :root[data-theme] {
@@ -449,6 +462,10 @@ system) and print.
             --os-bad-bg: #fff !important;
             --os-warn: #000 !important;
             --os-warn-bg: #fff !important;
+            --os-code-keyword: #000 !important;
+            --os-code-title: #000 !important;
+            --os-code-type: #000 !important;
+            --os-code-literal: #000 !important;
         }
     }
 
