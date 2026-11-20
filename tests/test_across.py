@@ -117,6 +117,10 @@ def test_resolution_across_two_archives(tmp_path, capsys):
     assert e.value.code == 0
     out = json.loads(capsys.readouterr().out)
     assert out["status"] == "verified" and out["pin"] == f"sheaf:{nm}:{owner}/v2?sha512={head_digest(a, 'paper', 'v2')}"
+    shutil.rmtree(P.obj_dir(line(a, "paper")) / sign.WITNESSES / "v2")
+    with pytest.raises(SystemExit):
+        run("--root", str(c), "resolve", uri(a, "paper"))
+    assert "latest signed v1; after it: v2 unsigned (section 7.4)" in capsys.readouterr().out
 
 
 def test_what_another_archive_says_is_checked(tmp_path, monkeypatch):

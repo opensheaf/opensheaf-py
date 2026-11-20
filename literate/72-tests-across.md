@@ -176,7 +176,16 @@ full form of the pin.
         assert e.value.code == 0
         out = json.loads(capsys.readouterr().out)
         assert out["status"] == "verified" and out["pin"] == f"sheaf:{nm}:{owner}/v2?sha512={head_digest(a, 'paper', 'v2')}"
+        shutil.rmtree(P.obj_dir(line(a, "paper")) / sign.WITNESSES / "v2")
+        with pytest.raises(SystemExit):
+            run("--root", str(c), "resolve", uri(a, "paper"))
+        assert "latest signed v1; after it: v2 unsigned (section 7.4)" in capsys.readouterr().out
 
+The versions a copy holds after its latest signed one are not versions of
+the line, and are no fork, but they are reported with their status (section
+7.4): above, the second version of the paper, its signature file removed,
+is resolved past, and `osheaf resolve` says that the copy holds it,
+unsigned.
 What another archive says is checked before it is used: a storage root
 that leaves the archive is refused; every path of the manifest of every
 inventory must be a content path of the object, in a copy as in a key log

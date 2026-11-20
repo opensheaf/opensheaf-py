@@ -298,6 +298,10 @@ class Copy:
     def read(self, logical, n):
         return P.read_json(self.dir, self.inv, logical, f"v{n}")
 
+    def after_signed(self):
+        """The versions held after the latest signed one, as (number, status) pairs (section 7.4)."""
+        return [(n, self.status(n)) for n in range(self.latest_signed + 1, self.head + 1)]
+
     def agrees(self, other):
         """Whether this copy and OTHER agree up to the earlier of their latest signed versions."""
         k = min(self.latest_signed, other.latest_signed)
@@ -644,7 +648,8 @@ def main(args):
                "inventorySha512": found.digest,
                "foundAt": found.copy.where if found.copy else None,
                "copies": [{"at": c.where, "head": f"v{c.head}",
-                           "latestSigned": f"v{c.latest_signed}" if c.latest_signed else None}
+                           "latestSigned": f"v{c.latest_signed}" if c.latest_signed else None,
+                           "after": [{"version": f"v{n}", "status": s} for n, s in c.after_signed()]}
                           for c in found.copies],
                "notes": [f"{s}: {m}" for s, m in r.notes] + (r.owner_notes(owner) if owner else [])}
         if found.ok and found.copy is not None:
@@ -656,7 +661,9 @@ def main(args):
     else:
         print(f"{out['uri']}\n  line {line}")
         for c in out["copies"]:
-            print(f"  copy at {c['at']}: head {c['head']}, latest signed {c['latestSigned']}")
+            after = ", ".join(f"{a['version']} {a['status']}" for a in c["after"])
+            print(f"  copy at {c['at']}: head {c['head']}, latest signed {c['latestSigned']}"
+                  + (f"; after it: {after} (section 7.4)" if after else ""))
         print(f"  {found.status}" + (f": {found.version} sha512={found.digest}" if found.version else "")
               + (f" at {out['foundAt']}" if out["foundAt"] else ""))
         if out.get("pin"):
