@@ -502,7 +502,7 @@ the base URL.
         "root": root, "archive_name": esc(P.ARCHIVE["name"]), "base_url": esc(base),
         "head": meta_tags(line, cur, obj, dc), "title": esc(dc["titles"][0]["title"]),
         "issued": esc(fmt_date(issued)), "withdrawn": withdrawn, "contested": contested,
-        "versions": versions, "licence": licence, "cite": esc(cite),
+        "versions": versions, "licence": licence, "cite": cite,
         "pin": pin, "pin_url": f"{root}ocfl/{P.path_of(line.id)}/{pin_ver}/inventory.json",
         "sheaf_uri": esc(full_uri(line)), "sheaf_short": esc(short_uri(line)),
         "owner": owner_html(line.owner, root),
@@ -571,16 +571,21 @@ The licence is named, and linked when it has a URL. The suggested
 citation names the archive, the year of first appearance and the document
 version, then the `sheaf:` URI of the version presented, with its digest,
 which names it in every archive and over time (section 12.1), and ends
-with the DOI when there is one, the landing page otherwise.
+with the DOI when there is one, the landing page otherwise. The URI is
+set as an identifier, which may break anywhere and is copied on a click,
+and the last address is a link, so that neither runs out of the box of
+the citation.
 
     # in the licence and citation of a landing page:
     rights = (dc.get("rightsList") or [{}])[0]
     licence = esc(rights.get("rights", ""))
     if rights.get("rightsUri"):
         licence = f'<a href="{esc(rights["rightsUri"])}">{licence}</a>'
-    cite = f"{authors(dc)}. {dc['titles'][0]['title']}. {P.ARCHIVE['name']}, " \
-           f"{(issued or '')[:4]}, version {obj['documentVersion']}. {pin_uri(line, cur)}. " \
-           + (f"https://doi.org/{dc['doi']}" if dc.get("doi") else f"{base}paper/{line.slug}/")
+    cite_url = f"https://doi.org/{dc['doi']}" if dc.get("doi") else f"{base}paper/{line.slug}/"
+    cite = esc(f"{authors(dc)}. {dc['titles'][0]['title']}. {P.ARCHIVE['name']}, "
+               f"{(issued or '')[:4]}, version {obj['documentVersion']}.") \
+        + f' <code class="copy">{esc(pin_uri(line, cur))}</code>.' \
+        + f' <a href="{esc(cite_url)}">{esc(cite_url)}</a>'
 
 ### The landing page of a collection
 

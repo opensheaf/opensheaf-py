@@ -582,7 +582,8 @@ string of hexadecimal digits, and may be broken anywhere.
     /* in notices and citations in the default style: */
     .notice, div.withdrawn { background: var(--os-surface); border-radius: 4px; padding: 0.7rem 1rem; margin: 0.6rem 0; }
     div.withdrawn { background: var(--os-bad-bg); color: var(--os-bad); }
-    .cite { background: var(--os-surface); border-radius: 4px; padding: 0.7rem 1rem; font-size: 0.92rem; }
+    .cite { background: var(--os-surface); border-radius: 4px; padding: 0.7rem 1rem; font-size: 0.92rem;
+            overflow-wrap: anywhere; }
     code { font-family: var(--os-mono); font-size: 0.75em; word-break: break-all;
            font-variant-ligatures: none; }
     code.copy { border-bottom: 1px dotted transparent; }

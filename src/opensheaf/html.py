@@ -318,9 +318,11 @@ def render(members, home=True, featured=None):
         licence = esc(rights.get("rights", ""))
         if rights.get("rightsUri"):
             licence = f'<a href="{esc(rights["rightsUri"])}">{licence}</a>'
-        cite = f"{authors(dc)}. {dc['titles'][0]['title']}. {P.ARCHIVE['name']}, " \
-               f"{(issued or '')[:4]}, version {obj['documentVersion']}. {pin_uri(line, cur)}. " \
-               + (f"https://doi.org/{dc['doi']}" if dc.get("doi") else f"{base}paper/{line.slug}/")
+        cite_url = f"https://doi.org/{dc['doi']}" if dc.get("doi") else f"{base}paper/{line.slug}/"
+        cite = esc(f"{authors(dc)}. {dc['titles'][0]['title']}. {P.ARCHIVE['name']}, "
+                   f"{(issued or '')[:4]}, version {obj['documentVersion']}.") \
+            + f' <code class="copy">{esc(pin_uri(line, cur))}</code>.' \
+            + f' <a href="{esc(cite_url)}">{esc(cite_url)}</a>'
         html_link = ""
         if (P.SITE / line.slug / f"{line.slug}.html").exists():
             html_link = f' · <a href="{root}site/{line.slug}/{line.slug}.html">HTML</a>'
@@ -328,7 +330,7 @@ def render(members, home=True, featured=None):
             "root": root, "archive_name": esc(P.ARCHIVE["name"]), "base_url": esc(base),
             "head": meta_tags(line, cur, obj, dc), "title": esc(dc["titles"][0]["title"]),
             "issued": esc(fmt_date(issued)), "withdrawn": withdrawn, "contested": contested,
-            "versions": versions, "licence": licence, "cite": esc(cite),
+            "versions": versions, "licence": licence, "cite": cite,
             "pin": pin, "pin_url": f"{root}ocfl/{P.path_of(line.id)}/{pin_ver}/inventory.json",
             "sheaf_uri": esc(full_uri(line)), "sheaf_short": esc(short_uri(line)),
             "owner": owner_html(line.owner, root),
