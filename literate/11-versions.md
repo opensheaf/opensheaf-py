@@ -152,7 +152,9 @@ version once it exists.
 
 Every function that builds a new `object.json` from scratch, or from an
 earlier version, calls this one with the head's `object.json` (`prev`). It
-copies the notices, then decides the history:
+copies the notices of the head, in their order, followed by those of the new
+`object.json` that the head does not have (a notice being added), then
+decides the history:
 
 - without a history in the head, and without `--after`, nothing is written:
   the order of the numbers is the history;
@@ -180,7 +182,8 @@ before the current version; with these tools the depositor says so, with
                 sys.exit("--after needs an existing document")
             return
         if prev.get("notices"):
-            new["notices"] = list(prev["notices"])
+            kept = list(prev["notices"])
+            new["notices"] = kept + [n for n in new.get("notices", []) if n not in kept]
         if prev.get("history") is None and after_doc is None:
             return
         d = obj_dir(obj_id or names.object_id(new["name"], new["owner"]))

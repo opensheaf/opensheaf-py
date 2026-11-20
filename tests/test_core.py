@@ -1088,6 +1088,31 @@ def test_landing_page_of_a_line(tmp_path):
     assert "Exposed keys" in (root / "owner" / owner / "index.html").read_text()
 
 
+def test_two_notices_on_a_line(tmp_path):
+    root = tmp_path / "a"
+    make_archive(root)
+    src, pdf = tmp_path / "p.tex", tmp_path / "p.pdf"
+    src.write_text("\\documentclass{article}")
+    pdf.write_bytes(b"%PDF-1.4 p")
+    r = ["--root", str(root)]
+    paper = [str(src), "--pdf", str(pdf), "--title", "T", "--author", "Doe, Jane"]
+    run(*r, "deposit", "p", *paper, "--new")
+    run(*r, "notice", "p", "--about", "1", "--text", "Lemma 2 is wrong as stated.")
+    run(*r, "notice", "p", "--about", "1", "--text", "Lemma 3 is wrong too.")
+    d = P.obj_dir(P.LABELS["p"])
+    inv = P.load_inventory(d)
+    assert [n["text"] for n in P.read_json(d, inv, P.OBJ)["notices"]] == \
+        ["Lemma 2 is wrong as stated.", "Lemma 3 is wrong too."]
+    run(*r, "collect")
+    page = (root / "paper" / "p" / "index.html").read_text()
+    assert "Lemma 2 is wrong as stated." in page and "Lemma 3 is wrong too." in page
+    pdf.write_bytes(b"%PDF-1.4 p2")
+    run(*r, "deposit", "p", *paper, "--changes", "Lemmas fixed.")
+    inv = P.load_inventory(d)
+    assert len(P.read_json(d, inv, P.OBJ)["notices"]) == 2
+    assert P.verify_errors() == []
+
+
 def test_takedown_removes_the_pages(archive):
     put("paper-a", 1, FILES1)
     put("paper-b", 1, FILES2)

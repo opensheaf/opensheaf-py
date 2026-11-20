@@ -356,7 +356,8 @@ def carry_forward(prev, new, inv, new_ver, after_doc=None, obj_id=None):
             sys.exit("--after needs an existing document")
         return
     if prev.get("notices"):
-        new["notices"] = list(prev["notices"])
+        kept = list(prev["notices"])
+        new["notices"] = kept + [n for n in new.get("notices", []) if n not in kept]
     if prev.get("history") is None and after_doc is None:
         return
     d = obj_dir(obj_id or names.object_id(new["name"], new["owner"]))
