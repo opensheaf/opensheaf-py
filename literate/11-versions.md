@@ -235,6 +235,18 @@ files of the object (section 4.1), never files of the document.
         return logical.startswith(EVIDENCE)
 
 
+    def own_files(obj, digests):
+        """The document's own files among DIGESTS ({logical path: digest}) of a version whose
+        object.json is OBJ, and its change note: everything but the descriptions, the identity
+        files, the files of notices, of a withdrawal and of the licence terms (section 4.2)."""
+        notes = {x["path"] for x in obj.get("notices", []) if x.get("path")}
+        for p in ((obj.get("withdrawal") or {}).get("reason") or {}).get("path"), (obj.get("licence") or {}).get("path"):
+            if p:
+                notes.add(p)
+        own = {p: dig for p, dig in digests.items() if p not in IDENTITY and not is_evidence(p) and p not in notes}
+        return own, (obj.get("changes") or {}).get("text")
+
+
     def evidence_paths(inv, version=None):
         """The logical paths of the evidence of a branch point held in VERSION (default: the head)."""
         if not inv:

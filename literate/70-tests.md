@@ -267,12 +267,15 @@ Here the second object version reuses number 1 with other files.
         put("paper-a", 1, FILES2)
         assert any("other files than document version 1" in e for e in finish())
 
-The converse: an object version holding the same files and change note as
-an earlier document version keeps its number (the rule of new versions,
-section 4.2). Version 3 of `paper-a` holds the files of version 1, which is
-an error; version 2 of `paper-b` holds the files of version 1 with a change
-note of its own, which makes it a new document version. The genesis record
-is not one of the document's own files.
+The converse: a new number needs own files or a change note other than
+those of the current version (the rule of new versions, section 4.2).
+Version 3 of `paper-a` holds the files of version 1, a revert, which is a
+new document version; version 3 of `paper-c` holds those of version 2, the
+current one, which is an error; version 2 of `paper-b` holds the files of
+version 1 with a change note of its own, which makes it a new document
+version. Files are compared with their paths: version 2 of `paper-d`
+renames a file, which is a new document version. The genesis record is not
+one of the document's own files.
 
     # in test: the rules of document versions:
     def test_new_number_with_the_same_files_is_an_error(archive):
@@ -281,9 +284,14 @@ is not one of the document's own files.
         put("paper-a", 3, FILES1)
         put("paper-b", 1, FILES3)
         put("paper-b", 2, FILES3, extra_obj={"changes": {"text": "The same files, now refereed."}})
+        put("paper-c", 1, FILES1)
+        put("paper-c", 2, FILES2)
+        put("paper-c", 3, FILES2)
+        put("paper-d", 1, {**FILES1, "fig.png": b"a figure"})
+        put("paper-d", 2, {**FILES1, "figure.png": b"a figure"})
         errors = finish()
-        assert errors == ["paper-a: v3 document version 3 holds the same files and change note"
-                          " as document version 1, whose number it keeps"]
+        assert errors == ["paper-c: v3 document version 3 holds the same files and change note"
+                          " as the current version 2: it is no new document version (section 4.2)"]
 
 A version found later, earlier in the work than the current one, is
 deposited with `after`: it gets the next number, 3, but its place in the
@@ -974,6 +982,29 @@ A licence file that is not among the files deposited is refused.
         run("--root", str(root), "collect")
         assert P.verify_errors() == []
 
+A deposit of the files of the current version is refused, since it is no
+new document version (section 4.2); the files of an earlier version, after
+another, are a revert, which gets the next number.
+
+    # in test: deposits through osheaf:
+    def test_deposit_of_the_current_files_and_a_revert(tmp_path):
+        root = tmp_path / "archive"
+        make_archive(root)
+        src, pdf1, pdf2 = tmp_path / "main.tex", tmp_path / "p1.pdf", tmp_path / "p2.pdf"
+        src.write_text("x")
+        pdf1.write_bytes(b"%PDF-1.4 one")
+        pdf2.write_bytes(b"%PDF-1.4 two")
+        base = ["--root", str(root), "deposit", "p", str(src), "--title", "T", "--author", "Doe, J"]
+        run(*base, "--pdf", str(pdf1), "--new")
+        with pytest.raises(SystemExit, match="nothing new to deposit"):
+            run(*base, "--pdf", str(pdf1))
+        run(*base, "--pdf", str(pdf2))
+        run(*base, "--pdf", str(pdf1))
+        d = P.obj_dir(P.resolve("p"))
+        assert P.doc_version_of(d, P.load_inventory(d), "v3") == 3
+        run("--root", str(root), "collect")
+        assert P.verify_errors() == []
+
 ### Files of options
 
 The next test checks the files of options of the command line. The
@@ -1315,7 +1346,7 @@ the exposed key and the end as results.
         log = P.key_log(owner)
         assert log.ended and log.successor == successor
         with pytest.raises(SystemExit, match="has ended"):
-            run(*r, "deposit", *paper)
+            run(*r, "deposit", *paper, "--changes", "A version after the end.")
         capsys.readouterr()
         run(*r, "owner", "show")
         assert "ended" in capsys.readouterr().out

@@ -689,12 +689,21 @@ were missing.
         files), the history, and notices kept unchanged."""
         errors = []
         seen, files_of, missing_of, highest, first = {}, {}, {}, 0, 1
-        had_history, notices = False, []
+        had_history, notices, prev_ver = False, [], None
+
+        def current_before(at):
+            """The current document version as of object version AT, or None."""
+            try:
+                return doc_version_of(d, inv, current_version(d, inv, at)) if at else None
+            except (KeyError, TypeError, ValueError, AttributeError, OSError):
+                return None
+
         for ver, vinfo in inv["versions"].items():
             <<the files of an object version that belong to its document version>>
             <<check the number and the files of a document version>>
             <<check the history recorded in an object version>>
             <<check that an object version keeps the earlier notices>>
+            prev_ver = ver
         return errors
 
 A document version is its *own* files: everything except the descriptions,
@@ -713,25 +722,19 @@ belongs to the document version, since it was written and deposited with it
     if obj is None or obj.get("kind") != "document":
         return errors
     n = obj["documentVersion"]
-    notes = {x["path"] for x in obj.get("notices", []) if x.get("path")}
-    if obj.get("withdrawal", {}).get("reason", {}).get("path"):
-        notes.add(obj["withdrawal"]["reason"]["path"])
-    if (obj.get("licence") or {}).get("path"):
-        notes.add(obj["licence"]["path"])
-    own = {p: dig for dig, ps in vinfo["state"].items() for p in ps
-           if p not in IDENTITY and not is_evidence(p) and p not in notes}
-    change = (obj.get("changes") or {}).get("text")
+    own, change = own_files(obj, {p: dig for dig, ps in vinfo["state"].items() for p in ps})
     if not seen and obj.get("parent"):
         highest, first = n - 1, n    # a branch numbers on from its branch point (section 9.4)
 
 A document version seen before must have the same own files and change
 note, except while its sources are missing: then files may be added (a
 [completion](14-description.md)), never changed or removed. A document
-version not seen before must have the next number, and must be new: an
-object version holding the same own files and change note as an earlier
-document version keeps its number (the rule of new versions, sections 4.2
-and 14.4). Only this equality is checked; the first such earlier version is
-named.
+version not seen before must have the next number, and must be new: its
+own files, compared by logical path and digest, or its change note differ
+from those of the current version as of the object version before (the
+rule of new versions, sections 4.2 and 14.4). Files of an earlier version
+that is not the current one, deposited again, are a revert, a new document
+version.
 
     # in check the number and the files of a document version:
     if n in seen:
@@ -746,10 +749,10 @@ named.
     else:
         if n != highest + 1:
             errors.append(f"{ver} document version {n} breaks the numbering (expected {highest + 1})")
-        m = next((k for k in seen if files_of[k] == own and seen[k] == change), None)
-        if m is not None:
+        m = current_before(prev_ver)
+        if m in seen and files_of[m] == own and seen[m] == change:
             errors.append(f"{ver} document version {n} holds the same files and change note "
-                          f"as document version {m}, whose number it keeps")
+                          f"as the current version {m}: it is no new document version (section 4.2)")
         highest = max(highest, n)
         seen[n], files_of[n], missing_of[n] = change, own, bool(obj.get("sourcesMissing"))
 

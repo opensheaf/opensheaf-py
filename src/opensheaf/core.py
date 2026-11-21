@@ -337,6 +337,18 @@ def is_evidence(logical):
     return logical.startswith(EVIDENCE)
 
 
+def own_files(obj, digests):
+    """The document's own files among DIGESTS ({logical path: digest}) of a version whose
+    object.json is OBJ, and its change note: everything but the descriptions, the identity
+    files, the files of notices, of a withdrawal and of the licence terms (section 4.2)."""
+    notes = {x["path"] for x in obj.get("notices", []) if x.get("path")}
+    for p in ((obj.get("withdrawal") or {}).get("reason") or {}).get("path"), (obj.get("licence") or {}).get("path"):
+        if p:
+            notes.add(p)
+    own = {p: dig for p, dig in digests.items() if p not in IDENTITY and not is_evidence(p) and p not in notes}
+    return own, (obj.get("changes") or {}).get("text")
+
+
 def evidence_paths(inv, version=None):
     """The logical paths of the evidence of a branch point held in VERSION (default: the head)."""
     if not inv:
@@ -1106,6 +1118,13 @@ def deposit(args):
     carry_forward(prev_obj, obj, inv, next_object_version(inv), args.after, obj_id)
     for lp, f in carried_files(obj_id, inv).items():
         files.setdefault(lp, f)
+    if inv:
+        cur = current_version(d, inv)
+        cur_state = {p: dig for dig, ps in inv["versions"][cur]["state"].items() for p in ps}
+        new = {lp: names.sha512_hex(f if isinstance(f, bytes) else Path(f).read_bytes()) for lp, f in files.items()}
+        if own_files(obj, new) == own_files(read_json(d, inv, OBJ, cur), cur_state):
+            sys.exit(f"{label}: these are the files and the change note of the current version, "
+                     f"document version {doc_version_of(d, inv, cur)}: nothing new to deposit (section 4.2)")
     files["datacite.json"] = json_bytes(datacite)
     inv = add_version(obj_id, files, obj, args.message or f"Deposit: document version {doc_version}",
                       acknowledged=getattr(args, "i_know", False))
@@ -1942,20 +1961,21 @@ def document_version_errors(obj_id, d, inv):
     files), the history, and notices kept unchanged."""
     errors = []
     seen, files_of, missing_of, highest, first = {}, {}, {}, 0, 1
-    had_history, notices = False, []
+    had_history, notices, prev_ver = False, [], None
+
+    def current_before(at):
+        """The current document version as of object version AT, or None."""
+        try:
+            return doc_version_of(d, inv, current_version(d, inv, at)) if at else None
+        except (KeyError, TypeError, ValueError, AttributeError, OSError):
+            return None
+
     for ver, vinfo in inv["versions"].items():
         obj = read_json(d, inv, OBJ, ver)
         if obj is None or obj.get("kind") != "document":
             return errors
         n = obj["documentVersion"]
-        notes = {x["path"] for x in obj.get("notices", []) if x.get("path")}
-        if obj.get("withdrawal", {}).get("reason", {}).get("path"):
-            notes.add(obj["withdrawal"]["reason"]["path"])
-        if (obj.get("licence") or {}).get("path"):
-            notes.add(obj["licence"]["path"])
-        own = {p: dig for dig, ps in vinfo["state"].items() for p in ps
-               if p not in IDENTITY and not is_evidence(p) and p not in notes}
-        change = (obj.get("changes") or {}).get("text")
+        own, change = own_files(obj, {p: dig for dig, ps in vinfo["state"].items() for p in ps})
         if not seen and obj.get("parent"):
             highest, first = n - 1, n    # a branch numbers on from its branch point (section 9.4)
         if n in seen:
@@ -1970,10 +1990,10 @@ def document_version_errors(obj_id, d, inv):
         else:
             if n != highest + 1:
                 errors.append(f"{ver} document version {n} breaks the numbering (expected {highest + 1})")
-            m = next((k for k in seen if files_of[k] == own and seen[k] == change), None)
-            if m is not None:
+            m = current_before(prev_ver)
+            if m in seen and files_of[m] == own and seen[m] == change:
                 errors.append(f"{ver} document version {n} holds the same files and change note "
-                              f"as document version {m}, whose number it keeps")
+                              f"as the current version {m}: it is no new document version (section 4.2)")
             highest = max(highest, n)
             seen[n], files_of[n], missing_of[n] = change, own, bool(obj.get("sourcesMissing"))
         hist = obj.get("history")
@@ -1997,6 +2017,7 @@ def document_version_errors(obj_id, d, inv):
         if any(x not in cur for x in notices):
             errors.append(f"{ver} drops or changes an earlier notice")
         notices = cur
+        prev_ver = ver
     return errors
 
 

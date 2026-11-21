@@ -568,6 +568,8 @@ as it was (only `site/` may have a new HTML version).
     carry_forward(prev_obj, obj, inv, next_object_version(inv), args.after, obj_id)
     for lp, f in carried_files(obj_id, inv).items():
         files.setdefault(lp, f)
+    if inv:
+        <<refuse a deposit that holds the files of the current version>>
     files["datacite.json"] = json_bytes(datacite)
     inv = add_version(obj_id, files, obj, args.message or f"Deposit: document version {doc_version}",
                       acknowledged=getattr(args, "i_know", False))
@@ -576,6 +578,21 @@ as it was (only `site/` may have a new HTML version).
         LABELS[label] = obj_id
     write_discovery()
     print(f"{label}: {inv['head']} (document version {doc_version}) {obj_id}")
+
+A deposit whose own files and change note are those of the current
+version, compared by logical path and digest, is no new document version
+(section 4.2), and is refused before anything is written: changing only
+the description is the work of the description-only versions. Files of an
+earlier version that is not the current one are a revert, a new document
+version like any other, whose change note (`--changes`) should say so.
+
+    # in refuse a deposit that holds the files of the current version:
+    cur = current_version(d, inv)
+    cur_state = {p: dig for dig, ps in inv["versions"][cur]["state"].items() for p in ps}
+    new = {lp: names.sha512_hex(f if isinstance(f, bytes) else Path(f).read_bytes()) for lp, f in files.items()}
+    if own_files(obj, new) == own_files(read_json(d, inv, OBJ, cur), cur_state):
+        sys.exit(f"{label}: these are the files and the change note of the current version, "
+                 f"document version {doc_version_of(d, inv, cur)}: nothing new to deposit (section 4.2)")
 
 The new version is in the storage root, and the discovery document lists
 it at once, with its label, since it is "rewritten whenever an object is

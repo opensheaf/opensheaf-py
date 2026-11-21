@@ -123,9 +123,14 @@ def test_new_number_with_the_same_files_is_an_error(archive):
     put("paper-a", 3, FILES1)
     put("paper-b", 1, FILES3)
     put("paper-b", 2, FILES3, extra_obj={"changes": {"text": "The same files, now refereed."}})
+    put("paper-c", 1, FILES1)
+    put("paper-c", 2, FILES2)
+    put("paper-c", 3, FILES2)
+    put("paper-d", 1, {**FILES1, "fig.png": b"a figure"})
+    put("paper-d", 2, {**FILES1, "figure.png": b"a figure"})
     errors = finish()
-    assert errors == ["paper-a: v3 document version 3 holds the same files and change note"
-                      " as document version 1, whose number it keeps"]
+    assert errors == ["paper-c: v3 document version 3 holds the same files and change note"
+                      " as the current version 2: it is no new document version (section 4.2)"]
 
 
 def test_version_found_later_keeps_the_current_version(archive):
@@ -627,6 +632,25 @@ def test_licence_file_of_a_deposit(tmp_path):
     assert P.verify_errors() == []
 
 
+def test_deposit_of_the_current_files_and_a_revert(tmp_path):
+    root = tmp_path / "archive"
+    make_archive(root)
+    src, pdf1, pdf2 = tmp_path / "main.tex", tmp_path / "p1.pdf", tmp_path / "p2.pdf"
+    src.write_text("x")
+    pdf1.write_bytes(b"%PDF-1.4 one")
+    pdf2.write_bytes(b"%PDF-1.4 two")
+    base = ["--root", str(root), "deposit", "p", str(src), "--title", "T", "--author", "Doe, J"]
+    run(*base, "--pdf", str(pdf1), "--new")
+    with pytest.raises(SystemExit, match="nothing new to deposit"):
+        run(*base, "--pdf", str(pdf1))
+    run(*base, "--pdf", str(pdf2))
+    run(*base, "--pdf", str(pdf1))
+    d = P.obj_dir(P.resolve("p"))
+    assert P.doc_version_of(d, P.load_inventory(d), "v3") == 3
+    run("--root", str(root), "collect")
+    assert P.verify_errors() == []
+
+
 def test_yaml_inputs(tmp_path):
     """init and deposits from YAML: values stay text, paths are relative to
     the file, a list deposits in order, the command line overrides, unknown
@@ -886,7 +910,7 @@ def test_rotate_expose_end(tmp_path, capsys):
     log = P.key_log(owner)
     assert log.ended and log.successor == successor
     with pytest.raises(SystemExit, match="has ended"):
-        run(*r, "deposit", *paper)
+        run(*r, "deposit", *paper, "--changes", "A version after the end.")
     capsys.readouterr()
     run(*r, "owner", "show")
     assert "ended" in capsys.readouterr().out
