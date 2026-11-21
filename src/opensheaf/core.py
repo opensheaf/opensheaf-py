@@ -329,12 +329,12 @@ def carried_files(obj_id, inv):
     return out
 
 
-EVIDENCE = ("parent.inventory.json", "parent.object.json", "parent.signatures/", "parent.chain/")
+EVIDENCE = "parent/"
 
 
 def is_evidence(logical):
     """Whether LOGICAL is a file of the evidence of a branch point (section 9.2)."""
-    return logical in EVIDENCE[:2] or logical.startswith(EVIDENCE[2:])
+    return logical.startswith(EVIDENCE)
 
 
 def evidence_paths(inv, version=None):
@@ -2359,8 +2359,8 @@ def check_branch(f, place, obj_id, d, inv, genesis, logs, found, tombstoned, res
                 f.warning(at, "unchecked branch point: " + "; ".join(problems))
             if prev_obj is not None and v != branch.INCONSISTENT:
                 old = prev_obj["parent"]
-                pinv_old = json.loads(read_logical(d, inv, "parent.inventory.json", f"v{int(ver[1:]) - 1}").read_bytes())
-                pinv_new = json.loads(read_logical(d, inv, "parent.inventory.json", ver).read_bytes())
+                pinv_old = json.loads(read_logical(d, inv, "parent/inventory.json", f"v{int(ver[1:]) - 1}").read_bytes())
+                pinv_new = json.loads(read_logical(d, inv, "parent/inventory.json", ver).read_bytes())
                 if (p.get("owner"), p.get("name")) != (old.get("owner"), old.get("name")):
                     f.error(at, "a branch point moves only to a version of the same parent line (section 9.4)")
                 elif int(p["objectVersion"][1:]) <= int(old["objectVersion"][1:]) or \

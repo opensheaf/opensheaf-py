@@ -100,7 +100,7 @@ The tombstone of a line, and the return of a line taken down.
 
 The key logs needed: the owner of every line held, and for a branch the
 owner of each parent whose signatures its evidence holds, at every level
-of `parent.chain/` (section 6.5), in any version.
+of `parent/parent/` (section 6.5), in any version.
 
     # in takedown: the key logs the objects of the archive need:
     def needed_owners():
@@ -116,7 +116,7 @@ of `parent.chain/` (section 6.5), in any version.
             for ver in inv["versions"]:
                 prefix = ""
                 while True:
-                    p = P.read_logical(d, inv, prefix + "parent.object.json", ver)
+                    p = P.read_logical(d, inv, prefix + "parent/object.json", ver)
                     if p is None:
                         break
                     try:
@@ -125,7 +125,7 @@ of `parent.chain/` (section 6.5), in any version.
                         break
                     if obj_id not in out.setdefault(pobj.get("owner"), []):
                         out[pobj.get("owner")].append(obj_id)
-                    prefix += "parent.chain/"
+                    prefix += "parent/"
         return out
 
 The command. The object is named by its label or identifier (a key log by

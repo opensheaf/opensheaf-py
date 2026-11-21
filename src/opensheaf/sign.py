@@ -23,7 +23,7 @@ def message(object_id, version, inventory, key_log):
     """The message signed for VERSION of OBJECT_ID, whose inventory has the digest INVENTORY,
     naming the key-log version KEY_LOG (a pin), as bytes (section 7.2)."""
     return (f"{SIGNATURE_FORMAT}\nobject {object_id}\nversion {version}\n"
-            f"inventory {inventory}\nkeylog {key_log}\n").encode("utf-8")
+            f"inventorySha512 {inventory}\nkeyLog {key_log}\n").encode("utf-8")
 
 
 def file_name(did):

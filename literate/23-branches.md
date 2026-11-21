@@ -31,15 +31,17 @@ version, the genesis record included, except the parent's `datacite.json`,
 `object.json` and own evidence; its own `datacite.json` and `object.json`;
 and the evidence of the branch point (section 9.2):
 
-- `parent.inventory.json`: the inventory of the parent version, byte for
+all in the folder `parent/`:
+
+- `parent/inventory.json`: the inventory of the parent version, byte for
   byte, which fixes its files and its pin;
-- `parent.object.json`: its `object.json`;
-- `parent.signatures/`: the parent owner's signature files of the parent
+- `parent/object.json`: its `object.json`;
+- `parent/signatures/`: the parent owner's signature files of the parent
   version, named as in its witness folder, with the files kept beside them
   (timestamps), so that the branch point's signatures travel with it;
-- `parent.chain/`, when the parent is itself a branch: the parent
-  version's own evidence, level by level, back to a version of the
-  originator's line.
+- `parent/parent/`, when the parent is itself a branch: the parent
+  version's own folder `parent/`, byte for byte, and so on level by level,
+  back to a version of the originator's line.
 
 Its `object.json` records the branch point in `parent`: the parent line
 (`owner`, `name`), the pin (`objectVersion`, `inventorySha512`), the
@@ -113,7 +115,7 @@ Checking a branch point
 -----------------------
 
 The checks of section 9.3 read the content of a version level by level:
-the branch's own files, then, under `parent.chain/`, the parent's
+the branch's own files, then, under `parent/parent/`, the parent's
 evidence, and so on. A `Level` is that view: the digests of its logical
 paths, and a function reading one.
 
@@ -125,7 +127,7 @@ paths, and a function reading one.
             self.digests, self.read = digests, read
 
         def sub(self, prefix):
-            """The level under PREFIX (parent.chain/)."""
+            """The level under PREFIX (parent/), its paths without PREFIX."""
             return Level({p[len(prefix):]: d for p, d in self.digests.items() if p.startswith(prefix)},
                          lambda p: self.read(prefix + p))
 
@@ -158,21 +160,21 @@ level below (the branch's own at the first level):
 - **the name**: the branch's `name` and `parent.name` are names of the
   genesis record, the branch's being `parent.name` or a name of a greater
   algorithm number;
-- **the pin**: `parent.inventory.json` has the digest `parent.inventorySha512`
-  and the head `parent.objectVersion`, and `parent.object.json` the digest
+- **the pin**: `parent/inventory.json` has the digest `parent.inventorySha512`
+  and the head `parent.objectVersion`, and `parent/object.json` the digest
   that inventory records for `object.json`;
 - **the files**, at the first level only (a parent version may be a later
   version of its own branch): every file of the parent version but its
   descriptions and evidence is present with the same digest, and nothing
   else is present but the branch's descriptions and evidence;
-- **the parent**: `parent` agrees with `parent.object.json`; the branch's
+- **the parent**: `parent` agrees with `parent/object.json`; the branch's
   owner is neither the parent's owner nor the originator; and the parent
   is the originator's line without a parent, or a branch with one;
-- **the signatures**: the signature files of `parent.signatures/` are
+- **the signatures**: the signature files of `parent/signatures/` are
   judged against the parent owner's key log kept beside the branch
   (`logs`), as the signatures of the parent version would be in its own
   witness folder (section 7.3, case 3);
-- **the chain**: when the parent has a `parent`, `parent.chain/` holds its
+- **the chain**: when the parent has a `parent`, `parent/parent/` holds its
   evidence, each file with the digest the parent's inventory records for
   it, and is checked in turn.
 
@@ -215,17 +217,17 @@ The name and the pin.
     elif nm != pname and names.algorithm(nm) <= names.algorithm(pname):
         problems.append("a branch renamed after a clash has a greater algorithm number than parent.name "
                         "(section 5.3)")
-    pinv_bytes = level.read("parent.inventory.json") if "parent.inventory.json" in level.digests else None
+    pinv_bytes = level.read("parent/inventory.json") if "parent/inventory.json" in level.digests else None
     pinv = json.loads(pinv_bytes) if pinv_bytes else None
-    pobj = level.json("parent.object.json")
+    pobj = level.json("parent/object.json")
     if pinv is None or pobj is None:
-        return INCONSISTENT, problems + ["parent.inventory.json or parent.object.json is missing (section 9.2)"]
+        return INCONSISTENT, problems + ["parent/inventory.json or parent/object.json is missing (section 9.2)"]
     if names.sha512_hex(pinv_bytes) != p.get("inventorySha512") or pinv.get("head") != p.get("objectVersion"):
-        problems.append("parent.inventory.json is not the inventory the pin of parent names")
+        problems.append("parent/inventory.json is not the inventory the pin of parent names")
     pstate = {path: dig for dig, ps in pinv.get("versions", {}).get(pinv.get("head"), {}).get("state", {}).items()
               for path in ps}
-    if pstate.get(P.OBJ) != level.digests.get("parent.object.json"):
-        problems.append("parent.object.json is not the object.json the parent inventory records")
+    if pstate.get(P.OBJ) != level.digests.get("parent/object.json"):
+        problems.append("parent/object.json is not the object.json the parent inventory records")
 
 The files, at the first level.
 
@@ -246,7 +248,7 @@ The parent.
     # in branches: the parent of a branch point:
     if (p.get("owner"), p.get("name"), p.get("documentVersion")) != \
             (pobj.get("owner"), pobj.get("name"), pobj.get("documentVersion")):
-        problems.append("parent does not agree with parent.object.json")
+        problems.append("parent does not agree with parent/object.json")
     if obj.get("owner") in (p.get("owner"), rec.get("originator")):
         problems.append("the owner of a branch is neither the parent's owner nor the originator (section 9.3)")
     if not ((p.get("owner") == rec.get("originator") and "parent" not in pobj) or "parent" in pobj):
@@ -261,8 +263,8 @@ ones) makes the branch point inconsistent.
     log = logs(p.get("owner"))
     pid = names.object_id(p.get("name"), p.get("owner")) if names.NAME.match(pname) and \
         names.OWNER_NAME.match(p.get("owner") or "") else None
-    witnesses = {path[len("parent.signatures/"):]: level.read(path) for path in level.digests
-                 if path.startswith("parent.signatures/") and "/" not in path[len("parent.signatures/"):]}
+    witnesses = {path[len("parent/signatures/"):]: level.read(path) for path in level.digests
+                 if path.startswith("parent/signatures/") and "/" not in path[len("parent/signatures/"):]}
     if pid is None:
         return INCONSISTENT, problems + ["parent does not name a line"]
     judgements = sign.judge_folder(witnesses, object_id=pid, version=p.get("objectVersion"),
@@ -275,22 +277,23 @@ ones) makes the branch point inconsistent.
     result = CONFIRMED if status in (sign.SIGNED, sign.VOUCHED) else UNCHECKED
     notes = [] if result == CONFIRMED else [f"the parent version is {status} (section 9.3)"]
 
-The chain, level by level: each file of `parent.chain/` has the digest
-the parent's inventory records for the evidence at the same path, and
+The chain, level by level: each file `parent/parent/<path>` has the
+digest the parent's inventory records for `parent/<path>`, and
 nothing of the parent's evidence is missing; the level is then checked as
 a branch point of its own, the parent's `object.json` standing for the
 branch's. The weakest verdict wins.
 
     # in branches: the chain of a branch point:
     if "parent" in pobj:
-        chain = level.sub("parent.chain/")
+        inner = level.sub(P.EVIDENCE)
+        chain = Level({path: dig for path, dig in inner.digests.items() if P.is_evidence(path)}, inner.read)
         evidence = {path: dig for path, dig in pstate.items() if P.is_evidence(path)}
         if chain.digests != evidence:
-            return INCONSISTENT, ["parent.chain/ is not the evidence of the parent version (section 9.3)"]
+            return INCONSISTENT, ["parent/parent/ is not the evidence of the parent version (section 9.3)"]
         sub, more = verdict(chain, pobj, genesis, logs, depth + 1)
         if sub == INCONSISTENT:
-            return INCONSISTENT, [f"parent.chain/: {m}" for m in more]
-        notes += [f"parent.chain/: {m}" for m in more]
+            return INCONSISTENT, [f"parent/parent/: {m}" for m in more]
+        notes += [f"parent/parent/: {m}" for m in more]
         result = max(result, sub, key=ORDER.get)
 
 The evidence of a branch point
@@ -301,7 +304,7 @@ Taking the files of a branch point from a copy of the parent line (a
 but its descriptions and evidence; its inventory and `object.json`; its
 signature files that are good, with the files kept beside them (named
 after them, `signature-<k>.json.<...>`); and its own evidence under
-`parent.chain/`. Signature files that are not good are not evidence, and
+`parent/parent/`. Signature files that are not good are not evidence, and
 are left out.
 
     # in branches: the evidence of a branch point:
@@ -313,17 +316,17 @@ are left out.
         pobj = level.json(P.OBJ)
         files = {path: level.read(path) for path in level.digests
                  if path not in ("datacite.json", P.OBJ) and not P.is_evidence(path)}
-        files["parent.inventory.json"] = (c.dir / ver / "inventory.json").read_bytes()
-        files["parent.object.json"] = level.read(P.OBJ)
+        files["parent/inventory.json"] = (c.dir / ver / "inventory.json").read_bytes()
+        files["parent/object.json"] = level.read(P.OBJ)
         witnesses = P.witnesses_of(c.dir, ver)
         good = [j.file for j in sign.judge_folder(witnesses, object_id=c.id, version=ver, inventory=c.digest(k),
                                                   owner=pobj["owner"], lookup=c.log.lookup if c.log else
                                                   (lambda n, dg: None)) if j.status == sign.GOOD]
         for name, data in witnesses.items():
             if name in good or any(name.startswith(g + ".") for g in good):
-                files[f"parent.signatures/{name}"] = data
+                files[f"parent/signatures/{name}"] = data
         for path in P.evidence_paths(c.inv, ver):
-            files[f"parent.chain/{path}"] = level.read(path)
+            files[f"parent/{path}"] = level.read(path)
         parent = {"owner": pobj["owner"], "name": pobj["name"], "objectVersion": ver,
                   "documentVersion": pobj["documentVersion"], "inventorySha512": c.digest(k)}
         return files, parent
@@ -335,9 +338,9 @@ one at every level of the chain.
     def chain_owners(files):
         """The owners of the parent versions at every level of the evidence in FILES."""
         out, prefix = [], ""
-        while prefix + "parent.object.json" in files:
-            out.append(json.loads(files[prefix + "parent.object.json"])["owner"])
-            prefix += "parent.chain/"
+        while prefix + "parent/object.json" in files:
+            out.append(json.loads(files[prefix + "parent/object.json"])["owner"])
+            prefix += "parent/"
         return out
 
 The name of a new branch
@@ -468,7 +471,7 @@ section 9.7), the branch's own address, no DOI of the parent's, and an
 `parent.url` (section 9.7).
 
     # in branches: the files and records of the new version:
-    pobj = json.loads(files["parent.object.json"])
+    pobj = json.loads(files["parent/object.json"])
     pdc = c.read("datacite.json", k) or {}
     keep = ("mainSource", "sourceFormat", "sourcesMissing", "renditions", "toolchain", "changes", "stage",
             "notices", "licence", "agreement")

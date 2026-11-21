@@ -22,7 +22,7 @@ SPECIFICATION = "0.2"
 INVENTORY_TYPE = "https://ocfl.io/1.1/spec/#inventory"
 OBJ, KEYS, FORKED = "object.json", "keys.json", "forked/"
 RESERVED = {"object.json", "datacite.json", "genesis.json", "members.json", "keys.json", "forked",
-            "parent.inventory.json", "parent.object.json", "parent.signatures", "parent.chain"}
+            "parent"}
 
 
 class OwnerError(Exception):

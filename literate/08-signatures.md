@@ -64,7 +64,8 @@ What is signed is not the file but a message of five lines (section 7.2),
 each ended by a line feed, with nothing else: the format, which keeps these
 signatures apart from any other use of the key; the identifier of the
 object; the object version; the digest of its inventory file; and the pin
-of the key-log version that lists the key. The signer is not in the
+of the key-log version that lists the key. Each line after the first is
+the name of a field of the signature file and its value. The signer is not in the
 message: it is the owner part of the object, and of the pin.
 
     # in signatures: the signed message and signature files:
@@ -72,7 +73,7 @@ message: it is the owner part of the object, and of the pin.
         """The message signed for VERSION of OBJECT_ID, whose inventory has the digest INVENTORY,
         naming the key-log version KEY_LOG (a pin), as bytes (section 7.2)."""
         return (f"{SIGNATURE_FORMAT}\nobject {object_id}\nversion {version}\n"
-                f"inventory {inventory}\nkeylog {key_log}\n").encode("utf-8")
+                f"inventorySha512 {inventory}\nkeyLog {key_log}\n").encode("utf-8")
 
 A signature file is named after its key, `signature-<k>.json`, in the
 folder of its version in the witness folder, so that a reader that knows

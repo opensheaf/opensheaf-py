@@ -220,19 +220,19 @@ files of the new version.
         return out
 
 A [branch](23-branches.md) carries more: the *evidence* of its branch
-point, `parent.inventory.json`, `parent.object.json`, the folder
-`parent.signatures/` and, for a branch of a branch, `parent.chain/`
-(section 9.2), which every version keeps unchanged until one moves the
+point, the folder `parent/`: `parent/inventory.json`,
+`parent/object.json`, `parent/signatures/` and, for a branch of a branch,
+`parent/parent/` (section 9.2), which every version keeps unchanged until one moves the
 branch point (section 9.4). With the genesis record they are the identity
 files of the object (section 4.1), never files of the document.
 
     # in the notice files that every later object version keeps:
-    EVIDENCE = ("parent.inventory.json", "parent.object.json", "parent.signatures/", "parent.chain/")
+    EVIDENCE = "parent/"
 
 
     def is_evidence(logical):
         """Whether LOGICAL is a file of the evidence of a branch point (section 9.2)."""
-        return logical in EVIDENCE[:2] or logical.startswith(EVIDENCE[2:])
+        return logical.startswith(EVIDENCE)
 
 
     def evidence_paths(inv, version=None):

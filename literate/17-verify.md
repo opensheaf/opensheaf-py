@@ -1013,8 +1013,8 @@ Moving forward and continuously (section 9.4).
 
     # in check that a branch point moves forward and continuously:
     old = prev_obj["parent"]
-    pinv_old = json.loads(read_logical(d, inv, "parent.inventory.json", f"v{int(ver[1:]) - 1}").read_bytes())
-    pinv_new = json.loads(read_logical(d, inv, "parent.inventory.json", ver).read_bytes())
+    pinv_old = json.loads(read_logical(d, inv, "parent/inventory.json", f"v{int(ver[1:]) - 1}").read_bytes())
+    pinv_new = json.loads(read_logical(d, inv, "parent/inventory.json", ver).read_bytes())
     if (p.get("owner"), p.get("name")) != (old.get("owner"), old.get("name")):
         f.error(at, "a branch point moves only to a version of the same parent line (section 9.4)")
     elif int(p["objectVersion"][1:]) <= int(old["objectVersion"][1:]) or \

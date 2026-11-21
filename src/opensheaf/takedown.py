@@ -43,7 +43,7 @@ def needed_owners():
         for ver in inv["versions"]:
             prefix = ""
             while True:
-                p = P.read_logical(d, inv, prefix + "parent.object.json", ver)
+                p = P.read_logical(d, inv, prefix + "parent/object.json", ver)
                 if p is None:
                     break
                 try:
@@ -52,7 +52,7 @@ def needed_owners():
                     break
                 if obj_id not in out.setdefault(pobj.get("owner"), []):
                     out[pobj.get("owner")].append(obj_id)
-                prefix += "parent.chain/"
+                prefix += "parent/"
     return out
 
 

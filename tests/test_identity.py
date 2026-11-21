@@ -31,8 +31,8 @@ KL3 = ("d006b40d988e88c16cfe7d83d81c5b8a0cb318daad1a78180566568c2553f4b7"
        "ef7de1d3ebadd785fba94bb3648e70d6a8f8b40cb8a7cfdd913fc76ba959ce7e")
 KL3T = ("58415b38113b6fffbb302784e338c95d955537aa29f2bdea6e10fd9b237418f9"
         "89cda4f10ae7ab32288b7421a9e0a1cc1e3b02c6d01df1a3117793aed56aab3a")
-KL4 = ("95db6b39532bf52a003dce5b79ad012a365823331123cbb8c234d57caa424af0"
-       "b8a102e5ef39e41dfdb5da521283307edc0af26150313db594a1ad398aa221da")
+KL4 = ("dba9a22e9ed1a7edec0b8e4bc6d44dec9921a695563c622820fb286e07fcfdbb"
+       "384c36f9850ca8b52c703e9767b0d73645a43830f613c3623d70ebca417cfd44")
 JL1 = ("c2fea5c6cefaa97afaa689a4d8fea511d760741d1f1ae8c8cf3758b7ad32878f"
        "ee0f82a33b646536311cd6358a0a79a1480fa80498681e5aa383acb5801c66c7")
 D1 = ("a6a22e10cf4bf5a611a9e708b19d22e2f6edc8a5d7d9b09750a8fcec3c396fa4"
@@ -312,12 +312,12 @@ def test_key_log_versions_of_appendix_c():
     sig = json.loads(v2.witnesses["signature-oxthfb6b4q3sqath.json"])
     assert sig == {"format": "opensheaf-signature/0.2", "object": f"sheaf:{A}:{A}", "version": "v2",
                    "inventorySha512": KL2, "signer": A, "key": R[1].did, "keyLog": f"sheaf:{A}/v1?sha512={KL1}",
-                   "signature": "MyYYLDn6FPmfVz478eKdcQF2FOkRTL8/ZV9qV35/PuC5u09ZYwDVxunX3S4Z1jWHICWsxgA+/L3MW49O0Z7vCA=="}
+                   "signature": "1SHM2Xc8RX7/lE8fJq4cbJ/iNV5+v3jji4ObMcjjJZdDKjxsV+j3SKMn8g2kGnf6QCe0FOfPenFkXcjWYGauAQ=="}
     assert json.loads(v2.witnesses["signature-h6k4k6c5u4dusj4s.json"])["signature"] == (
-        "cZEYKDIoCgvI/mSGgWX3Mw+Tin4DLn8RVvqRhNcqJ0PkT8Gaa0U9mV4COFUqJztVZM0A8vyqrLh7hw3hgE8hCg==")
+        "bUI3v9p9W4VCabBo8T+z/SMwzmqOXu/gAH2xvaYnQauRCjWGWfboSVDtkC+LV8iGIVGXAhcy66WZ9O/znVUNAQ==")
     sig3 = json.loads(v3.witnesses["signature-j77iavvdclktxkwm.json"])
     assert sig3["keyLog"] == f"sheaf:{A}/v2?sha512={KL2}" and sig3["signature"] == (
-        "lAQKAGCR6HxrUX+mv5DbqOFehbfo1zlLtYVPrNmyG+Wq5p0RuWEC+PyL7c0amQ+lRc0EKgJpfY5eRAt9oGU8Dw==")
+        "1zEI4EoFG/ZJlZ+e2Y0iswNCCi4oceb8k/gTR8KV+qKM8FAcJocW/eCfJ2zLYhjRlguS1lpoVwGnxBX8lMGKCg==")
     assert "signature-nzvwkea25p62akdy.json" in v3.witnesses
     assert log.check() == ([], [])
     assert log.latest() is v3 and log.exposed_keys() == {K3.did} and not log.ended
@@ -520,9 +520,9 @@ def test_keeper_link():
 
 
 NID = f"sheaf:{N}:{A}"
-MSG_D2 = (f"opensheaf-signature/0.2\nobject {NID}\nversion v2\ninventory {D2}\n"
-          f"keylog sheaf:{A}/v2?sha512={KL2}\n").encode()
-SIG_D2 = "0j2Xy5fRv+1ajlCCkmCXAOZj1U8CUeiYA1jP08kJevQH27QnXHLZ7TeF+WwxzYB+ad2OepksXgSCzP1KoCEYCg=="
+MSG_D2 = (f"opensheaf-signature/0.2\nobject {NID}\nversion v2\ninventorySha512 {D2}\n"
+          f"keyLog sheaf:{A}/v2?sha512={KL2}\n").encode()
+SIG_D2 = "Gf9KOxH/6Bg4HzaXGt/HHP+iwdDkSpc/3laukJ5YDSxT6Vy7YDJslpFB3zsi1H/L6QsIaf+mNFhsLCYYqipyBA=="
 
 
 def paper_signature(key, version, digest, key_log, signer=A, object_id=NID):
@@ -629,8 +629,9 @@ def test_invalid_and_unchecked_signature_files():
     assert status(b"not json")[0] == sign.INVALID
     assert status(json.dumps(dict(d, extra=1)).encode())[0] == sign.INVALID
     assert status(good, "signature-aaaaaaaaaaaaaaaa.json")[1].startswith("its name")
-    assert d["signature"].endswith("g==")
-    loose = dict(d, signature=d["signature"][:-3] + "h==")
+    last = d["signature"][-3]
+    assert last in "AQgw"
+    loose = dict(d, signature=d["signature"][:-3] + chr(ord(last) + 1) + "==")
     assert base64.b64decode(loose["signature"]) == base64.b64decode(d["signature"])
     assert status(json.dumps(loose).encode()) == (sign.INVALID, "malformed: signature is not of its form")
     forged = dict(d, signature=base64.b64encode(bytes(64)).decode())

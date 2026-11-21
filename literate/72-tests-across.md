@@ -691,9 +691,9 @@ versions.
         assert obj["parent"]["url"] == f"https://example.org/authors/ocfl/{a_owner}/{nm}/v2/"
         assert obj["documentVersion"] == 2 and "previous" not in obj
         held = {p for ps in inv["versions"]["v1"]["state"].values() for p in ps}
-        assert {"genesis.json", "paper.pdf", "parent.inventory.json", "parent.object.json"} <= held
-        assert any(p.startswith("parent.signatures/signature-") for p in held)
-        assert P.read_logical(d, inv, "parent.inventory.json").read_bytes() == \
+        assert {"genesis.json", "paper.pdf", "parent/inventory.json", "parent/object.json"} <= held
+        assert any(p.startswith("parent/signatures/signature-") for p in held)
+        assert P.read_logical(d, inv, "parent/inventory.json").read_bytes() == \
             (P.obj_dir(line(a, "paper")) / "v2" / "inventory.json").read_bytes()
         P.configure(j)
         assert P.key_log(a_owner) is not None
@@ -719,7 +719,7 @@ versions.
         with pytest.raises(SystemExit, match="not a new branch point"):
             run("--root", str(j), "accept", uri(a, "paper"), "--selection", "issue-1")
 
-A branch of a branch carries the evidence of its parent in `parent.chain/`
+A branch of a branch carries the evidence of its parent in `parent/parent/`
 (section 9.2), and the key logs of every owner whose signatures the
 evidence holds beside it (section 6.5). And when the owner of a branch
 already has a line of the name, from another parent line, the new branch
@@ -737,8 +737,8 @@ the rename justified.
         d = P.obj_dir(line(b, "continued"))
         inv = P.load_inventory(d)
         held = {p for ps in inv["versions"]["v1"]["state"].values() for p in ps}
-        assert "parent.chain/parent.inventory.json" in held and "parent.chain/parent.object.json" in held
-        assert any(p.startswith("parent.chain/parent.signatures/") for p in held)
+        assert "parent/parent/inventory.json" in held and "parent/parent/object.json" in held
+        assert any(p.startswith("parent/parent/signatures/") for p in held)
         P.configure(b)
         assert P.key_log(a_owner) is not None and P.key_log(j_owner) is not None
         found = findings(b)
@@ -767,7 +767,7 @@ A branch point whose evidence is tampered with is inconsistent, an error.
         level = branch.level_of_version(d, inv, "v1")
         obj, genesis = P.read_json(d, inv, P.OBJ), P.read_logical(d, inv, P.GENESIS).read_bytes()
         assert branch.verdict(level, obj, genesis, P.key_log)[0] == branch.CONFIRMED
-        unsigned = {p: level.read(p) for p in level.digests if not p.startswith("parent.signatures/")}
+        unsigned = {p: level.read(p) for p in level.digests if not p.startswith("parent/signatures/")}
         v, problems = branch.verdict(branch.level_of_files(unsigned), obj, genesis, P.key_log)
         assert v == branch.INCONSISTENT and any("not a version: unsigned" in p for p in problems)
         changed = {p: level.read(p) for p in level.digests}
