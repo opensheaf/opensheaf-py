@@ -45,8 +45,10 @@ existing configuration is never overwritten. Version 0.1 asked for an
 archive identifier, which version 0.2 has dropped: an archive is named by
 no file (section 3). A new owner whose keys are kept in a GitHub wallet
 (`--keys github:OWNER/REPO`, [chapter 9](09-wallets.md)) names it in the
-configuration, `"keys": {"wallet": "github:OWNER/REPO"}`, so that the
-commands of owners and of signing find its keys there.
+configuration as a hint for the owner, `"keys": {"<owner>": {"wallets":
+["github:OWNER/REPO"]}}`, so that the commands of owners and of signing
+find its keys there, and says so; `osheaf key wallet` changes the hints
+later.
 
 The main catalogue is sealed and signed at once, empty, kept by `collect`
 (newest first). A curated main collection (`--curated`), whose members of
@@ -148,8 +150,8 @@ The command itself:
         init_storage_root()
         <<the owner of a new archive>>
         cfg["owner"] = log.owner
-        if getattr(args, "new_owner", False) and wallet_config(args):
-            cfg["keys"] = wallet_config(args)
+        if getattr(args, "new_owner", False) and wallet_config(args, log.owner):
+            cfg["keys"] = wallet_config(args, log.owner)
         (root / CONFIG_NAME).write_text(json.dumps(cfg, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
         if not (root / ".gitattributes").exists():
             (root / ".gitattributes").write_text(GITATTRIBUTES, encoding="utf-8")
@@ -163,6 +165,9 @@ The command itself:
         collect(args)
         index(argparse_namespace(no_html=True))
         edit = "templates/" if kind == "website" else cfg["index"]["template"]
+        if cfg.get("keys"):
+            print(f"The key wallet {args.keys} is recorded in {CONFIG_NAME} for {names.short(log.owner)} "
+                  f"(osheaf key wallet --remove {args.keys} removes it).")
         print(f"Done: the archive is made in {root}, owned by {names.short(log.owner)}. Edit {CONFIG_NAME} and "
               f"{edit}, then deposit a paper: osheaf deposit --new LABEL ...")
         print("Note: OpenSheaf 0.2 is a draft; until version 1.0 a revision may change the format in"

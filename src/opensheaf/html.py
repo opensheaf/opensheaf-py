@@ -423,11 +423,29 @@ def render(members, home=True, featured=None, keeper_fetch=None):
         sm.append(f"  <url><loc>{esc(url)}</loc>" + (f"<lastmod>{last}</lastmod>" if last else "") + "</url>")
     sm.append("</urlset>")
     (root_out / "sitemap.xml").write_text("\n".join(sm) + "\n", encoding="utf-8")
-    for folder, keep in (("paper", set(written)), ("owner", set(owner_pages))):
+    moved = []
+    for address, obj_id in sorted((P.ARCHIVE.get("formerAddresses") or {}).items()):
+        if address in written or obj_id not in pages or not P.LABEL_RE.match(address):
+            continue
+        slug = LINES[obj_id].slug
+        out = root_out / "paper" / address / "index.html"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(redirect_page(f"../{slug}/", f"{base}paper/{slug}/"), encoding="utf-8")
+        moved.append(address)
+    for folder, keep in (("paper", set(written) | set(moved)), ("owner", set(owner_pages))):
         for p in (root_out / folder).glob("*") if (root_out / folder).exists() else []:
             if p.is_dir() and p.name not in keep:
                 shutil.rmtree(p)
     return len(written)
+
+
+def redirect_page(href, canonical):
+    """A page sending its reader to HREF (relative), whose address is now CANONICAL."""
+    return (f"<!DOCTYPE html>\n{P.REDIRECT_MARK}\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n"
+            f"<title>Moved</title>\n<link rel=\"canonical\" href=\"{esc(canonical)}\">\n"
+            f"<meta name=\"robots\" content=\"noindex\">\n"
+            f"<meta http-equiv=\"refresh\" content=\"0; url={esc(href)}\">\n</head>\n"
+            f"<body><p>This page has moved to <a href=\"{esc(href)}\">{esc(canonical)}</a>.</p></body>\n</html>\n")
 
 
 def template_path(name):

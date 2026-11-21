@@ -168,13 +168,18 @@ too.
             "htmlResources": ["max-html/resources/max-html.css", ...]   from the plugins
           },
           "index": {"template": "index-template.tm"},   optional: the readable index
-          "keys": {"wallet": "github:OWNER/REPO"}       optional: the GitHub key wallet (a command
-                                             wallet only in ~/.config/opensheaf/config.json)
+          "keys": {"<owner name>": {"wallets": ["github:OWNER/REPO", ...]}, ...}   optional:
+                                             hints, the GitHub key wallets that hold the keys of
+                                             each owner (osheaf key wallet --add|--remove); a
+                                             general {"wallet": ...} is a hint for every owner;
+                                             your own wallets are in ~/.config/opensheaf/config.json
+          "formerAddresses": {"<address>": "sheaf:<name>:<owner>"}   written by osheaf label:
+                                             the old addresses of relabelled lines, which redirect
         }
 
     and, next to it, `ocfl/` (the OCFL 1.1 storage root), `opensheaf.json` (the
     discovery document, rewritten whenever an object changes, which also keeps
-    the labels of the lines: `osheaf deposit LABEL`), `site/` (HTML versions)
+    the labels of the lines: `osheaf deposit LABEL`, `osheaf label`), `site/` (HTML versions)
     and `index.tm`, `index.html` (generated). TeXmacs runs headless with a
     private profile in `texmacs_home/` (not committed).
 
@@ -184,8 +189,8 @@ too.
     folder outside the archive (`osheaf owner init --export DIR`), unless the owner
     chooses a lower security level, a key wallet, which keeps them encrypted
     under a passphrase (`--keys github:OWNER/REPO`, a private repository, or
-    `--keys command`); OPENSHEAF_WALLET or ~/.config/opensheaf/config.json override
-    "keys", and only they may configure a command wallet.
+    `--keys command`); OPENSHEAF_WALLET overrides "keys", and only it and
+    ~/.config/opensheaf/config.json may configure a command wallet.
 
     The index is either a TeXmacs document made from a template, as above, which
     osheaf init --index texmacs sets up, or the website (the profile website,
@@ -409,6 +414,159 @@ another owner's), which would share it: their pages are then at
         _, nm, owner = obj_id.split(":")
         same = [i for i, _, _ in objects() if isinstance(i, str) and i.startswith(f"sheaf:{nm}:")]
         return nm if len(same) <= 1 else f"{nm}-{owner}"
+
+### Changing a label
+
+A label is the archive's choice, and may change (section 3.1): `osheaf
+label` gives a line held here a label, changes it, or removes it
+(`--unset`), for a document, a collection, a branch or a copy, named by its
+label or its identifier, and for an owner object, named by its owner name
+(`--owner`), whose label is shown where the archive names its owners. A
+draft is named by its identifier, and has none. The new label has the
+form of section 3.1, at most 64 characters, and is not another line's (in
+the discovery document, where labels are unique); a tombstone has no
+label, so a label of a line taken down is free.
+
+```
+osheaf label fractional-phi42 phi42-mass-gap      a document, by its label
+osheaf label sheaf:zzgd...:56wo... phi42          a line without a label, by its identifier
+osheaf label --owner 56wo6cdp... jane-doe         the owner object
+osheaf label phi42 --unset                        no label: the page is at paper/<name>/
+```
+
+The label is written into the discovery document and the indexes, which
+carry it (section 12.5), and the website is written again, as after every
+change. A label makes addresses: the landing page `paper/<label>/`, the
+HTML version of a TeXmacs document `site/<label>/<label>.html`, and the
+`url` of the description of each document version deposited (`datacite.json`,
+the address readers are sent to, also from DOIs). The versions deposited
+are not changed (section 4), so their `url` keeps the old address, and
+links to it are out in the world. The old address therefore redirects:
+`osheaf.json` records it in `formerAddresses`, mapped to the line, and the
+website writes at `paper/<old>/` a page that sends the reader to the
+line's page wherever it is now, as long as no line has its page there
+([chapter 30](30-website.md)). The HTML version moves to
+`site/<new>/<new>.html`, its other files (images) with it, under their
+names, to which it refers; a page of the same kind is left at the old
+place. The next version deposited gives the new address. A line taken
+down loses its old addresses too ([takedowns](25-takedown.md)). An owner
+object has no page of its own at its label (its page is at
+`owner/<owner>/`), so its label changes nothing else.
+
+The main catalogue is named by its label in the configuration
+(`mainCollection`), and the featured collection of the home page too
+(`index.html.featured`): a new label is written there as well, and
+neither may lose its label. A TeXmacs index is typeset again by `osheaf
+index`, which the command says.
+
+    # in load the configuration and set the paths of the archive:
+    REDIRECT_MARK = "<!-- opensheaf: a former address -->"
+
+
+    def label_command(args):
+        """osheaf label LINE LABEL | --owner OWNER LABEL, and --unset: give a line held here a label,
+        change it, or remove it."""
+        given = [x for x in (getattr(args, "line", None), getattr(args, "label", None)) if x]
+        owner, unset = getattr(args, "owner", None), getattr(args, "unset", False)
+        if owner:
+            if not names.OWNER_NAME.match(owner):
+                sys.exit(f"--owner: an owner name, not {owner}")
+            obj_id = f"sheaf:{owner}:{owner}"
+            if not (obj_dir(obj_id) / "inventory.json").exists():
+                sys.exit(f"the archive holds no key log of {owner}")
+            new = given[0] if given else None
+            extra = given[1:]
+        else:
+            if not given:
+                sys.exit("osheaf label LINE LABEL, or osheaf label --owner OWNER LABEL; --unset removes the label")
+            obj_id = resolve(given[0])
+            new, extra = (given[1] if len(given) > 1 else None), given[2:]
+        if obj_id.startswith("sheaf:draft:"):
+            sys.exit("a draft has no label: its identifier names it (section 10.1)")
+        if extra or bool(new) == bool(unset):
+            sys.exit("give the new label, or --unset")
+        old = label_of(obj_id)
+        cfg = json.loads((ROOT / CONFIG_NAME).read_text(encoding="utf-8"))
+        featured = ((cfg.get("index") or {}).get("html") or {}).get("featured")
+        if new:
+            if not LABEL_RE.match(new) or len(new) > 64:
+                sys.exit("a label must match ^[a-z0-9]+(-[a-z0-9]+)*$ and have at most 64 characters")
+            if new == old:
+                print(f"{new}: unchanged")
+                return
+            if new in LABELS or (new == cfg.get("mainCollection") and old != new):
+                sys.exit(f"{new} is the label of another line already: {LABELS.get(new, 'the main catalogue')}")
+            if len(new) > 32:
+                print(f"warning: {new} is longer than 32 characters (it appears in every URL of the website)",
+                      file=sys.stderr)
+        elif old is None:
+            print(f"{obj_id}: has no label")
+            return
+        elif old in (cfg.get("mainCollection"), featured):
+            sys.exit(f"{old} names the {'main catalogue' if old == cfg.get('mainCollection') else 'featured collection'}"
+                     f" in {CONFIG_NAME}: give it another label instead")
+        kind = (read_json(obj_dir(obj_id), load_inventory(obj_dir(obj_id)), OBJ) or {}).get("kind")
+        before = page_address(obj_id)
+        if old:
+            del LABELS[old]
+        if new:
+            LABELS[new] = obj_id
+        after = page_address(obj_id)
+        former = dict(cfg.get("formerAddresses") or {})
+        former.pop(after, None)
+        if kind in ("document", "collection") and before != after:
+            former[before] = obj_id
+            move_html_version(obj_id, before, after, former)
+        if former:
+            cfg["formerAddresses"] = dict(sorted(former.items()))
+        else:
+            cfg.pop("formerAddresses", None)
+        if old and cfg.get("mainCollection") == old:
+            cfg["mainCollection"] = new
+        if old and featured == old:
+            cfg["index"]["html"]["featured"] = new
+        write_config(cfg)
+        write_discovery()
+        print(f"Done: {obj_id} is labelled {new}" + (f", no longer {old}." if old else ".") if new
+              else f"Done: {obj_id} has no label any more (it was {old}).")
+        if kind in ("document", "collection") and before != after:
+            print(f"Its old address paper/{before}/ leads to paper/{after}/ ({CONFIG_NAME}, formerAddresses).")
+        if INDEX.get("template"):
+            print("Run osheaf index to typeset the TeXmacs index with the new label.")
+
+The HTML version of a TeXmacs document is moved with its folder, the
+HTML file renamed for the new address, and a page that sends readers on
+written at the old place, for this address and for every earlier one of
+the line, so that none sends them through another. A folder at the new
+place is in the way only if it is more than such a page.
+
+    # in load the configuration and set the paths of the archive:
+    def move_html_version(obj_id, before, after, former):
+        """Move site/BEFORE/ to site/AFTER/ (its HTML file renamed), and leave at each former address of
+        OBJ_ID in FORMER a page leading to it."""
+        from . import html
+        src, dst = SITE / before, SITE / after
+        if not (src / f"{before}.html").exists() or redirect_only(src, before):
+            return
+        if dst.exists():
+            if not redirect_only(dst, after):
+                sys.exit(f"{dst} is in the way of the HTML version of {obj_id}")
+            shutil.rmtree(dst)
+        src.rename(dst)
+        (dst / f"{before}.html").rename(dst / f"{after}.html")
+        for address, i in former.items():
+            if i == obj_id and LABEL_RE.match(address):
+                (SITE / address).mkdir(parents=True, exist_ok=True)
+                (SITE / address / f"{address}.html").write_text(
+                    html.redirect_page(f"../{after}/{after}.html", f"{ARCHIVE['baseUrl']}site/{after}/{after}.html"),
+                    encoding="utf-8")
+
+
+    def redirect_only(folder, address):
+        """Whether FOLDER holds only the page at a former ADDRESS."""
+        files = [f for f in folder.iterdir()] if folder.is_dir() else []
+        return [f.name for f in files] == [f"{address}.html"] and \
+            REDIRECT_MARK in files[0].read_text(encoding="utf-8", errors="replace")
 
 The storage root
 ----------------

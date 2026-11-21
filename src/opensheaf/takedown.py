@@ -88,8 +88,17 @@ def main(args):
     label = P.label_of(obj_id)
     if label:
         del P.LABELS[label]
-    for folder in (P.ROOT / "paper" / (label or nm), P.SITE / (label or nm)):
+    cfg = json.loads((P.ROOT / P.CONFIG_NAME).read_text(encoding="utf-8"))
+    former = dict(cfg.get("formerAddresses") or {})
+    gone = [a for a, i in former.items() if i == obj_id]
+    for folder in [P.ROOT / "paper" / (label or nm), P.SITE / (label or nm)] + \
+            [P.SITE / a for a in gone if P.LABEL_RE.match(a)]:
         shutil.rmtree(folder, ignore_errors=True)
+    if gone:
+        cfg["formerAddresses"] = {a: i for a, i in former.items() if i != obj_id}
+        if not cfg["formerAddresses"]:
+            del cfg["formerAddresses"]
+        P.write_config(cfg)
     shutil.rmtree(d)
     parent = d.parent
     while parent != P.OCFL and not any(parent.iterdir()):

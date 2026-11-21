@@ -15,7 +15,12 @@ environment variable OPENSHEAF_WALLET (text or JSON), which wins, then by
 ($XDG_CONFIG_HOME/opensheaf/config.json), {"wallet": "github:OWNER/REPO"}
 or {"wallet": "command", "read": "...", "write": "..."}, then by "keys" of
 osheaf.json, which may name a GitHub wallet only: the commands of a command
-wallet run on the user's machine, and are never read from an archive."""
+wallet run on the user's machine, and are never read from an archive.
+Wallets and owners are many to many: the user's configuration lists the
+wallets the user reads, {"wallets": ["github:OWNER/REPO", ...]}, and
+"keys" of osheaf.json gives, for each owner, the wallets that hold its keys,
+as hints, {"<owner>": {"wallets": [...]}}; the keys of an owner are looked
+for in the hinted wallets, then in the user's, in order."""
 
 import base64
 import json
@@ -48,6 +53,7 @@ def risk(where, owner):
 
 
 WALLET = "OPENSHEAF_WALLET"
+CONFIG_FILE = "osheaf.json"
 REPO = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?/[A-Za-z0-9._-]+")
 COMMANDS = ("read", "write", "list", "forget")
 
@@ -93,21 +99,84 @@ def parse(spec, config=None, *, forbidden=()):
     raise WalletError(f"a security level is offline, github:OWNER/REPO or command: {spec}")
 
 
-def configured(config, *, forbidden=()):
-    """The wallet of OPENSHEAF_WALLET, or else of the user's configuration, or else of CONFIG (the `keys`
-    of osheaf.json, a GitHub wallet only), or None."""
+def user_wallets():
+    """The wallets of the user's configuration, in order: "wallets", then the "wallet" of "keys"."""
+    path = user_config_path()
+    if not path.is_file():
+        return []
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+        raise WalletError(f"{path}: {e}") from None
+    data = data if isinstance(data, dict) else {}
+    out = [w.strip() for w in data.get("wallets", []) if isinstance(w, str) and w.strip()] \
+        if isinstance(data.get("wallets"), list) else []
+    old = (data.get("keys") or {}).get("wallet") if isinstance(data.get("keys"), dict) else None
+    return out + ([str(old)] if old and str(old) not in out else [])
+
+
+def _named(e):
+    """The wallets an entry of "keys" names: its "wallets", and its "wallet"."""
+    if not isinstance(e, dict):
+        return []
+    out = [w for w in e.get("wallets", []) if isinstance(w, str)] if isinstance(e.get("wallets"), list) else []
+    return out + ([str(e["wallet"])] if e.get("wallet") else [])
+
+
+def hints(config, owner=None):
+    """The wallets CONFIG (the `keys` of osheaf.json) hints for OWNER: its own, then those for every owner."""
     config = config if isinstance(config, dict) else {}
-    if config.get("wallet") == "command" or any(c in config for c in COMMANDS):
-        raise WalletError(f'osheaf.json configures a command wallet ("keys"), whose commands would run on this '
-                          f"machine: they are read only from your own configuration. Move \"keys\" to "
-                          f"{user_config_path()} (or to {WALLET}), and leave osheaf.json without it")
+    out = []
+    for w in (_named(config.get(owner)) if owner else []) + _named(config):
+        if w not in out:
+            out.append(w)
+    return out
+
+
+def check_archive_config(config):
+    """Refuse a command wallet in CONFIG, the `keys` of osheaf.json, in any of its entries."""
+    config = config if isinstance(config, dict) else {}
+    for e in [config] + [v for k, v in config.items() if names.OWNER_NAME.match(k) and isinstance(v, dict)]:
+        if "command" in _named(e) or any(c in e for c in COMMANDS):
+            raise WalletError(f'osheaf.json configures a command wallet ("keys"), whose commands would run on '
+                              f"this machine: they are read only from your own configuration. Move \"keys\" to "
+                              f"{user_config_path()} (or to {WALLET}), and leave osheaf.json without it")
+
+
+def candidates(config, owner=None):
+    """[(wallet, place)]: that of OPENSHEAF_WALLET alone; or else those CONFIG (the `keys` of osheaf.json)
+    hints for OWNER, then the user's, each once."""
+    check_archive_config(config)
     env = os.environ.get(WALLET, "").strip()
     if env:
-        return parse(env, forbidden=forbidden)
-    user = user_config()
-    if user.get("wallet"):
-        return parse(str(user["wallet"]), user, forbidden=forbidden)
-    return parse(config.get("wallet"), forbidden=forbidden)
+        return [(env, WALLET)]
+    out = [(w, CONFIG_FILE) for w in hints(config, owner)]
+    return out + [(w, str(user_config_path())) for w in user_wallets() if w not in {x for x, _ in out}]
+
+
+def configured(config, *, forbidden=(), owner=None):
+    """The wallet of OWNER: that of OPENSHEAF_WALLET, or else the first candidate holding keys of OWNER
+    (the only one, without a listing), or else the first candidate, or None."""
+    named = candidates(config, owner)
+    wallets = []
+    for spec, _ in named:
+        try:
+            w = parse(spec, forbidden=forbidden)
+        except WalletError:
+            if len(named) == 1:
+                raise
+            continue
+        if w is not None:
+            wallets.append(w)
+    if len(wallets) <= 1 or not owner:
+        return wallets[0] if wallets else None
+    for w in wallets:
+        try:
+            if w.entries(owner):
+                return w
+        except WalletError:
+            continue
+    return wallets[0]
 
 
 GITHUB_REMOTE = re.compile(r"github\.com[:/]+([A-Za-z0-9-]+)/([A-Za-z0-9._-]+?)(?:\.git)?/?(?:\s|$)")
@@ -249,6 +318,11 @@ CONFIG_HELP = """Your own configuration: ~/.config/opensheaf/config.json ($XDG_C
           "write":  "...",                          receives the key file on its standard input
           "list":   "...",                          optional: prints "<owner> <k>" per key
           "forget": "..."}}                         optional: removes a key
+
+{"wallets": ["github:OWNER/REPO", "command", ...]}  the key wallets you read, in order: the
+                                                    keys of an owner are looked for in those
+                                                    osheaf.json hints for it, then in these
+                                                    (osheaf key wallets --add|--remove)
 
 The commands run in the shell; {owner} is the owner name, {k} the 16 characters
 that name the key, {kind} current or rotation. read prints the key file as it was
@@ -411,6 +485,24 @@ def listing(wallet, owner=None):
         text = read_any(wallet, o, kid)
         f = describe(text)
         out.append((o, kid, f.get("kind", "?"), f.get("key", "?"), f.get("version", ""), locks(text)))
+    return out
+
+
+def owners_held(wallet, owner=None):
+    """[(owner, number of keys, locks in words)] of the owners whose keys WALLET holds."""
+    by = {}
+    for o, kid in wallet.entries(owner):
+        text = read_any(wallet, o, kid)
+        n, phrase, creds, bare = by.get(o, (0, False, set(), 0))
+        held = locks(text)
+        by[o] = (n + 1, phrase or "passphrase" in held, creds | {p.cred for p in keys.passkeys_of(text)},
+                 bare + (not held))
+    out = []
+    for o, (n, phrase, creds, bare) in by.items():
+        words = (["passphrase"] if phrase else []) + \
+            ([f"{len(creds)} passkey{'s' if len(creds) != 1 else ''}"] if creds else []) + \
+            ([f"{bare} without a lock"] if bare else [])
+        out.append((o, n, ", ".join(words) or "no lock"))
     return out
 
 

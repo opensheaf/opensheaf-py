@@ -24,13 +24,18 @@ An archive is a folder with a configuration file `osheaf.json`:
         "htmlResources": ["max-html/resources/max-html.css", ...]   from the plugins
       },
       "index": {"template": "index-template.tm"},   optional: the readable index
-      "keys": {"wallet": "github:OWNER/REPO"}       optional: the GitHub key wallet (a command
-                                         wallet only in ~/.config/opensheaf/config.json)
+      "keys": {"<owner name>": {"wallets": ["github:OWNER/REPO", ...]}, ...}   optional:
+                                         hints, the GitHub key wallets that hold the keys of
+                                         each owner (osheaf key wallet --add|--remove); a
+                                         general {"wallet": ...} is a hint for every owner;
+                                         your own wallets are in ~/.config/opensheaf/config.json
+      "formerAddresses": {"<address>": "sheaf:<name>:<owner>"}   written by osheaf label:
+                                         the old addresses of relabelled lines, which redirect
     }
 
 and, next to it, `ocfl/` (the OCFL 1.1 storage root), `opensheaf.json` (the
 discovery document, rewritten whenever an object changes, which also keeps
-the labels of the lines: `osheaf deposit LABEL`), `site/` (HTML versions)
+the labels of the lines: `osheaf deposit LABEL`, `osheaf label`), `site/` (HTML versions)
 and `index.tm`, `index.html` (generated). TeXmacs runs headless with a
 private profile in `texmacs_home/` (not committed).
 
@@ -40,8 +45,8 @@ current key of this device is kept in the system's credential store (or in
 folder outside the archive (`osheaf owner init --export DIR`), unless the owner
 chooses a lower security level, a key wallet, which keeps them encrypted
 under a passphrase (`--keys github:OWNER/REPO`, a private repository, or
-`--keys command`); OPENSHEAF_WALLET or ~/.config/opensheaf/config.json override
-"keys", and only they may configure a command wallet.
+`--keys command`); OPENSHEAF_WALLET overrides "keys", and only it and
+~/.config/opensheaf/config.json may configure a command wallet.
 
 The index is either a TeXmacs document made from a template, as above, which
 osheaf init --index texmacs sets up, or the website (the profile website,
@@ -179,6 +184,109 @@ def page_address(obj_id):
     _, nm, owner = obj_id.split(":")
     same = [i for i, _, _ in objects() if isinstance(i, str) and i.startswith(f"sheaf:{nm}:")]
     return nm if len(same) <= 1 else f"{nm}-{owner}"
+
+
+REDIRECT_MARK = "<!-- opensheaf: a former address -->"
+
+
+def label_command(args):
+    """osheaf label LINE LABEL | --owner OWNER LABEL, and --unset: give a line held here a label,
+    change it, or remove it."""
+    given = [x for x in (getattr(args, "line", None), getattr(args, "label", None)) if x]
+    owner, unset = getattr(args, "owner", None), getattr(args, "unset", False)
+    if owner:
+        if not names.OWNER_NAME.match(owner):
+            sys.exit(f"--owner: an owner name, not {owner}")
+        obj_id = f"sheaf:{owner}:{owner}"
+        if not (obj_dir(obj_id) / "inventory.json").exists():
+            sys.exit(f"the archive holds no key log of {owner}")
+        new = given[0] if given else None
+        extra = given[1:]
+    else:
+        if not given:
+            sys.exit("osheaf label LINE LABEL, or osheaf label --owner OWNER LABEL; --unset removes the label")
+        obj_id = resolve(given[0])
+        new, extra = (given[1] if len(given) > 1 else None), given[2:]
+    if obj_id.startswith("sheaf:draft:"):
+        sys.exit("a draft has no label: its identifier names it (section 10.1)")
+    if extra or bool(new) == bool(unset):
+        sys.exit("give the new label, or --unset")
+    old = label_of(obj_id)
+    cfg = json.loads((ROOT / CONFIG_NAME).read_text(encoding="utf-8"))
+    featured = ((cfg.get("index") or {}).get("html") or {}).get("featured")
+    if new:
+        if not LABEL_RE.match(new) or len(new) > 64:
+            sys.exit("a label must match ^[a-z0-9]+(-[a-z0-9]+)*$ and have at most 64 characters")
+        if new == old:
+            print(f"{new}: unchanged")
+            return
+        if new in LABELS or (new == cfg.get("mainCollection") and old != new):
+            sys.exit(f"{new} is the label of another line already: {LABELS.get(new, 'the main catalogue')}")
+        if len(new) > 32:
+            print(f"warning: {new} is longer than 32 characters (it appears in every URL of the website)",
+                  file=sys.stderr)
+    elif old is None:
+        print(f"{obj_id}: has no label")
+        return
+    elif old in (cfg.get("mainCollection"), featured):
+        sys.exit(f"{old} names the {'main catalogue' if old == cfg.get('mainCollection') else 'featured collection'}"
+                 f" in {CONFIG_NAME}: give it another label instead")
+    kind = (read_json(obj_dir(obj_id), load_inventory(obj_dir(obj_id)), OBJ) or {}).get("kind")
+    before = page_address(obj_id)
+    if old:
+        del LABELS[old]
+    if new:
+        LABELS[new] = obj_id
+    after = page_address(obj_id)
+    former = dict(cfg.get("formerAddresses") or {})
+    former.pop(after, None)
+    if kind in ("document", "collection") and before != after:
+        former[before] = obj_id
+        move_html_version(obj_id, before, after, former)
+    if former:
+        cfg["formerAddresses"] = dict(sorted(former.items()))
+    else:
+        cfg.pop("formerAddresses", None)
+    if old and cfg.get("mainCollection") == old:
+        cfg["mainCollection"] = new
+    if old and featured == old:
+        cfg["index"]["html"]["featured"] = new
+    write_config(cfg)
+    write_discovery()
+    print(f"Done: {obj_id} is labelled {new}" + (f", no longer {old}." if old else ".") if new
+          else f"Done: {obj_id} has no label any more (it was {old}).")
+    if kind in ("document", "collection") and before != after:
+        print(f"Its old address paper/{before}/ leads to paper/{after}/ ({CONFIG_NAME}, formerAddresses).")
+    if INDEX.get("template"):
+        print("Run osheaf index to typeset the TeXmacs index with the new label.")
+
+
+def move_html_version(obj_id, before, after, former):
+    """Move site/BEFORE/ to site/AFTER/ (its HTML file renamed), and leave at each former address of
+    OBJ_ID in FORMER a page leading to it."""
+    from . import html
+    src, dst = SITE / before, SITE / after
+    if not (src / f"{before}.html").exists() or redirect_only(src, before):
+        return
+    if dst.exists():
+        if not redirect_only(dst, after):
+            sys.exit(f"{dst} is in the way of the HTML version of {obj_id}")
+        shutil.rmtree(dst)
+    src.rename(dst)
+    (dst / f"{before}.html").rename(dst / f"{after}.html")
+    for address, i in former.items():
+        if i == obj_id and LABEL_RE.match(address):
+            (SITE / address).mkdir(parents=True, exist_ok=True)
+            (SITE / address / f"{address}.html").write_text(
+                html.redirect_page(f"../{after}/{after}.html", f"{ARCHIVE['baseUrl']}site/{after}/{after}.html"),
+                encoding="utf-8")
+
+
+def redirect_only(folder, address):
+    """Whether FOLDER holds only the page at a former ADDRESS."""
+    files = [f for f in folder.iterdir()] if folder.is_dir() else []
+    return [f.name for f in files] == [f"{address}.html"] and \
+        REDIRECT_MARK in files[0].read_text(encoding="utf-8", errors="replace")
 
 
 def digest(path, algo="sha512"):
@@ -2845,8 +2953,8 @@ def init(args):
             stop(f"the owner {names.short(log.owner)} has ended (section 6.3)")
         owners.write_key_log(obj_dir(log.id), log)
     cfg["owner"] = log.owner
-    if getattr(args, "new_owner", False) and wallet_config(args):
-        cfg["keys"] = wallet_config(args)
+    if getattr(args, "new_owner", False) and wallet_config(args, log.owner):
+        cfg["keys"] = wallet_config(args, log.owner)
     (root / CONFIG_NAME).write_text(json.dumps(cfg, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     if not (root / ".gitattributes").exists():
         (root / ".gitattributes").write_text(GITATTRIBUTES, encoding="utf-8")
@@ -2860,6 +2968,9 @@ def init(args):
     collect(args)
     index(argparse_namespace(no_html=True))
     edit = "templates/" if kind == "website" else cfg["index"]["template"]
+    if cfg.get("keys"):
+        print(f"The key wallet {args.keys} is recorded in {CONFIG_NAME} for {names.short(log.owner)} "
+              f"(osheaf key wallet --remove {args.keys} removes it).")
     print(f"Done: the archive is made in {root}, owned by {names.short(log.owner)}. Edit {CONFIG_NAME} and "
           f"{edit}, then deposit a paper: osheaf deposit --new LABEL ...")
     print("Note: OpenSheaf 0.2 is a draft; until version 1.0 a revision may change the format in"
@@ -2959,36 +3070,80 @@ def archive_repositories():
     return wallet.archive_repositories(ROOT, ARCHIVE.get("baseUrl"))
 
 
-def configured_wallet():
-    """The wallet configured for the archive (OPENSHEAF_WALLET, or "keys" of osheaf.json), or None."""
+def configured_wallet(owner=None):
+    """The wallet configured for OWNER (OPENSHEAF_WALLET, the user's configuration, or "keys" of
+    osheaf.json), or None."""
     from . import wallet
     try:
-        return wallet.configured(ARCHIVE.get("keys"), forbidden=archive_repositories())
+        return wallet.configured(ARCHIVE.get("keys"), forbidden=archive_repositories(), owner=owner)
     except wallet.WalletError as e:
         stop(str(e))
 
 
-def level_wallet(args):
+def level_wallet(args, owner=None):
     """The wallet of the security level --keys (or of --wallet), or None for offline (the default)."""
     from . import wallet
     spec = getattr(args, "keys", None) or getattr(args, "wallet", None) or wallet.OFFLINE
     try:
         if spec == "command":
-            w = configured_wallet()
+            w = configured_wallet(owner)
             return w if isinstance(w, wallet.CommandWallet) else wallet.parse(spec)
         return wallet.parse(spec, forbidden=archive_repositories())
     except wallet.WalletError as e:
         stop(str(e))
 
 
-def wallet_for(args):
-    """The wallet a command reads or moves keys with: that of --wallet (--keys), or the configured one."""
+def wallet_for(args, owner=None):
+    """The wallet a command reads or moves keys of OWNER with: that of --wallet (--keys), or the configured
+    one."""
     from . import wallet
-    w = level_wallet(args) or configured_wallet()
+    w = level_wallet(args, owner) or configured_wallet(owner)
     if w is None:
         stop("no key wallet: give --wallet github:OWNER/REPO (or command), or configure one in "
              f'{wallet.user_config_path()} or osheaf.json ("keys": {{"wallet": ...}}) or in OPENSHEAF_WALLET')
     return w
+
+
+def write_config(cfg):
+    """Write CFG to osheaf.json, and to the settings of this run."""
+    (ROOT / CONFIG_NAME).write_text(json.dumps(cfg, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    for k in ("keys", "formerAddresses", "mainCollection", "index"):
+        if k in cfg:
+            ARCHIVE[k] = cfg[k]
+        else:
+            ARCHIVE.pop(k, None)
+
+
+def hinted(cfg, owner, spec, add=True):
+    """CFG with the wallet SPEC added to the hints of OWNER (or removed, ADD false)."""
+    from . import wallet
+    given = dict(cfg.get("keys")) if isinstance(cfg.get("keys"), dict) else {}
+    own = [w for w in wallet.hints({owner: given.get(owner)}, owner)]
+    own = own + [spec] if add else [w for w in own if w != spec]
+    if own:
+        given[owner] = {"wallets": own}
+    else:
+        given.pop(owner, None)
+    out = dict(cfg)
+    if given:
+        out["keys"] = given
+    else:
+        out.pop("keys", None)
+    return out
+
+
+def record_wallet(owner, spec):
+    """Record the GitHub wallet SPEC as a hint for OWNER in osheaf.json, unless it is hinted already."""
+    from . import wallet
+    spec = (spec or "").strip()
+    if not spec.startswith("github:") or ROOT is None or not (ROOT / CONFIG_NAME).exists():
+        return
+    cfg = json.loads((ROOT / CONFIG_NAME).read_text(encoding="utf-8"))
+    if spec in wallet.hints(cfg.get("keys"), owner):
+        return
+    write_config(hinted(cfg, owner, spec))
+    print(f"The key wallet {spec} is recorded in {CONFIG_NAME} for {names.short(owner)} "
+          f"(osheaf key wallet --remove {spec} removes it).")
 
 
 def export_and_confirm(rotation, owner, version, args):
@@ -3141,7 +3296,7 @@ def rotation_signers(args, owner, prev):
     if files:
         return rotation_keys(files, owner), None
     from . import wallet
-    w = configured_wallet() or level_wallet(args)
+    w = configured_wallet(owner) or level_wallet(args, owner)
     if w is None:
         stop("give the rotation keys that sign the new version of the key log (--rotation-key FILE), "
              "or the wallet that keeps them (--keys github:OWNER/REPO)")
@@ -3234,18 +3389,16 @@ def owner_init_command(args):
             cfg["owners"] = cfg.get("owners", []) + [log.owner]
             ARCHIVE.setdefault("owners", []).append(log.owner)
             changed = True
-        if wallet_config(args) and "keys" not in cfg:
-            cfg["keys"] = ARCHIVE["keys"] = wallet_config(args)
-            changed = True
         if changed:
             cfg_path.write_text(json.dumps(cfg, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        record_wallet(log.owner, getattr(args, "keys", None))
     write_discovery()
 
 
-def wallet_config(args):
-    """The `keys` of osheaf.json naming the GitHub wallet of --keys, or None."""
+def wallet_config(args, owner):
+    """The `keys` of osheaf.json naming the GitHub wallet of --keys for OWNER, or None."""
     spec = getattr(args, "keys", None) or ""
-    return {"wallet": spec} if spec.startswith("github:") else None
+    return {owner: {"wallets": [spec]}} if spec.startswith("github:") else None
 
 
 MOVED_UP = ("Moved up to the maximum security level: the rotation keys kept in {w} are used up and sign "
@@ -3263,7 +3416,7 @@ def owner_rotate(args, exposed=()):
     prev = log.latest()
     if prev is None:
         stop(f"the owner {who} has ended (section 6.3): its key log takes no new version")
-    w = level_wallet(args)
+    w = level_wallet(args, owner)
     if w is None and not getattr(args, "export", None):
         stop("give --export DIR, a folder outside the archive where the new rotation keys are written "
              "(or keep them in a wallet, a lower security level: --keys github:OWNER/REPO|command)")
@@ -3309,6 +3462,8 @@ def owner_rotate(args, exposed=()):
         print("What an exposed key alone signed is contested (section 7.3): osheaf sign signs it again.")
     if source is not None and w is None:
         print(MOVED_UP.format(w=source.name), file=sys.stderr)
+    if w is not None:
+        record_wallet(owner, getattr(args, "keys", None))
 
 
 def owner_expose(args):
@@ -3376,7 +3531,7 @@ def key_push(args):
     latest = log.latest()
     if latest is None:
         stop(f"the owner {who} has ended (section 6.3)")
-    w = wallet_for(args)
+    w = wallet_for(args, owner)
     dids = list(getattr(args, "did", None) or latest.keys["keys"])
     try:
         here = keys.current_keys(owner, dids)
@@ -3393,6 +3548,7 @@ def key_push(args):
     if len(there) == n:
         print(f"{'The current key' if n == 1 else f'The {n} current keys'} of {who} "
               f"{'is' if n == 1 else 'are'} already in {w.name}.")
+        record_wallet(owner, getattr(args, "wallet", None))
         return
     warn(wallet.risk(w.name, owner))
     plain = getattr(args, "plain_current", False)
@@ -3412,6 +3568,7 @@ def key_push(args):
     lock = "with no lock (--plain-current)" if plain else \
         "locked with your passkey and your passphrase" if unlocked else "locked with your passphrase"
     print(f"Done: {plural(saved, 'current key')} of {who} saved to {w.name}, {lock}.")
+    record_wallet(owner, getattr(args, "wallet", None))
 
 
 def key_pull(args):
@@ -3420,7 +3577,7 @@ def key_pull(args):
     latest = log.latest()
     if latest is None:
         stop(f"the owner {names.short(owner)} has ended (section 6.3)")
-    w = wallet_for(args)
+    w = wallet_for(args, owner)
     if not keys.kept_on_device():
         print(not_kept(w, owner))
         return
@@ -3484,7 +3641,7 @@ def pull_summary(w, owner, latest, have, pulled):
 
 def pull_from_wallet(owner, latest, found):
     """FOUND, the current keys of OWNER on this device, with those the configured wallet adds."""
-    w = configured_wallet()
+    w = configured_wallet(owner)
     if w is None:
         return found
     held = {k.did for k in found}
@@ -3494,8 +3651,8 @@ def pull_from_wallet(owner, latest, found):
 def key_list(args):
     """What the wallet holds, as a table: the owner, kind, key, version and locks of each key."""
     from . import wallet
-    w = wallet_for(args)
     owner = getattr(args, "owner", None)
+    w = wallet_for(args, owner or ARCHIVE.get("owner"))
     try:
         rows = wallet.listing(w, owner)
     except wallet.WalletError as e:
@@ -3511,6 +3668,134 @@ def key_list(args):
     widths = [max(len(r[i]) for r in table) for i in range(4)]
     for r in table:
         print("  " + "  ".join(c.ljust(n) for c, n in zip(r, widths)) + "  " + r[4])
+
+
+def key_wallet(args):
+    """The wallets in which the keys of the owner are looked for, in order; --add or --remove a hint
+    for the owner in osheaf.json."""
+    from . import wallet
+    owner = key_owner(args)
+    who = names.short(owner)
+    add, remove = getattr(args, "add", None), getattr(args, "remove", None)
+    if add and remove:
+        stop("give --add or --remove, not both")
+    if not add and not remove:
+        try:
+            found = wallet.candidates(ARCHIVE.get("keys"), owner)
+        except wallet.WalletError as e:
+            stop(str(e))
+        if not found:
+            print(f"No key wallet is configured for {who}: osheaf key wallet --add github:OWNER/REPO hints "
+                  f"one in {CONFIG_NAME}, osheaf key wallets --add github:OWNER/REPO adds one to yours.")
+            return
+        print(f"The keys of {who} are looked for in, in order:")
+        width = max(len(w) for w, _ in found)
+        for w, where in found:
+            print(f"  {w.ljust(width)}  {where}")
+        return
+    if ROOT is None:
+        stop(f"run the command in an archive: the hints are in its {CONFIG_NAME}")
+    if owner not in archive_owners():
+        stop(f"{who} is not an owner of this archive")
+    cfg = json.loads((ROOT / CONFIG_NAME).read_text(encoding="utf-8"))
+    own = wallet.hints({owner: (cfg.get("keys") or {}).get(owner)}, owner) \
+        if isinstance(cfg.get("keys"), dict) else []
+    if remove:
+        if remove not in own:
+            if remove in wallet.hints(cfg.get("keys")):
+                stop(f'{CONFIG_NAME} hints {remove} for every owner ("keys": {{"wallet": ...}}): edit '
+                     f"{CONFIG_NAME} to remove it")
+            print(f"{CONFIG_NAME} hints no {remove} for {who}.")
+            return
+        write_config(hinted(cfg, owner, remove, add=False))
+        print(f"Done: {CONFIG_NAME} no longer hints {remove} for {who}.")
+        return
+    if not add.startswith("github:"):
+        stop(f"{CONFIG_NAME} names GitHub wallets only, github:OWNER/REPO: a command wallet is configured "
+             f"in {wallet.user_config_path()} or in {wallet.WALLET}")
+    try:
+        w = wallet.parse(add)
+    except wallet.WalletError as e:
+        stop(str(e))
+    if w.repo.lower() in archive_repositories():
+        stop(f"{w.repo} is a repository of this archive, which is public: a key wallet is a private "
+             "repository of its own")
+    if add in own:
+        print(f"{CONFIG_NAME} hints {add} for {who} already.")
+        return
+    write_config(hinted(cfg, owner, add))
+    print(f"Done: {CONFIG_NAME} hints {add} for {who}.")
+
+
+def key_wallets(args):
+    """The wallets of the person (and of the archive's hints), each with the owners whose keys it holds
+    and their locks; --add or --remove a wallet of the configuration file."""
+    from . import wallet
+    add, remove = getattr(args, "add", None), getattr(args, "remove", None)
+    if add and remove:
+        stop("give --add or --remove, not both")
+    if add or remove:
+        return change_user_wallets(add, remove)
+    try:
+        listed = [(w, wallet.WALLET) for w in [os.environ.get(wallet.WALLET, "").strip()] if w]
+        for o in archive_owners() if ARCHIVE.get("owner") else []:
+            listed += [(w, CONFIG_NAME) for w in wallet.hints(ARCHIVE.get("keys"), o)]
+        listed += [(w, str(wallet.user_config_path())) for w in wallet.user_wallets()]
+    except wallet.WalletError as e:
+        stop(str(e))
+    seen, rows = set(), []
+    for spec, where in listed:
+        if spec not in seen and not spec.startswith("{"):
+            seen.add(spec)
+            rows.append((spec, where))
+    if not rows:
+        print("No key wallet is configured: osheaf key wallets --add github:OWNER/REPO adds one.")
+        return
+    for spec, where in rows:
+        print(f"{spec} ({where}):")
+        try:
+            w = wallet.parse(spec, forbidden=archive_repositories())
+            held = wallet.owners_held(w) if w is not None else []
+        except wallet.WalletError as e:
+            print(f"  cannot be read: {e}")
+            continue
+        if not held:
+            print("  holds no key")
+        for o, n, lock in held:
+            print(f"  {names.short(o)}  {plural(n, 'key').ljust(7)} {lock}")
+
+
+def change_user_wallets(add, remove):
+    """Add the wallet ADD to the wallets of the configuration file, or remove REMOVE."""
+    from . import wallet
+    path = wallet.user_config_path()
+    try:
+        data = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
+    except (OSError, ValueError) as e:
+        stop(f"{path}: {e}")
+    data = data if isinstance(data, dict) else {}
+    listed = [w for w in data.get("wallets", []) if isinstance(w, str)] \
+        if isinstance(data.get("wallets"), list) else []
+    if add:
+        try:
+            wallet.parse(add)
+        except wallet.WalletError as e:
+            stop(str(e))
+        if add in ("", wallet.OFFLINE) or add.startswith("{"):
+            stop("a wallet is github:OWNER/REPO or command")
+        if add in listed:
+            print(f"{add} is one of your wallets already.")
+            return
+        data["wallets"] = listed + [add]
+    else:
+        if remove not in listed:
+            old = (data.get("keys") or {}).get("wallet") if isinstance(data.get("keys"), dict) else None
+            stop(f'{remove} is named by "keys" of {path}: edit it there' if remove == old
+                 else f"{remove} is not one of your wallets")
+        data["wallets"] = [w for w in listed if w != remove]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    print(f"Done: {add or remove} is {'added to' if add else 'removed from'} your wallets ({path}).")
 
 
 def passkey_keks(owner, wraps, force=False):
@@ -3625,7 +3910,8 @@ def key_enroll(args):
     """Let a passkey open the keys of the owner in the wallet."""
     import hmac
     from . import passkey, wallet
-    owner, w = key_owner(args), wallet_for(args)
+    owner = key_owner(args)
+    w = wallet_for(args, owner)
     _ASKED["no_browser"] = bool(getattr(args, "no_browser", False))
     try:
         w.check_writable()
@@ -3693,7 +3979,8 @@ def _opens(text, cred, kek):
 
 def key_unlock(args):
     """Open with the passkey the keys of the owner in the wallet; in an archive, pull its current keys."""
-    owner, w = key_owner(args), wallet_for(args)
+    owner = key_owner(args)
+    w = wallet_for(args, owner)
     _ASKED["no_browser"] = bool(getattr(args, "no_browser", False))
     who = names.short(owner)
     print(f"Reading the keys of {who} in {w.name}…", file=sys.stderr)
@@ -3843,7 +4130,7 @@ def key_forget(args):
     if not getattr(args, "from_wallet", False):
         forget_here(owner, dids)
         return
-    w = wallet_for(args)
+    w = wallet_for(args, owner)
     try:
         rows = wallet.listing(w, owner)
     except wallet.WalletError as e:
@@ -3887,7 +4174,8 @@ def forget_passkey_wraps(args):
     cred, rp = getattr(args, "passkey", None), getattr(args, "rp", None)
     if getattr(args, "did", None) or getattr(args, "used", False):
         stop("--passkey and --rp remove passkey locks, and name no key")
-    owner, w = key_owner(args), wallet_for(args)
+    owner = key_owner(args)
+    w = wallet_for(args, owner)
     who = names.short(owner)
     try:
         w.check_writable()

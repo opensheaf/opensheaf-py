@@ -875,6 +875,14 @@ The options of making an owner are shared by `owner init` and
     sg.add_argument("--version", required=True, help="the object version, e.g. v2")
     sg.add_argument("--yes", action="store_true", help="do not ask to confirm that the owner made it")
     sg.set_defaults(func=core.sign_again)
+    lb = sub.add_parser("label", help="give a line a label, change it, or remove it (--unset); the old address "
+                        "of its page redirects")
+    lb.add_argument("line", nargs="?", metavar="LINE", help="the line: its label or identifier (with --owner, "
+                    "the new label)")
+    lb.add_argument("label", nargs="?", metavar="LABEL", help="the new label (section 3.1)")
+    lb.add_argument("--owner", help="label the owner object of this owner instead of a line")
+    lb.add_argument("--unset", action="store_true", help="remove the label")
+    lb.set_defaults(func=core.label_command)
     k = sub.add_parser("key", help="current keys of this device, key wallets, password managers")
     ksub = k.add_subparsers(dest="action", required=True)
     kn = ksub.add_parser("new", help="a new current key for this device; prints its did:key")
@@ -884,6 +892,14 @@ The options of making an owner are shared by `owner init` and
     kp.add_argument("--plain-current", action="store_true", help="keep them unencrypted in the wallet")
     kl = ksub.add_parser("pull", help="keep on this device the owner's current keys that the wallet holds")
     kls = ksub.add_parser("list", help="what the key wallet holds, as a table: owner, kind, key, version, locks (no secrets)")
+    kw = ksub.add_parser("wallet", help="the key wallets in which the owner's keys are looked for; hint one "
+                         "for the owner in osheaf.json (--add), or remove a hint (--remove)")
+    kw.add_argument("--owner", help="an owner the archive hosts (default: the archive's)")
+    kws = ksub.add_parser("wallets", help="your key wallets, with the owners whose keys each holds and their "
+                          "locks; add one to your configuration (--add), or remove one (--remove)")
+    for x in (kw, kws):
+        x.add_argument("--add", metavar="WALLET", help="github:OWNER/REPO" + ("" if x is kw else " or command"))
+        x.add_argument("--remove", metavar="WALLET", help="a wallet named now")
     kf = ksub.add_parser("forget", help="remove keys from this device, and with --from-wallet from the wallet; "
                          "or passkey locks (--passkey, --rp)")
     kf.add_argument("did", nargs="*", metavar="DID", help="the keys to forget")
@@ -1033,8 +1049,9 @@ paths of the core), and a few must not:
   does the help of `arxiv import`;
 - `resolve` works in an archive, whose storage root and locations it then
   uses, or anywhere else;
-- `key list`, `key import`, `key export`, `key enroll` and `key unlock`
-  work in an archive or outside
+- `key list`, `key import`, `key export`, `key enroll`, `key unlock`,
+  `key wallet` (to show the wallets of an owner) and `key wallets` work in
+  an archive or outside
   one, as `resolve` does: a wallet or a key may be needed on a machine that
   has no copy of the archive;
 - every other command configures the archive. An archive of specification
@@ -1086,7 +1103,8 @@ when it ends.
                      "end": "owner_end", "show": "owner_show"}
     KEY_ACTIONS = {"new": "key_new", "push": "key_push", "pull": "key_pull", "list": "key_list",
                    "export": "key_export", "import": "key_import", "forget": "key_forget",
-                   "enroll": "key_enroll", "unlock": "key_unlock"}
+                   "enroll": "key_enroll", "unlock": "key_unlock", "wallet": "key_wallet",
+                   "wallets": "key_wallets"}
     LAZY = {"collection": ("collections", None), "mirror": ("mirror", "main"), "branch": ("branch", "main"),
             "accept": ("branch", "accept"), "draft": ("drafts", None), "seal": ("drafts", "seal"),
             "takedown": ("takedown", "main")}
@@ -1121,7 +1139,8 @@ when it ends.
                 if args.root:
                     raise
             return remote.main(args)
-        if args.cmd == "key" and args.action in ("list", "import", "export", "enroll", "unlock"):
+        if args.cmd == "key" and args.action in ("list", "import", "export", "enroll", "unlock", "wallet",
+                                                    "wallets"):
             try:
                 configure(args)
             except SystemExit:

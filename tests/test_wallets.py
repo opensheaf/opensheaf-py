@@ -224,7 +224,10 @@ def test_push_pull_list(tmp_path, monkeypatch, capsys):
     run(*r, "key", "push", "--wallet", "github:me/keys")
     out, err = capsys.readouterr()
     assert wallet.risk("github:me/keys", owner) in err and out == "Done: 1 current key of " \
-        f"{names.short(owner)} saved to github:me/keys, locked with your passphrase.\n"
+        f"{names.short(owner)} saved to github:me/keys, locked with your passphrase.\n" \
+        f"The key wallet github:me/keys is recorded in osheaf.json for {names.short(owner)} " \
+        "(osheaf key wallet --remove github:me/keys removes it).\n"
+    assert json.loads((root / "osheaf.json").read_text())["keys"] == {owner: {"wallets": ["github:me/keys"]}}
     files = in_repo(tmp_path)
     assert list(files) == [f"{owner}/{kid}.key.enc"]
     assert "kind current" in files[f"{owner}/{kid}.key.enc"] and "wrap passphrase argon2id" in files[f"{owner}/{kid}.key.enc"]
@@ -240,6 +243,7 @@ def test_push_pull_list(tmp_path, monkeypatch, capsys):
     assert local_keys(tmp_path, owner) == [f"{kid}.key"]
     assert "Pulled 1 current key of" in capsys.readouterr().out
     run(*r, "key", "forget", current)
+    run(*r, "key", "wallet", "--remove", "github:me/keys")
     with pytest.raises(SystemExit, match="holds 0 of the current keys"):
         deposit(root, "p", "one", new=True)
     monkeypatch.setenv(wallet.WALLET, "github:me/keys")
@@ -254,7 +258,8 @@ def test_owner_in_a_github_wallet(tmp_path, monkeypatch, capsys):
     root = make_archive(tmp_path, "--keys", "github:me/keys")
     out, err = capsys.readouterr()
     owner = P.ARCHIVE["owner"]
-    assert json.loads((root / "osheaf.json").read_text())["keys"] == {"wallet": "github:me/keys"}
+    assert json.loads((root / "osheaf.json").read_text())["keys"] == {owner: {"wallets": ["github:me/keys"]}}
+    assert f"The key wallet github:me/keys is recorded in osheaf.json for {names.short(owner)}" in out
     assert wallet.risk("github:me/keys", owner) in err
     log = P.key_log(owner)
     v1 = log.latest().keys
@@ -311,6 +316,87 @@ def test_wallet_keeps_needed_rotation_keys(tmp_path, monkeypatch):
     monkeypatch.setattr("getpass.getpass", lambda prompt: asked.append(prompt) or "correct horse")
     run(*r, "owner", "rotate", "--keys", "github:me/keys")
     assert len(asked) == 1 and len(P.key_log(owner).versions) == 2
+
+
+def test_wallets_of_each_owner(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv(P.PASSPHRASE, "correct horse")
+    repos = json.loads((tmp_path / "gh-state" / "repos.json").read_text())
+    (tmp_path / "gh-state" / "repos.json").write_text(json.dumps({**repos, "me/other": True}))
+    root = make_archive(tmp_path, "--keys", "github:me/keys")
+    first = P.ARCHIVE["owner"]
+    r = ["--root", str(root)]
+    run(*r, "owner", "init", "--keys", "github:me/other")
+    cfg = json.loads((root / "osheaf.json").read_text())
+    second = cfg["owners"][0]
+    assert cfg["keys"] == {first: {"wallets": ["github:me/keys"]}, second: {"wallets": ["github:me/other"]}}
+    assert any(f.startswith(f"{second}/") for f in in_repo(tmp_path, "me/other"))
+    capsys.readouterr()
+    run(*r, "key", "list", "--owner", second)
+    assert capsys.readouterr().out.startswith("The wallet github:me/other holds 4 keys of")
+    # one owner, two wallets: a hint added, the first holding its keys used
+    run(*r, "key", "push", "--wallet", "github:me/other")
+    assert json.loads((root / "osheaf.json").read_text())["keys"][first] == \
+        {"wallets": ["github:me/keys", "github:me/other"]}
+    P.configure(root)
+    assert P.configured_wallet(first).name == "github:me/keys"
+    run(*r, "key", "wallet", "--add", "github:me/missing")
+    run(*r, "key", "wallet", "--remove", "github:me/keys")
+    P.configure(root)
+    assert P.ARCHIVE["keys"][first] == {"wallets": ["github:me/other", "github:me/missing"]}
+    assert P.configured_wallet(first).name == "github:me/other"
+    capsys.readouterr()
+    run(*r, "key", "wallet")
+    assert capsys.readouterr().out == f"The keys of {names.short(first)} are looked for in, in order:\n" \
+        "  github:me/other    osheaf.json\n  github:me/missing  osheaf.json\n"
+    run(*r, "key", "wallet", "--remove", "github:me/missing")
+    with pytest.raises(SystemExit, match="GitHub wallets only"):
+        run(*r, "key", "wallet", "--add", "command")
+    with pytest.raises(SystemExit, match="not an owner of this archive"):
+        run(*r, "key", "wallet", "--owner", "a" * 52, "--add", "github:me/keys")
+    # the person's wallets, in the configuration file
+    user = tmp_path / "config" / "opensheaf" / "config.json"
+    user.parent.mkdir(parents=True, exist_ok=True)
+    user.write_text(json.dumps({"other": 1}))
+    run(*r, "key", "wallets", "--add", "github:me/keys")
+    run(*r, "key", "wallets", "--add", "github:me/nothing")
+    assert json.loads(user.read_text()) == {"other": 1, "wallets": ["github:me/keys", "github:me/nothing"]}
+    capsys.readouterr()
+    run(*r, "key", "wallets")
+    out = capsys.readouterr().out.splitlines()
+    assert out[0] == "github:me/other (osheaf.json):"
+    assert sorted(x.split() for x in out[1:3]) == sorted([[names.short(first), "1", "key", "passphrase"],
+                                                          [names.short(second), "4", "keys", "passphrase"]])
+    assert out[3] == f"github:me/keys ({user}):" and out[4].split() == [names.short(first), "4", "keys", "passphrase"]
+    assert out[5] == f"github:me/nothing ({user}):" and out[6].startswith("  cannot be read") or out[6] == "  holds no key"
+    run(*r, "key", "wallet", "--owner", first, "--remove", "github:me/other")
+    P.configure(root)
+    assert P.configured_wallet(first).name == "github:me/keys"
+    run(*r, "key", "wallets", "--remove", "github:me/nothing")
+    assert json.loads(user.read_text())["wallets"] == ["github:me/keys"]
+    with pytest.raises(SystemExit, match="not one of your wallets"):
+        run(*r, "key", "wallets", "--remove", "github:me/nothing")
+    # the earlier forms: one wallet for the archive, and the user's "keys"
+    user.write_text(json.dumps({"keys": {"wallet": "github:me/keys"}}))
+    cfg = json.loads((root / "osheaf.json").read_text())
+    cfg["keys"] = {"wallet": "github:me/other"}
+    (root / "osheaf.json").write_text(json.dumps(cfg, indent=2) + "\n")
+    P.configure(root)
+    assert P.configured_wallet(second).name == "github:me/other"
+    assert P.configured_wallet(first).name == "github:me/other"     # hinted, and holds a key of it
+    monkeypatch.setattr(wallet.GitHubWallet, "entries", lambda self, owner=None: [] if self.repo == "me/other"
+                        else [(owner, "k")])
+    assert P.configured_wallet(first).name == "github:me/keys"      # the user's, holding its keys
+    with pytest.raises(SystemExit, match="every owner"):
+        run(*r, "key", "wallet", "--owner", second, "--remove", "github:me/other")
+    monkeypatch.setenv(wallet.WALLET, "github:me/env")
+    assert P.configured_wallet(first).name == "github:me/env"
+    monkeypatch.delenv(wallet.WALLET)
+    # a command wallet: never in osheaf.json
+    cfg["keys"] = {second: {"wallets": ["command"]}}
+    (root / "osheaf.json").write_text(json.dumps(cfg, indent=2) + "\n")
+    P.configure(root)
+    with pytest.raises(SystemExit, match="configures a command wallet"):
+        P.configured_wallet(first)
 
 
 def test_clipboard_round_trip(tmp_path, monkeypatch, capsys):
@@ -621,6 +707,9 @@ def test_enroll_another_passkey(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(passkey, "OPEN", fake_browser(opened, cred="YW5vdGhlci1wcm92aWRlcg"))
     run(*r, "key", "enroll", "--new-passkey")
     assert all(t.count("wrap passkey prf rp=unlock.opensheaf.org") == 2 for t in in_repo(tmp_path).values())
+    capsys.readouterr()
+    run(*r, "key", "wallets")
+    assert capsys.readouterr().out.splitlines()[1].split()[1:] == ["4", "keys", "passphrase,", "2", "passkeys"]
 
 
 def test_forged_answers_are_not_kept(tmp_path, monkeypatch, capsys):
@@ -902,6 +991,6 @@ def test_no_key_store(tmp_path, monkeypatch, capsys):
     assert len([q for q in opened if q.get("mode") == "unlock"]) == unlocks + 2
     assert "memory, for this command only" in capsys.readouterr().err
     assert reads == [] and local_keys(tmp_path, owner) == [] and P.verify_errors() == []
-    monkeypatch.setattr(P, "configured_wallet", lambda: None)
+    monkeypatch.setattr(P, "configured_wallet", lambda owner=None: None)
     with pytest.raises(SystemExit, match="configure a key wallet"):
         deposit(root, "p", "three")

@@ -1153,6 +1153,78 @@ def test_takedown_removes_the_pages(archive):
     assert P.verify_errors() == []
 
 
+def test_relabel(tmp_path, capsys):
+    root = tmp_path / "a"
+    make_archive(root)
+    pdf = tmp_path / "p.pdf"
+    pdf.write_bytes(b"%PDF-1.4 p")
+    r = ["--root", str(root)]
+    paper = ["--pdf", str(pdf), "--no-source", "x", "--title", "T", "--author", "Doe, Jane"]
+    run(*r, "deposit", "old", *paper, "--new")
+    run(*r, "deposit", "other", *paper, "--new")
+    run(*r, "collect")
+    obj_id = P.LABELS["old"]
+    _, nm, owner = obj_id.split(":")
+    (root / "site" / "old").mkdir(parents=True)
+    (root / "site" / "old" / "old.html").write_text('<img src="old-1.png">')
+    (root / "site" / "old" / "old-1.png").write_bytes(b"png")
+    capsys.readouterr()
+    run(*r, "label", "old", "new")
+    out = capsys.readouterr().out
+    assert out.startswith(f"Done: {obj_id} is labelled new, no longer old.\n" \
+        "Its old address paper/old/ leads to paper/new/ (osheaf.json, formerAddresses).\n")
+    cfg = json.loads((root / "osheaf.json").read_text())
+    assert cfg["formerAddresses"] == {"old": obj_id}
+    disc = json.loads((root / "opensheaf.json").read_text())
+    assert next(o for o in disc["objects"] if o["id"] == obj_id)["label"] == "new"
+    assert "new" in (root / "names" / f"{nm[:2]}.json").read_text()
+    assert "T" in (root / "paper" / "new" / "index.html").read_text()
+    moved = (root / "paper" / "old" / "index.html").read_text()
+    assert P.REDIRECT_MARK in moved and 'url=../new/' in moved and "https://example.org/T/paper/new/" in moved
+    assert "paper/old/" not in (root / "sitemap.xml").read_text()
+    assert (root / "site" / "new" / "new.html").read_text() == '<img src="old-1.png">'
+    assert (root / "site" / "new" / "old-1.png").exists()
+    assert "url=../new/new.html" in (root / "site" / "old" / "old.html").read_text()
+    assert P.verify_errors() == []
+    pdf.write_bytes(b"%PDF-1.4 p2")
+    run(*r, "deposit", "new", *paper, "--changes", "Typos.")
+    d = P.obj_dir(obj_id)
+    inv = P.load_inventory(d)
+    assert P.read_json(d, inv, "datacite.json", "v1")["url"] == "https://example.org/T/paper/old/"
+    assert P.read_json(d, inv, "datacite.json")["url"] == "https://example.org/T/paper/new/"
+    run(*r, "label", "new", "newer")
+    assert json.loads((root / "osheaf.json").read_text())["formerAddresses"] == {"new": obj_id, "old": obj_id}
+    assert "url=../newer/" in (root / "paper" / "old" / "index.html").read_text()
+    assert "url=../newer/" in (root / "paper" / "new" / "index.html").read_text()
+    assert "url=../newer/newer.html" in (root / "site" / "old" / "old.html").read_text()
+    run(*r, "label", "newer", "old")
+    assert json.loads((root / "osheaf.json").read_text())["formerAddresses"] == {"new": obj_id, "newer": obj_id}
+    assert P.REDIRECT_MARK not in (root / "paper" / "old" / "index.html").read_text()
+    assert (root / "site" / "old" / "old.html").read_text() == '<img src="old-1.png">'
+    for bad, why in ((["old", "other"], "label of another line"), (["old", "Bad_Label"], "must match"),
+                     (["main", "--unset"], "main catalogue"), (["old"], "give the new label")):
+        with pytest.raises(SystemExit, match=why):
+            run(*r, "label", *bad)
+    run(*r, "label", "main", "papers")
+    assert json.loads((root / "osheaf.json").read_text())["mainCollection"] == "papers"
+    run(*r, "collect")
+    run(*r, "label", "--owner", owner, "jane-doe")
+    disc = json.loads((root / "opensheaf.json").read_text())
+    assert next(o for o in disc["objects"] if o["kind"] == "owner")["label"] == "jane-doe"
+    assert "jane-doe" not in json.dumps(json.loads((root / "osheaf.json").read_text()).get("formerAddresses"))
+    run(*r, "label", "--owner", owner, "--unset")
+    assert "label" not in next(o for o in json.loads((root / "opensheaf.json").read_text())["objects"]
+                               if o["kind"] == "owner")
+    run(*r, "label", "old", "--unset")
+    assert "T" in (root / "paper" / nm / "index.html").read_text()
+    assert "url=../" + nm + "/" in (root / "paper" / "old" / "index.html").read_text()
+    assert P.verify_errors() == []
+    run(*r, "takedown", obj_id, "--reason", "At the request of the holder of the rights.", "--yes")
+    assert json.loads((root / "osheaf.json").read_text())["formerAddresses"] == {"main": P.LABELS["papers"]}
+    assert not (root / "paper" / "old").exists() and not (root / "site" / "old").exists()
+    assert P.verify_errors() == []
+
+
 def test_texmacs_index_with_landing_pages(tmp_path):
     """A TeXmacs index: index.tm with uniform entries, and the landing pages,
     from the archive's own template, and the sitemap of the website."""

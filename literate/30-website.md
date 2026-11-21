@@ -426,6 +426,7 @@ sheets gets no stray `style.css`.
             shutil.copyfile(template_path("style.css"), root_out / "style.css")
         <<write the pages of the owners>>
         <<write the sitemap>>
+        <<the pages at the former addresses of lines>>
         <<remove the pages of former lines>>
         return len(written)
 
@@ -952,6 +953,42 @@ a folder of a larger site, as `https://mgubi.org/papers/`, has the line
     sm.append("</urlset>")
     (root_out / "sitemap.xml").write_text("\n".join(sm) + "\n", encoding="utf-8")
 
+A line whose label changed (`osheaf label`, in the chapter on the
+[archive](10-archive.md)) had its page at another address, which
+descriptions already deposited give and readers have kept. `osheaf.json`
+records these addresses in `formerAddresses`, each mapped to its line; at
+each one that no page of a line now takes, the website writes a small page
+that sends the reader to the line's page, by a link and by the `refresh`
+of HTML (a static site has no other redirect), with the new address as
+canonical and nothing for search engines to index. It is not listed in the
+sitemap. A former address of a line that has no page any more gets
+nothing, and is removed below like any page.
+
+    # in the pages at the former addresses of lines:
+    moved = []
+    for address, obj_id in sorted((P.ARCHIVE.get("formerAddresses") or {}).items()):
+        if address in written or obj_id not in pages or not P.LABEL_RE.match(address):
+            continue
+        slug = LINES[obj_id].slug
+        out = root_out / "paper" / address / "index.html"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(redirect_page(f"../{slug}/", f"{base}paper/{slug}/"), encoding="utf-8")
+        moved.append(address)
+
+The page is the same for the HTML version of a document, which `osheaf
+label` leaves at its old place in `site/`. It is marked, so that the tools
+tell it from a page of their own: a page at a former address may be
+replaced, a page of the curator's may not.
+
+    # in writing the website:
+    def redirect_page(href, canonical):
+        """A page sending its reader to HREF (relative), whose address is now CANONICAL."""
+        return (f"<!DOCTYPE html>\n{P.REDIRECT_MARK}\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n"
+                f"<title>Moved</title>\n<link rel=\"canonical\" href=\"{esc(canonical)}\">\n"
+                f"<meta name=\"robots\" content=\"noindex\">\n"
+                f"<meta http-equiv=\"refresh\" content=\"0; url={esc(href)}\">\n</head>\n"
+                f"<body><p>This page has moved to <a href=\"{esc(href)}\">{esc(canonical)}</a>.</p></body>\n</html>\n")
+
 A line that has no page any more loses it: one taken down (section 13.2
 asks that a takedown delete it from the presentation files), one that left
 every collection and lost its label, one whose label changed. Its page is
@@ -961,7 +998,7 @@ are pages: files left in `paper/` or `owner/` by others (the `.DS_Store`
 of macOS) are not touched.
 
     # in remove the pages of former lines:
-    for folder, keep in (("paper", set(written)), ("owner", set(owner_pages))):
+    for folder, keep in (("paper", set(written) | set(moved)), ("owner", set(owner_pages))):
         for p in (root_out / folder).glob("*") if (root_out / folder).exists() else []:
             if p.is_dir() and p.name not in keep:
                 shutil.rmtree(p)

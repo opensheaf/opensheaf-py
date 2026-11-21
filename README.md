@@ -201,12 +201,26 @@ osheaf key forget --from-wallet --used
 ```
 
 The `key` commands name the wallet with `--wallet github:OWNER/REPO` (or
-`--wallet command`); otherwise it is configured, the first of these that
-does: the environment variable `OPENSHEAF_WALLET` (text, or JSON as
-below); `"keys"` in your configuration file `~/.config/opensheaf/config.json`
-(`$XDG_CONFIG_HOME/opensheaf/config.json`); `"keys"` in `osheaf.json`
-(`{"wallet": "github:me/opensheaf-keys"}`, written by `init`). A command
-wallet is configured only in the first two, as in
+`--wallet command`); otherwise it is configured. Wallets and owners are
+many to many: a wallet may hold the keys of several owners (an
+institution's), several people may share one owner's keys in one wallet
+(each with a passkey of their own), and an owner's keys may be in several
+wallets. Your configuration file `~/.config/opensheaf/config.json`
+(`$XDG_CONFIG_HOME/opensheaf/config.json`) lists the wallets you read,
+`{"wallets": ["github:me/opensheaf-keys", "github:institute/keys"]}`
+(`osheaf key wallets --add|--remove`); the archive's `osheaf.json` hints,
+for each owner, the wallets that hold its keys, `"keys": {"<owner>":
+{"wallets": [...]}}` (written by `init`, `owner init|rotate --keys` and
+`key push --wallet`, changed with `osheaf key wallet --owner O
+--add|--remove`). The keys of an owner are looked for in its hinted
+wallets, then in yours, in order: the first that holds keys of the owner
+is used. The environment variable `OPENSHEAF_WALLET` (text, or JSON as
+below) wins over both. `osheaf key wallet` lists the wallets of an owner
+in order; `osheaf key wallets` lists yours with the owners each holds and
+how their keys are locked. The earlier forms, `"keys": {"wallet": ...}`,
+are still read: in `osheaf.json` as a hint for every owner, in your file
+after your `wallets`. A command wallet is configured only in your file or
+the environment, as in
 
 ```json
 {"keys": {"wallet": "command",
@@ -375,6 +389,9 @@ osheaf owner init|rotate|expose|end ... --keys offline|github:OWNER/REPO|command
 osheaf key push|pull|list|enroll|unlock [--wallet WALLET] ; key forget [--from-wallet [--used]] DID...
 osheaf key enroll [--new-passkey] ; key unlock ; key forget --rp opensheaf.org | --passkey CRED
 osheaf key export --clipboard|--stdout [DID] [--encrypt] ; key import --clipboard|--stdin
+osheaf key wallet [--owner OWNER] [--add|--remove github:OWNER/REPO]   (the hints of osheaf.json)
+osheaf key wallets [--add|--remove WALLET]                    (your wallets, the owners each holds)
+osheaf label LINE LABEL | label --owner OWNER LABEL ; label LINE --unset   (old addresses redirect)
 osheaf deposit LABEL SOURCE --pdf PAPER.pdf --title T --author "Family, Given|Affiliation" --new ...
 osheaf deposit LABEL SOURCE --pdf PAPER.pdf ...               (a new version of the line LABEL)
 osheaf deposit LABEL SOURCE.tm --title T --author ...         (TeXmacs: typeset by the archive)

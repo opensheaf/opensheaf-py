@@ -131,7 +131,9 @@ of `parent/parent/` (section 6.5), in any version.
 The command. The object is named by its label or identifier (a key log by
 `sheaf:<owner>:<owner>`); a confirmation is asked, the first eight
 characters of the line's name typed back, unless `--yes`. The landing page
-of the line and its HTML version go with it, at once; the rest of the
+of the line and its HTML version go with it, at once, and so do its former
+addresses (`formerAddresses` of `osheaf.json`, written by `osheaf label`):
+the pages left there, and their record; the rest of the
 presentation files (the home page, the pages of the collections that list
 it, the sitemap) are written again by the [command line](60-command-line.md)
 after the command, as after every change (appendix A.3), and the
@@ -172,8 +174,17 @@ here. The main catalogue keeps its member, a pin of a version now removed
         label = P.label_of(obj_id)
         if label:
             del P.LABELS[label]
-        for folder in (P.ROOT / "paper" / (label or nm), P.SITE / (label or nm)):
+        cfg = json.loads((P.ROOT / P.CONFIG_NAME).read_text(encoding="utf-8"))
+        former = dict(cfg.get("formerAddresses") or {})
+        gone = [a for a, i in former.items() if i == obj_id]
+        for folder in [P.ROOT / "paper" / (label or nm), P.SITE / (label or nm)] + \
+                [P.SITE / a for a in gone if P.LABEL_RE.match(a)]:
             shutil.rmtree(folder, ignore_errors=True)
+        if gone:
+            cfg["formerAddresses"] = {a: i for a, i in former.items() if i != obj_id}
+            if not cfg["formerAddresses"]:
+                del cfg["formerAddresses"]
+            P.write_config(cfg)
         shutil.rmtree(d)
         parent = d.parent
         while parent != P.OCFL and not any(parent.iterdir()):

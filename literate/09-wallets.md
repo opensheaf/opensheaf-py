@@ -59,7 +59,12 @@ the user's.
     ($XDG_CONFIG_HOME/opensheaf/config.json), {"wallet": "github:OWNER/REPO"}
     or {"wallet": "command", "read": "...", "write": "..."}, then by "keys" of
     osheaf.json, which may name a GitHub wallet only: the commands of a command
-    wallet run on the user's machine, and are never read from an archive."""
+    wallet run on the user's machine, and are never read from an archive.
+    Wallets and owners are many to many: the user's configuration lists the
+    wallets the user reads, {"wallets": ["github:OWNER/REPO", ...]}, and
+    "keys" of osheaf.json gives, for each owner, the wallets that hold its keys,
+    as hints, {"<owner>": {"wallets": [...]}}; the keys of an owner are looked
+    for in the hinted wallets, then in the user's, in order."""
 
     import base64
     import json
@@ -145,6 +150,44 @@ configuration. Three places may configure it, the first that does wins:
          "write": "op item create --vault Private --category 'Secure Note' --title 'opensheaf-{owner}-{k}' \"notesPlain=$(cat)\""}
 ```
 
+Wallets and owners are many to many. A wallet may hold the keys of
+several owners (that of an institution, of a group), several people may
+use one wallet (a group sharing one owner, each person with a passkey of
+their own on the same key files: a file has one lock per passkey,
+[chapter 7](07-keys.md)), and the keys of one owner may be in several
+wallets. Choosing a wallet and choosing an owner in it are two steps. So
+the user's configuration lists the wallets the user reads, in order, and
+the archive's configuration gives, for each owner it hosts, the wallets
+that hold its keys:
+
+```json
+~/.config/opensheaf/config.json:
+  {"wallets": ["github:mgubi/opensheaf-keys", "github:institute/opensheaf-keys"]}
+osheaf.json:
+  "keys": {"em4v3kp5...gora": {"wallets": ["github:mgubi/opensheaf-keys"]},
+           "q7tz2m4x...b3ka": {"wallets": ["github:institute/opensheaf-keys"]}}
+```
+
+The entries of `osheaf.json` are *hints*: the wallets are private, and
+the person running the command may read some and not others. Of an
+owner's entry, `{"wallet": ...}` is read as a list of one; the form of
+one wallet for the whole archive, `"keys": {"wallet": ...}`, which earlier
+versions of the tools wrote, is a hint for every owner, after the owner's
+own; and the user's `"keys": {"wallet": ...}` comes after the user's
+`wallets`. The wallet of a command that names none is then:
+
+1. that of `OPENSHEAF_WALLET`, which wins;
+2. else, among the wallets hinted for the owner and then the user's
+   (`candidates`, each once), the first that holds keys of the owner (its
+   folder `<owner>/`, listed); a wallet that cannot be read or listed is
+   passed over; when only one is named it is taken as it is, without a
+   listing; when none holds keys of the owner, the first, where keys of
+   it would go.
+
+A command that names no owner, such as `osheaf owner init` before the
+owner exists, takes the first candidate. A command wallet without a
+`list` command cannot be listed, and is taken as holding the keys.
+
 The commands of a command wallet are run by the shell, on the user's
 machine; an archive is a folder that anyone may have written, cloned
 from anywhere. So they are read only from the user's own configuration,
@@ -159,6 +202,7 @@ wallet refuses (below).
 
     # in wallet: choosing a wallet:
     WALLET = "OPENSHEAF_WALLET"
+    CONFIG_FILE = "osheaf.json"
     REPO = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?/[A-Za-z0-9._-]+")
     COMMANDS = ("read", "write", "list", "forget")
 
@@ -204,21 +248,84 @@ wallet refuses (below).
         raise WalletError(f"a security level is offline, github:OWNER/REPO or command: {spec}")
 
 
-    def configured(config, *, forbidden=()):
-        """The wallet of OPENSHEAF_WALLET, or else of the user's configuration, or else of CONFIG (the `keys`
-        of osheaf.json, a GitHub wallet only), or None."""
+    def user_wallets():
+        """The wallets of the user's configuration, in order: "wallets", then the "wallet" of "keys"."""
+        path = user_config_path()
+        if not path.is_file():
+            return []
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as e:
+            raise WalletError(f"{path}: {e}") from None
+        data = data if isinstance(data, dict) else {}
+        out = [w.strip() for w in data.get("wallets", []) if isinstance(w, str) and w.strip()] \
+            if isinstance(data.get("wallets"), list) else []
+        old = (data.get("keys") or {}).get("wallet") if isinstance(data.get("keys"), dict) else None
+        return out + ([str(old)] if old and str(old) not in out else [])
+
+
+    def _named(e):
+        """The wallets an entry of "keys" names: its "wallets", and its "wallet"."""
+        if not isinstance(e, dict):
+            return []
+        out = [w for w in e.get("wallets", []) if isinstance(w, str)] if isinstance(e.get("wallets"), list) else []
+        return out + ([str(e["wallet"])] if e.get("wallet") else [])
+
+
+    def hints(config, owner=None):
+        """The wallets CONFIG (the `keys` of osheaf.json) hints for OWNER: its own, then those for every owner."""
         config = config if isinstance(config, dict) else {}
-        if config.get("wallet") == "command" or any(c in config for c in COMMANDS):
-            raise WalletError(f'osheaf.json configures a command wallet ("keys"), whose commands would run on this '
-                              f"machine: they are read only from your own configuration. Move \"keys\" to "
-                              f"{user_config_path()} (or to {WALLET}), and leave osheaf.json without it")
+        out = []
+        for w in (_named(config.get(owner)) if owner else []) + _named(config):
+            if w not in out:
+                out.append(w)
+        return out
+
+
+    def check_archive_config(config):
+        """Refuse a command wallet in CONFIG, the `keys` of osheaf.json, in any of its entries."""
+        config = config if isinstance(config, dict) else {}
+        for e in [config] + [v for k, v in config.items() if names.OWNER_NAME.match(k) and isinstance(v, dict)]:
+            if "command" in _named(e) or any(c in e for c in COMMANDS):
+                raise WalletError(f'osheaf.json configures a command wallet ("keys"), whose commands would run on '
+                                  f"this machine: they are read only from your own configuration. Move \"keys\" to "
+                                  f"{user_config_path()} (or to {WALLET}), and leave osheaf.json without it")
+
+
+    def candidates(config, owner=None):
+        """[(wallet, place)]: that of OPENSHEAF_WALLET alone; or else those CONFIG (the `keys` of osheaf.json)
+        hints for OWNER, then the user's, each once."""
+        check_archive_config(config)
         env = os.environ.get(WALLET, "").strip()
         if env:
-            return parse(env, forbidden=forbidden)
-        user = user_config()
-        if user.get("wallet"):
-            return parse(str(user["wallet"]), user, forbidden=forbidden)
-        return parse(config.get("wallet"), forbidden=forbidden)
+            return [(env, WALLET)]
+        out = [(w, CONFIG_FILE) for w in hints(config, owner)]
+        return out + [(w, str(user_config_path())) for w in user_wallets() if w not in {x for x, _ in out}]
+
+
+    def configured(config, *, forbidden=(), owner=None):
+        """The wallet of OWNER: that of OPENSHEAF_WALLET, or else the first candidate holding keys of OWNER
+        (the only one, without a listing), or else the first candidate, or None."""
+        named = candidates(config, owner)
+        wallets = []
+        for spec, _ in named:
+            try:
+                w = parse(spec, forbidden=forbidden)
+            except WalletError:
+                if len(named) == 1:
+                    raise
+                continue
+            if w is not None:
+                wallets.append(w)
+        if len(wallets) <= 1 or not owner:
+            return wallets[0] if wallets else None
+        for w in wallets:
+            try:
+                if w.entries(owner):
+                    return w
+            except WalletError:
+                continue
+        return wallets[0]
 
 The archive's own repositories
 ------------------------------
@@ -452,6 +559,11 @@ summary of the user's configuration and of command wallets.
               "list":   "...",                          optional: prints "<owner> <k>" per key
               "forget": "..."}}                         optional: removes a key
 
+    {"wallets": ["github:OWNER/REPO", "command", ...]}  the key wallets you read, in order: the
+                                                        keys of an owner are looked for in those
+                                                        osheaf.json hints for it, then in these
+                                                        (osheaf key wallets --add|--remove)
+
     The commands run in the shell; {owner} is the owner name, {k} the 16 characters
     that name the key, {kind} current or rotation. read prints the key file as it was
     written, and fails or prints nothing for a key it does not hold. A command wallet is
@@ -643,6 +755,29 @@ read as either kind: a command wallet may file the two apart.
             text = read_any(wallet, o, kid)
             f = describe(text)
             out.append((o, kid, f.get("kind", "?"), f.get("key", "?"), f.get("version", ""), locks(text)))
+        return out
+
+For `osheaf key wallets`, `owners_held` sums a wallet up by owner: how
+many keys it holds of each, and how they are locked, in words: by the
+passphrase, by so many passkeys (counted by credential, over the owner's
+keys: each person or device family that enrolled one), or not at all.
+
+    # in wallet: keys in and out of a wallet:
+    def owners_held(wallet, owner=None):
+        """[(owner, number of keys, locks in words)] of the owners whose keys WALLET holds."""
+        by = {}
+        for o, kid in wallet.entries(owner):
+            text = read_any(wallet, o, kid)
+            n, phrase, creds, bare = by.get(o, (0, False, set(), 0))
+            held = locks(text)
+            by[o] = (n + 1, phrase or "passphrase" in held, creds | {p.cred for p in keys.passkeys_of(text)},
+                     bare + (not held))
+        out = []
+        for o, (n, phrase, creds, bare) in by.items():
+            words = (["passphrase"] if phrase else []) + \
+                ([f"{len(creds)} passkey{'s' if len(creds) != 1 else ''}"] if creds else []) + \
+                ([f"{bare} without a lock"] if bare else [])
+            out.append((o, n, ", ".join(words) or "no lock"))
         return out
 
 The clipboard
