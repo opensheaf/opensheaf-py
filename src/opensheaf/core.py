@@ -1352,12 +1352,24 @@ def notice(args):
         sys.exit(f"{args.id} has no document version {args.about}")
     note, add = note_from(args.text, args.file, "notices")
     note.update(documentVersion=args.about, date=args.date or TODAY)
+    earlier = read_json(d, inv, OBJ).get("notices", [])
+    r = getattr(args, "replaces", None)
+    if r is not None:
+        if not 1 <= r <= len(earlier):
+            sys.exit(f"{args.id} has no notice {r} (it has {len(earlier)})")
+        if earlier[r - 1]["documentVersion"] != args.about:
+            sys.exit(f"notice {r} is about document version {earlier[r - 1]['documentVersion']}, "
+                     f"not {args.about}: a notice replaces one about the same version (section 4.2)")
+        if any(x.get("replaces") == r for x in earlier):
+            sys.exit(f"notice {r} is already replaced (section 4.2)")
+        note["replaces"] = r
 
     def change(dc, obj):
         obj["notices"] = obj.get("notices", []) + [note]
     inv = description_version(args.id, change, args.message or
                               f"Notice about document version {args.about} (description-only version)", add, ack(args))
-    print(f"{args.id}: {inv['head']} (notice about version {args.about})")
+    print(f"{args.id}: {inv['head']} (notice {len(earlier) + 1}, about version {args.about}"
+          + (f", replacing notice {r})" if r is not None else ")"))
 
 
 def withdraw(args):
@@ -2161,8 +2173,19 @@ def document_version_errors(obj_id, d, inv):
                     if later:
                         errors.append(f"{ver} history entry {h} is not the last object version of {k}")
         cur = obj.get("notices", [])
-        if any(x not in cur for x in notices):
-            errors.append(f"{ver} drops or changes an earlier notice")
+        if cur[:len(notices)] != notices:
+            errors.append(f"{ver} drops, changes or moves an earlier notice")
+        else:
+            for k in range(len(notices), len(cur)):
+                r = cur[k].get("replaces")
+                if r is None:
+                    continue
+                if not isinstance(r, int) or not 1 <= r <= k:
+                    errors.append(f"{ver} notice {k + 1} replaces no earlier notice ({r})")
+                elif cur[r - 1].get("documentVersion") != cur[k].get("documentVersion"):
+                    errors.append(f"{ver} notice {k + 1} replaces notice {r}, about another document version")
+                elif any(y.get("replaces") == r for y in cur[:k]):
+                    errors.append(f"{ver} notice {k + 1} replaces notice {r}, which is already replaced")
         notices = cur
         prev_ver = ver
     return errors
@@ -2205,6 +2228,20 @@ def description_errors(d, inv, ver):
 
 
 DOCUMENT_VERSION_FIELDS = ("mainSource", "sourceFormat", "sourcesMissing", "renditions", "toolchain")
+
+
+def notice_warnings(d, inv):
+    """The notices dated after the object version that added them (section 4.2)."""
+    out, before = [], 0
+    for ver, vinfo in inv["versions"].items():
+        notices = (read_json(d, inv, OBJ, ver) or {}).get("notices", [])
+        for k in range(before, len(notices)):
+            date = notices[k].get("date", "")
+            if isinstance(date, str) and date > vinfo["created"][:10]:
+                out.append(f"{ver} notice {k + 1} is dated {date}, after its deposit "
+                           f"({vinfo['created'][:10]}, section 4.2)")
+        before = max(before, len(notices))
+    return out
 
 
 def check_storage(f, schema, disc):
@@ -2459,6 +2496,8 @@ def check_lines(f, found, logs, schema, disc, resolver=None):
         if head.get("kind") in ("document", "collection"):
             for message in document_version_errors(obj_id, d, inv):
                 f.error(place, message)
+            for message in notice_warnings(d, inv):
+                f.warning(place, message)
         log = logs.get(owner)
         if log is None:
             owner_id = names.object_id(owner, owner)

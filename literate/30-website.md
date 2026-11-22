@@ -738,16 +738,20 @@ deposit with Zenodo (appendix A.1) is shown by its record.
     if dc.get("doi"):
         files.append(f'<a href="https://doi.org/{esc(dc["doi"])}">doi:{esc(dc["doi"])}</a>')
 
-The notices come from the latest signed version, and each is shown under
-the version it is about. A notice with a file (a full statement, with
-mathematics or as a PDF) links to it, as stored in that version.
+The notices come from the latest signed version, and each current one is
+shown under the version it is about, with its number; a notice replaced by
+a later one is not, and the one replacing it says so (section 4.2). A
+notice with a file (a full statement, with mathematics or as a PDF) links
+to it, as stored in that version.
 
     # in the notices about a version:
-    for x in notices:
-        if x["documentVersion"] == n:
+    replaced = {x.get("replaces") for x in notices}
+    for k, x in enumerate(notices, 1):
+        if x["documentVersion"] == n and k not in replaced:
             src = line.signed or line.inv["head"]
             link = f' {file_link(root, line, src, x["path"], "statement")}' if x.get("path") else ""
-            out.append(f'<div class="notice"><strong>Notice ({esc(fmt_date(x["date"]))}):</strong> '
+            repl = f', replacing notice {x["replaces"]}' if x.get("replaces") else ""
+            out.append(f'<div class="notice"><strong>Notice {k} ({esc(fmt_date(x["date"]))}{repl}):</strong> '
                        f'{esc(x.get("text", ""))}{link}</div>')
 
 ### Tags for search engines

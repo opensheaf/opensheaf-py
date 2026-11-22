@@ -421,13 +421,24 @@ with the full statement besides (section 4.3).
 osheaf notice kpz-uniqueness --about 2 --text "Theorem 2 is wrong as stated." --file erratum.pdf
 ```
 
+Notices are numbered in the order they are given, from 1. A later notice
+corrects or withdraws an earlier one about the same version by naming its
+number, with `--replaces`; the earlier one is then no longer shown as
+current:
+
+```
+osheaf notice kpz-uniqueness --about 2 --replaces 1 --text "The notice of 3 March is withdrawn: Theorem 2 is correct."
+```
+
     # in the options of osheaf notice:
     nt = sub.add_parser("notice", help="a notice about a document version (description-only)")
     nt.add_argument("id", metavar="LABEL", help="the label of the line")
     nt.add_argument("--about", type=int, required=True, help="the document version it is about")
     nt.add_argument("--text", required=True, help="the notice (plain text)")
     nt.add_argument("--file", help="a file with the full statement (PDF, Markdown, ...)")
-    nt.add_argument("--date", help="default: today")
+    nt.add_argument("--date", help="the date the notice was issued (default: today)")
+    nt.add_argument("--replaces", type=int, metavar="N",
+                    help="the number of an earlier notice about the same version that it corrects or withdraws")
     nt.add_argument("--message")
     nt.add_argument("--i-know", dest="i_know", action="store_true",
                      help="extend versions that are not signed, or are contested (section 7.3)")

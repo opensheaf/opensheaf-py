@@ -402,6 +402,29 @@ it, and verification accepts the result.
         assert P.read_json(d, inv, P.OBJ)["notices"] == [notice]
         assert finish() == []
 
+Notices are numbered by their position, and a later one may replace an
+earlier one about the same document version, once (section 4.2): a
+replacement of a notice about another version, of a notice already
+replaced, or of no earlier notice is an error.
+
+    # in test: the rules of document versions:
+    def test_notices_replace_earlier_ones(archive):
+        first = {"documentVersion": 1, "date": "2026-02-01", "text": "Theorem 2 is wrong as stated."}
+        fix = {"documentVersion": 1, "date": "2026-03-01", "text": "Theorem 2 is right.", "replaces": 1}
+        put("paper-a", 1, FILES1)
+        put("paper-a", 1, FILES1, extra_obj={"notices": [first]}, description_only=True)
+        put("paper-a", 1, FILES1, extra_obj={"notices": [fix]}, description_only=True)
+        put("paper-b", 1, FILES1)
+        put("paper-b", 2, FILES2, extra_obj={"notices": [first]})
+        put("paper-b", 2, FILES2, extra_obj={"notices": [dict(fix, documentVersion=2)]}, description_only=True)
+        put("paper-c", 1, FILES1, extra_obj={"notices": [first, fix]})
+        put("paper-c", 1, FILES1, extra_obj={"notices": [dict(fix, text="Again.")]}, description_only=True)
+        put("paper-d", 1, FILES1, extra_obj={"notices": [dict(fix, replaces=1)]})
+        assert sorted(finish()) == [
+            "paper-b: v3 notice 2 replaces notice 1, about another document version",
+            "paper-c: v2 notice 3 replaces notice 1, which is already replaced",
+            "paper-d: v1 notice 1 replaces no earlier notice (1)"]
+
 The owner catalogue (section 8.3) says so in its `type`, and each member
 pins the latest signed version of its line, whatever document version it
 holds: here `v3`, a version found later. The version presented is the
@@ -1691,7 +1714,8 @@ block.
 
 A second notice about a line that has one keeps the first: the head holds
 both, in the order they were given, and the landing page shows both. A
-later document version keeps them too.
+third replaces the first, which the page then no longer shows; a fourth
+cannot replace it again. A later document version keeps them all.
 
     # in test: the website:
     def test_two_notices_on_a_line(tmp_path):
@@ -1712,10 +1736,17 @@ later document version keeps them too.
         run(*r, "collect")
         page = (root / "paper" / "p" / "index.html").read_text()
         assert "Lemma 2 is wrong as stated." in page and "Lemma 3 is wrong too." in page
+        run(*r, "notice", "p", "--about", "1", "--replaces", "1", "--text", "Lemma 2 is right after all.")
+        with pytest.raises(SystemExit):
+            run(*r, "notice", "p", "--about", "1", "--replaces", "1", "--text", "Again.")
+        run(*r, "collect")
+        page = (root / "paper" / "p" / "index.html").read_text()
+        assert "Lemma 2 is wrong as stated." not in page and "Lemma 3 is wrong too." in page
+        assert "Notice 3" in page and "replacing notice 1" in page
         pdf.write_bytes(b"%PDF-1.4 p2")
         run(*r, "deposit", "p", *paper, "--changes", "Lemmas fixed.")
         inv = P.load_inventory(d)
-        assert len(P.read_json(d, inv, P.OBJ)["notices"]) == 2
+        assert len(P.read_json(d, inv, P.OBJ)["notices"]) == 3
         assert P.verify_errors() == []
 
 A takedown deletes the line from the presentation files (section 13.2): its

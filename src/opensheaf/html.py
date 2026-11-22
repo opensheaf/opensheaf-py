@@ -201,11 +201,13 @@ def version_block(line, ver, shown, notices, root, vetted=None):
     out.append(f'<div class="pin" title="{esc(uri)}">{ver} · pin <code class="copy" data-copy="{esc(uri)}">'
                f'{line.digest(ver)[:32]}…</code> (<a href="{root}ocfl/{P.path_of(line.id)}/'
                f'{ver}/inventory.json">inventory</a>)</div>')
-    for x in notices:
-        if x["documentVersion"] == n:
+    replaced = {x.get("replaces") for x in notices}
+    for k, x in enumerate(notices, 1):
+        if x["documentVersion"] == n and k not in replaced:
             src = line.signed or line.inv["head"]
             link = f' {file_link(root, line, src, x["path"], "statement")}' if x.get("path") else ""
-            out.append(f'<div class="notice"><strong>Notice ({esc(fmt_date(x["date"]))}):</strong> '
+            repl = f', replacing notice {x["replaces"]}' if x.get("replaces") else ""
+            out.append(f'<div class="notice"><strong>Notice {k} ({esc(fmt_date(x["date"]))}{repl}):</strong> '
                        f'{esc(x.get("text", ""))}{link}</div>')
     out.append("</li>")
     return "\n".join(out)

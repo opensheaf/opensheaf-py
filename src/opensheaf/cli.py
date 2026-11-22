@@ -120,7 +120,9 @@ def build_parser():
     nt.add_argument("--about", type=int, required=True, help="the document version it is about")
     nt.add_argument("--text", required=True, help="the notice (plain text)")
     nt.add_argument("--file", help="a file with the full statement (PDF, Markdown, ...)")
-    nt.add_argument("--date", help="default: today")
+    nt.add_argument("--date", help="the date the notice was issued (default: today)")
+    nt.add_argument("--replaces", type=int, metavar="N",
+                    help="the number of an earlier notice about the same version that it corrects or withdraws")
     nt.add_argument("--message")
     nt.add_argument("--i-know", dest="i_know", action="store_true",
                      help="extend versions that are not signed, or are contested (section 7.3)")

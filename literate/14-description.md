@@ -132,8 +132,12 @@ The commands
 A notice is about one document version, possibly not the current one ("the
 proof of Lemma 3 in version 2 is incomplete; see version 3"). It is
 appended to the notices of the head, which every later object version
-keeps unchanged (section 4.2): a notice is never edited, only followed by
-another that corrects it.
+keeps unchanged and in order (section 4.2), so that its position is its
+number: notice 1, 2, ... of the line. A notice is never edited: a later
+notice corrects or withdraws it by naming its number in `replaces`
+(`--replaces`), and must then be about the same document version; a notice
+is replaced at most once. Its `date` is the date its author issued it,
+today unless `--date` says otherwise.
 
     # in add a notice about a document version:
     def notice(args):
@@ -148,12 +152,24 @@ another that corrects it.
             sys.exit(f"{args.id} has no document version {args.about}")
         note, add = note_from(args.text, args.file, "notices")
         note.update(documentVersion=args.about, date=args.date or TODAY)
+        earlier = read_json(d, inv, OBJ).get("notices", [])
+        r = getattr(args, "replaces", None)
+        if r is not None:
+            if not 1 <= r <= len(earlier):
+                sys.exit(f"{args.id} has no notice {r} (it has {len(earlier)})")
+            if earlier[r - 1]["documentVersion"] != args.about:
+                sys.exit(f"notice {r} is about document version {earlier[r - 1]['documentVersion']}, "
+                         f"not {args.about}: a notice replaces one about the same version (section 4.2)")
+            if any(x.get("replaces") == r for x in earlier):
+                sys.exit(f"notice {r} is already replaced (section 4.2)")
+            note["replaces"] = r
 
         def change(dc, obj):
             obj["notices"] = obj.get("notices", []) + [note]
         inv = description_version(args.id, change, args.message or
                                   f"Notice about document version {args.about} (description-only version)", add, ack(args))
-        print(f"{args.id}: {inv['head']} (notice about version {args.about})")
+        print(f"{args.id}: {inv['head']} (notice {len(earlier) + 1}, about version {args.about}"
+              + (f", replacing notice {r})" if r is not None else ")"))
 
 ### Withdrawal
 

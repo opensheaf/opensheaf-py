@@ -587,6 +587,8 @@ checked with its members after every line has its statuses.
     if head.get("kind") in ("document", "collection"):
         for message in document_version_errors(obj_id, d, inv):
             f.error(place, message)
+        for message in notice_warnings(d, inv):
+            f.warning(place, message)
 
 The descriptions are checked against each other and against sections 4.3
 and 4.4. A Creative Commons or arXiv licence must be identified, by SPDX or
@@ -816,14 +818,47 @@ holding its document version, as known when the history was written.
                 if later:
                     errors.append(f"{ver} history entry {h} is not the last object version of {k}")
 
-Every notice of an object version must be present, unchanged, in the next
-one, and so in every later one.
+Every notice of an object version must be present, unchanged and in the
+same order, at the start of the notices of the next one, and so of every
+later one: a notice is numbered by its position, from 1 (section 4.2). A
+new notice may replace an earlier one, by its number, which must be about
+the same document version and not replaced already.
 
     # in check that an object version keeps the earlier notices:
     cur = obj.get("notices", [])
-    if any(x not in cur for x in notices):
-        errors.append(f"{ver} drops or changes an earlier notice")
+    if cur[:len(notices)] != notices:
+        errors.append(f"{ver} drops, changes or moves an earlier notice")
+    else:
+        for k in range(len(notices), len(cur)):
+            r = cur[k].get("replaces")
+            if r is None:
+                continue
+            if not isinstance(r, int) or not 1 <= r <= k:
+                errors.append(f"{ver} notice {k + 1} replaces no earlier notice ({r})")
+            elif cur[r - 1].get("documentVersion") != cur[k].get("documentVersion"):
+                errors.append(f"{ver} notice {k + 1} replaces notice {r}, about another document version")
+            elif any(y.get("replaces") == r for y in cur[:k]):
+                errors.append(f"{ver} notice {k + 1} replaces notice {r}, which is already replaced")
     notices = cur
+
+The date of a notice is the date its author issued it, which should not
+be later than its deposit, the `created` date of the object version that
+added it (section 4.2). A later date is a warning: a notice dated in the
+future, or a mistaken date.
+
+    # in check the descriptions of an object version:
+    def notice_warnings(d, inv):
+        """The notices dated after the object version that added them (section 4.2)."""
+        out, before = [], 0
+        for ver, vinfo in inv["versions"].items():
+            notices = (read_json(d, inv, OBJ, ver) or {}).get("notices", [])
+            for k in range(before, len(notices)):
+                date = notices[k].get("date", "")
+                if isinstance(date, str) and date > vinfo["created"][:10]:
+                    out.append(f"{ver} notice {k + 1} is dated {date}, after its deposit "
+                               f"({vinfo['created'][:10]}, section 4.2)")
+            before = max(before, len(notices))
+        return out
 
 Collections (14.5)
 ------------------
