@@ -2264,9 +2264,11 @@ def description_errors(d, inv, ver):
         if k not in dc:
             out.append(f"datacite.json lacks {k}")
     for r in dc.get("rightsList", []):
-        if r.get("rightsIdentifier") is None and r.get("rights", "").lower().startswith(("creative", "arxiv")) \
-                and not r.get("rightsUri"):
-            out.append("licence without SPDX identifier and without rightsUri")
+        ident = r.get("rightsIdentifier")
+        if ident is not None and r.get("rightsIdentifierScheme") != "SPDX":
+            out.append(f"rightsList: {ident} is not given as an SPDX identifier (section 4.4)")
+        elif ident is not None and ident != ident.lower():
+            out.append(f"rightsList: {ident} is not in lower case (section 4.4)")
     for note in [obj.get("changes"), obj.get("sourcesMissing"), obj.get("licence")] + \
             obj.get("notices", []) + [obj.get("withdrawal", {}).get("reason")]:
         if note and note.get("path") and note["path"] not in logical:

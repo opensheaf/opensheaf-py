@@ -113,8 +113,9 @@ def mirror_line(nm, owner, where, *, licence_checked=False, label=None):
         for n in range(held + 1, target + 1):
             dc = source.read("datacite.json", n) or {}
             if not licence_checked and not is_open(dc.get("rightsList")):
-                sys.exit(f"{obj_id} v{n}: its licence does not clearly allow redistribution (section 11.2); "
-                         "give --licence-checked if it is allowed otherwise")
+                print(f"Warning: {obj_id} v{n}: its licence is not one known to allow redistribution; the archive "
+                      "answers for the copy (section 11.2); give --licence-checked if it is allowed",
+                      file=sys.stderr)
         from . import takedown
         if not held and not takedown.may_return(obj_id, lambda n, dig: source.digest(n) == dig):
             sys.exit(f"{obj_id} was taken down here: it returns only from a copy holding the version its "

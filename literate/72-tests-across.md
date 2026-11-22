@@ -500,20 +500,21 @@ Mirrors and key logs
 
 A library mirrors an openly licensed paper of the authors (section 11):
 every version up to the latest signed, with the authors' key log beside
-it; a paper whose licence does not allow redistribution is refused. The
+it; a paper whose licence is not known to allow redistribution is copied
+with a warning, since the library answers for the copy (section 11.2). The
 mirror is listed like any line, without `mirrorOf`; the owner catalogue
 leaves it out, since its owner does not write here. Run again, the mirror
 gets the new versions; a version without signatures is not added
 (section 7.5).
 
     # in across: mirrors and key logs:
-    def test_mirror(tmp_path):
+    def test_mirror(tmp_path, capsys):
         a, lib = make(tmp_path, "authors"), make(tmp_path, "library")
         deposit(a, "open", "one", new=True)
         deposit(a, "open", "two")
         deposit(a, "closed", "closed", new=True, rights="All rights reserved")
-        with pytest.raises(SystemExit, match="does not clearly allow redistribution"):
-            run("--root", str(lib), "mirror", uri(a, "closed"))
+        run("--root", str(lib), "mirror", uri(a, "closed"))
+        assert "not one known to allow redistribution" in capsys.readouterr().err
         run("--root", str(lib), "mirror", uri(a, "open"), "--label", "open-copy")
         obj_id = line(a, "open")
         a_owner = obj_id.split(":")[2]

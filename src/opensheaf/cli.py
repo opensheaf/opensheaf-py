@@ -190,7 +190,7 @@ def build_parser():
     mi.add_argument("--label", help="a label for the line here")
     mi.add_argument("--all", action="store_true", help="bring every mirror up to date")
     mi.add_argument("--licence-checked", action="store_true",
-                    help="redistribution is allowed although a licence is not an open one")
+                    help="redistribution is allowed although a licence is not one known to be open: no warning")
     mi.set_defaults(func=None)
     for name, helptext in (("branch", "a branch of a signed version of another line (section 9)"),
                            ("accept", "an accepted copy, listed in a selection (section 9.6)")):

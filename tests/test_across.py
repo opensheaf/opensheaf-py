@@ -369,13 +369,13 @@ def test_featured_collection_on_the_home_page(tmp_path):
         run("--root", str(a), "index")
 
 
-def test_mirror(tmp_path):
+def test_mirror(tmp_path, capsys):
     a, lib = make(tmp_path, "authors"), make(tmp_path, "library")
     deposit(a, "open", "one", new=True)
     deposit(a, "open", "two")
     deposit(a, "closed", "closed", new=True, rights="All rights reserved")
-    with pytest.raises(SystemExit, match="does not clearly allow redistribution"):
-        run("--root", str(lib), "mirror", uri(a, "closed"))
+    run("--root", str(lib), "mirror", uri(a, "closed"))
+    assert "not one known to allow redistribution" in capsys.readouterr().err
     run("--root", str(lib), "mirror", uri(a, "open"), "--label", "open-copy")
     obj_id = line(a, "open")
     a_owner = obj_id.split(":")[2]

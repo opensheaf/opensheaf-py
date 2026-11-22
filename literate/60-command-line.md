@@ -562,8 +562,9 @@ osheaf collection sync issue-1 --from issue-1.yaml
 `mirror` is what a library does (section 11): it copies a line written
 elsewhere, with the key log of its owner, up to its latest signed version,
 and brings it up to date when run again; `--all` updates every mirror.
-Every version copied must allow redistribution, or `--licence-checked`
-says that it is allowed otherwise.
+The archive answers for having the right to redistribute what it copies
+(section 11.2): a version not under a licence known to be open is copied
+with a warning, which `--licence-checked` silences.
 
 ```
 osheaf mirror "sheaf:zzgdggwl...?at=https%3A%2F%2Fmgubi.org%2Fpapers%2F" --label duch-gubinelli
@@ -577,7 +578,7 @@ osheaf mirror --all
     mi.add_argument("--label", help="a label for the line here")
     mi.add_argument("--all", action="store_true", help="bring every mirror up to date")
     mi.add_argument("--licence-checked", action="store_true",
-                    help="redistribution is allowed although a licence is not an open one")
+                    help="redistribution is allowed although a licence is not one known to be open: no warning")
     mi.set_defaults(func=None)
 
 `branch` makes a branch of a signed version of another line, under the

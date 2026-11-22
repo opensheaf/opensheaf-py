@@ -43,9 +43,11 @@ version:
 4. a copy that does not agree with the mirror is a fork of the line,
    reported and never recorded: the mirror keeps the side it holds.
 
-Copying is redistribution, which the licence of every version copied must
-allow (section 11.2); key logs, inventories and signature files are
-metadata under CC0, copied freely.
+Copying is redistribution, and the archive keeping a mirror answers for
+having the right to it, by the licences, the rights holders' agreement or
+law (section 11.2); the tool only warns when the licences do not show it.
+Key logs, inventories and signature files are metadata under CC0, copied
+freely.
 
 A line taken down here returns only from a copy holding the version its
 tombstone pins (section 13.2), and its tombstone is then dropped
@@ -103,9 +105,11 @@ records it (section 4.4): by its SPDX identifier, written in lower case,
 or by the URL of the licence. The list is short on purpose: licences that
 certainly allow anyone to redistribute the work unchanged. arXiv's
 default licence, for instance, gives arXiv alone the right to distribute,
-and is not among them. Section 11.2 leaves which licences allow a mirror
-open (#34); a curator who knows that redistribution is allowed otherwise
-(by the authors' permission) says so with `--licence-checked`.
+and is not among them. The list is the tool's, not the format's: section
+11.2 leaves the judgement to the archive. A version under none of these
+licences is copied with a warning; a curator who knows that redistribution
+is allowed otherwise (by the authors' agreement) silences it with
+`--licence-checked`.
 
     # in mirrors: the licences known to be open:
     OPEN = {"cc-by-4.0", "cc-by-sa-4.0", "cc0-1.0", "gpl-3.0-only", "gpl-3.0-or-later", "cc-by-3.0"}
@@ -246,8 +250,8 @@ version stays out, and so does anything unsigned after it.
 
 The mirror held, if any, must agree with the copy (section 11.1): the
 copy's inventory of the mirror's head is the same file. Every version
-copied must be openly licensed, or the curator must have said so
-(section 11.2). A tombstone of the line lets it return only from a copy
+copied that is not under a licence known to be open is reported, unless
+the curator has said that the copy is allowed (section 11.2). A tombstone of the line lets it return only from a copy
 holding the version it pins (section 13.2).
 
     # in mirrors: check the mirror held, the licences and the tombstone:
@@ -262,8 +266,9 @@ holding the version it pins (section 13.2).
     for n in range(held + 1, target + 1):
         dc = source.read("datacite.json", n) or {}
         if not licence_checked and not is_open(dc.get("rightsList")):
-            sys.exit(f"{obj_id} v{n}: its licence does not clearly allow redistribution (section 11.2); "
-                     "give --licence-checked if it is allowed otherwise")
+            print(f"Warning: {obj_id} v{n}: its licence is not one known to allow redistribution; the archive "
+                  "answers for the copy (section 11.2); give --licence-checked if it is allowed",
+                  file=sys.stderr)
     from . import takedown
     if not held and not takedown.may_return(obj_id, lambda n, dig: source.digest(n) == dig):
         sys.exit(f"{obj_id} was taken down here: it returns only from a copy holding the version its "
