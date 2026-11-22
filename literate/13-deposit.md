@@ -330,8 +330,9 @@ not listed among the labels.
 ### The number of the new version
 
 A new document gets document version 1. An existing object must be a
-document, and not withdrawn (section 13.1: a withdrawal is final; a
-retracted paper is not corrected by a new version). The new number is one
+document. A withdrawn one may get a new version: it reinstates the line,
+while the versions withdrawn stay withdrawn (section 13.1), and the new
+version's change note should say why the work is back. The new number is one
 more than the highest so far, whatever the order of the history. A deposit
 always gets a new number: it is meant for files not deposited before, which
 is when section 4.2 assigns one; changing only the description of an
@@ -354,7 +355,8 @@ evidence of its branch point) are kept unchanged, byte for byte, and its
         if prev_obj["kind"] != "document":
             sys.exit(f"{label} is not a document")
         if prev_obj.get("status") == "withdrawn":
-            sys.exit(f"{label} is withdrawn (section 13.1): a withdrawn document gets no new versions")
+            print(f"Note: {label} is withdrawn; this version reinstates it, and the versions withdrawn stay "
+                  "withdrawn (section 13.1)", file=sys.stderr)
         doc_version = max(doc_version_of(d, inv, v) for v in inv["versions"]) + 1
         owner = prev_obj.get("owner")
 

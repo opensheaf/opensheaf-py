@@ -177,9 +177,11 @@ Withdrawal (section 13.1) retracts a document: it is not a deletion. The
 content stays, the history remains verifiable, and readers see the
 withdrawal with the document. The status belongs to the object, whatever
 version its head holds; the date is written twice, in `object.json` and as
-the `Withdrawn` date of `datacite.json`, and the two must agree. A
-withdrawn document gets no new document versions (see the
-[deposit](13-deposit.md)), but may still get notices or relations.
+the `Withdrawn` date of `datacite.json`, and the two must agree. The
+withdrawal covers the versions deposited so far; the description-only
+versions after it (notices, relations) keep it, and a new document version
+(see the [deposit](13-deposit.md)) reinstates the document, the versions
+withdrawn staying withdrawn.
 
     # in withdraw a document:
     def withdraw(args):

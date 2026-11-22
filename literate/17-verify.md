@@ -697,6 +697,9 @@ version is a result too, with the line's status when it is withdrawn.
         f.result(place, f"latest signed version v{signed}")
         if (read_json(d, inv, OBJ, f"v{signed}") or {}).get("status") == "withdrawn":
             f.result(place, "withdrawn (section 13.1)")
+        elif withdrawn := withdrawn_versions(d, inv, f"v{signed}"):
+            f.result(place, f"reinstated; withdrawn: document version(s) {', '.join(map(str, sorted(withdrawn)))} "
+                     "(section 13.1)")
 
 ### Document versions
 
@@ -713,7 +716,7 @@ were missing.
         errors = []
         seen, files_of, missing_of, highest, first = {}, {}, {}, 0, 1
         fields_of, external_of = {}, {}
-        had_history, notices, prev_ver = False, [], None
+        had_history, notices, prev_ver, prev_obj = False, [], None, None
 
         def current_before(at):
             """The current document version as of object version AT, or None."""
@@ -726,9 +729,10 @@ were missing.
             <<the files of an object version that belong to its document version>>
             <<check the number and the files of a document version>>
             <<check the fields that belong to a document version>>
+            <<check that a withdrawal is kept until a new document version>>
             <<check the history recorded in an object version>>
             <<check that an object version keeps the earlier notices>>
-            prev_ver = ver
+            prev_ver, prev_obj = ver, obj
         return errors
 
 A document version is its *own* files: everything except the descriptions,
@@ -747,6 +751,7 @@ belongs to the document version, since it was written and deposited with it
     if obj is None or obj.get("kind") not in ("document", "collection"):
         return errors
     n = obj["documentVersion"]
+    new_doc = n not in seen
     own, change = own_files(obj, {p: dig for dig, ps in vinfo["state"].items() for p in ps})
     if not seen and obj.get("parent"):
         highest, first = n - 1, n    # a branch numbers on from its branch point (section 9.4)
@@ -811,6 +816,20 @@ The fields, in the order they are reported:
 
     # in check the descriptions of an object version:
     DOCUMENT_VERSION_FIELDS = ("mainSource", "sourceFormat", "sourcesMissing", "renditions", "toolchain")
+
+A withdrawal is a description-only version: a new document version is
+never one. Once a line is withdrawn, every later object version keeps
+`status` `withdrawn` and the same `withdrawal` until a new document
+version reinstates it (section 13.1).
+
+    # in check that a withdrawal is kept until a new document version:
+    if new_doc and obj.get("status") == "withdrawn":
+        errors.append(f"{ver} is a new document version and a withdrawal: a withdrawal is a "
+                      "description-only version (section 13.1)")
+    elif not new_doc and prev_obj is not None and prev_obj.get("status") == "withdrawn" and (
+            obj.get("status") != "withdrawn" or obj.get("withdrawal") != prev_obj.get("withdrawal")):
+        errors.append(f"{ver} drops or changes the withdrawal of {prev_ver}: only a new document version "
+                      "reinstates a line (section 13.1)")
 
 The history, once present, must stay present; it may name only object
 versions that exist at that point; it must list each document version
@@ -991,6 +1010,7 @@ The pins of a member held in the archive.
             f.error(f"{who} {pv}", "not a version: a collection pins only signed versions (section 8.5)")
         elif s in (sign.UNCHECKED, sign.CONTESTED):
             f.warning(f"{who} {pv}", f"{s} (section 8.5)")
+        <<report a member pinning a withdrawn document version>>
     if kind == "selection" and sts:
         signed = sign.latest_signed(sts)
         hist = history_of(md, minv, f"v{signed}" if signed else None)
@@ -999,6 +1019,19 @@ The pins of a member held in the archive.
         pos = [order.index(x) for x in vetted if x in order]
         if pos != sorted(pos):
             f.error(who, "revisions not in the order of the history (section 8.4)")
+
+A member whose document version pinned is withdrawn, as the latest signed
+version of its line says, is reported in the head of the collection, as a
+result: a withdrawal is no breach, and holds also when the line has been
+reinstated since (sections 13.1 and 14.5).
+
+    # in report a member pinning a withdrawn document version:
+    signed = sign.latest_signed(sts) if sts else None
+    if ver == inv["head"] and signed:
+        withdrawn = withdrawn_versions(md, minv, f"v{signed}")
+        dv = pobj.get("documentVersion")
+        if dv in withdrawn:
+            f.result(f"{who} {pv}", f"document version {dv} is withdrawn, in {withdrawn[dv]} (section 13.1)")
 
 Selections keep their accepted copies apart: an owner keeps one accepted
 copy of a document, so selections that keep different accepted copies of

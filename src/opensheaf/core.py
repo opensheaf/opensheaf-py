@@ -424,6 +424,23 @@ def current_version(obj_dir, inv, at=None):
     return history_of(obj_dir, inv, at)[-1]
 
 
+def withdrawn_versions(obj_dir, inv, at=None):
+    """{document version: the object version of the withdrawal that withdrew it},
+    as of object version AT (default: the head) (section 13.1)."""
+    out, held = {}, []
+    for ver in inv["versions"]:
+        obj = read_json(obj_dir, inv, OBJ, ver) or {}
+        n = obj.get("documentVersion")
+        if n is not None and n not in held:
+            held.append(n)
+        if obj.get("status") == "withdrawn":
+            for k in held:
+                out.setdefault(k, ver)
+        if ver == at:
+            break
+    return out
+
+
 def next_object_version(inv):
     return f"v{int(inv['head'][1:]) + 1}" if inv else "v1"
 
@@ -1096,7 +1113,8 @@ def deposit(args):
         if prev_obj["kind"] != "document":
             sys.exit(f"{label} is not a document")
         if prev_obj.get("status") == "withdrawn":
-            sys.exit(f"{label} is withdrawn (section 13.1): a withdrawn document gets no new versions")
+            print(f"Note: {label} is withdrawn; this version reinstates it, and the versions withdrawn stay "
+                  "withdrawn (section 13.1)", file=sys.stderr)
         doc_version = max(doc_version_of(d, inv, v) for v in inv["versions"]) + 1
         owner = prev_obj.get("owner")
     if args.created and args.available:
@@ -2106,7 +2124,7 @@ def document_version_errors(obj_id, d, inv):
     errors = []
     seen, files_of, missing_of, highest, first = {}, {}, {}, 0, 1
     fields_of, external_of = {}, {}
-    had_history, notices, prev_ver = False, [], None
+    had_history, notices, prev_ver, prev_obj = False, [], None, None
 
     def current_before(at):
         """The current document version as of object version AT, or None."""
@@ -2120,6 +2138,7 @@ def document_version_errors(obj_id, d, inv):
         if obj is None or obj.get("kind") not in ("document", "collection"):
             return errors
         n = obj["documentVersion"]
+        new_doc = n not in seen
         own, change = own_files(obj, {p: dig for dig, ps in vinfo["state"].items() for p in ps})
         if not seen and obj.get("parent"):
             highest, first = n - 1, n    # a branch numbers on from its branch point (section 9.4)
@@ -2155,6 +2174,13 @@ def document_version_errors(obj_id, d, inv):
             if any(e not in external for e in external_of[n]):
                 errors.append(f"{ver} drops or changes an external record of document version {n} (section 4.2)")
         fields_of[n], external_of[n] = fields, external
+        if new_doc and obj.get("status") == "withdrawn":
+            errors.append(f"{ver} is a new document version and a withdrawal: a withdrawal is a "
+                          "description-only version (section 13.1)")
+        elif not new_doc and prev_obj is not None and prev_obj.get("status") == "withdrawn" and (
+                obj.get("status") != "withdrawn" or obj.get("withdrawal") != prev_obj.get("withdrawal")):
+            errors.append(f"{ver} drops or changes the withdrawal of {prev_ver}: only a new document version "
+                          "reinstates a line (section 13.1)")
         hist = obj.get("history")
         if had_history and hist is None:
             errors.append(f"{ver} lacks the history of earlier versions")
@@ -2187,7 +2213,7 @@ def document_version_errors(obj_id, d, inv):
                 elif any(y.get("replaces") == r for y in cur[:k]):
                     errors.append(f"{ver} notice {k + 1} replaces notice {r}, which is already replaced")
         notices = cur
-        prev_ver = ver
+        prev_ver, prev_obj = ver, obj
     return errors
 
 
@@ -2539,6 +2565,9 @@ def check_lines(f, found, logs, schema, disc, resolver=None):
             f.result(place, f"latest signed version v{signed}")
             if (read_json(d, inv, OBJ, f"v{signed}") or {}).get("status") == "withdrawn":
                 f.result(place, "withdrawn (section 13.1)")
+            elif withdrawn := withdrawn_versions(d, inv, f"v{signed}"):
+                f.result(place, f"reinstated; withdrawn: document version(s) {', '.join(map(str, sorted(withdrawn)))} "
+                         "(section 13.1)")
     for gname, ids in genesis_names.items():
         lines = [i for i, branch in ids if not branch]
         if len(lines) > 1:
@@ -2669,6 +2698,12 @@ def check_members(f, found, logs, statuses, tombstoned, schema, obj_id, d, inv, 
                         f.error(f"{who} {pv}", "not a version: a collection pins only signed versions (section 8.5)")
                     elif s in (sign.UNCHECKED, sign.CONTESTED):
                         f.warning(f"{who} {pv}", f"{s} (section 8.5)")
+                    signed = sign.latest_signed(sts) if sts else None
+                    if ver == inv["head"] and signed:
+                        withdrawn = withdrawn_versions(md, minv, f"v{signed}")
+                        dv = pobj.get("documentVersion")
+                        if dv in withdrawn:
+                            f.result(f"{who} {pv}", f"document version {dv} is withdrawn, in {withdrawn[dv]} (section 13.1)")
                 if kind == "selection" and sts:
                     signed = sign.latest_signed(sts)
                     hist = history_of(md, minv, f"v{signed}" if signed else None)

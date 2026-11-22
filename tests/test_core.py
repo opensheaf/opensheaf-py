@@ -218,6 +218,25 @@ def test_notices_are_kept(archive):
     assert finish() == []
 
 
+def test_withdrawals_are_kept_until_a_new_version(archive):
+    gone = {"date": "2026-03-01", "reason": {"text": "An error."}}
+    put("paper-a", 1, FILES1)
+    put("paper-a", 1, FILES1, extra_obj={"status": "withdrawn", "withdrawal": gone}, description_only=True)
+    put("paper-a", 1, FILES1, description_only=True)
+    put("paper-b", 1, FILES1, extra_obj={"status": "withdrawn", "withdrawal": gone})
+    put("paper-c", 1, FILES1)
+    put("paper-c", 1, FILES1, extra_obj={"status": "withdrawn", "withdrawal": gone}, description_only=True)
+    put("paper-c", 2, FILES2)
+    errors = finish()
+    assert "paper-a: v3 drops or changes the withdrawal of v2: only a new document version reinstates a " \
+           "line (section 13.1)" in errors
+    assert "paper-b: v1 is a new document version and a withdrawal: a withdrawal is a description-only " \
+           "version (section 13.1)" in errors
+    assert not any(e.startswith("paper-c:") for e in errors)
+    d, inv = head_of("paper-c")
+    assert P.withdrawn_versions(d, inv) == {1: "v2"}
+
+
 def test_notices_replace_earlier_ones(archive):
     first = {"documentVersion": 1, "date": "2026-02-01", "text": "Theorem 2 is wrong as stated."}
     fix = {"documentVersion": 1, "date": "2026-03-01", "text": "Theorem 2 is right.", "replaces": 1}
@@ -872,8 +891,24 @@ def test_notice_withdraw_complete(tmp_path):
     head = P.read_json(d, inv, P.OBJ)
     assert head["status"] == "withdrawn" and head["notices"][0]["documentVersion"] == 1
     assert "notices/erratum.md" in {p for ps in inv["versions"][inv["head"]]["state"].values() for p in ps}
-    with pytest.raises(SystemExit):        # a withdrawn document gets no new versions
+    with pytest.raises(SystemExit):        # the files of the current version
         run(*r, "deposit", "lost", str(src), "--pdf", str(pdf2), "--title", "T", "--author", "Doe, J")
+    pdf3 = tmp_path / "p3.pdf"
+    pdf3.write_bytes(b"%PDF-1.4 p3")
+    run(*r, "deposit", "lost", str(src), "--pdf", str(pdf3), "--title", "T", "--author", "Doe, J",
+        "--changes", "Corrected; the error is fixed.")
+    inv = P.load_inventory(d)
+    head = P.read_json(d, inv, P.OBJ)
+    assert inv["head"] == "v6" and head["documentVersion"] == 3 and head["status"] == "active"
+    assert "withdrawal" not in head
+    assert P.withdrawn_versions(d, inv) == {1: "v5", 2: "v5"}
+    run(*r, "collect")
+    assert P.verify_errors() == []
+    page = (root / "paper" / "lost" / "index.html").read_text()
+    assert page.count('class="withdrawn"') == 2
+    run(*r, "withdraw", "lost", "--reason", "another error")
+    inv = P.load_inventory(d)
+    assert P.withdrawn_versions(d, inv) == {1: "v5", 2: "v5", 3: "v7"}
 
 
 def test_complete_an_earlier_version(tmp_path):

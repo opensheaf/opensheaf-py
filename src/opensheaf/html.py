@@ -194,6 +194,9 @@ def version_block(line, ver, shown, notices, root, vetted=None):
            f'<div class="version-head">{head}</div>']
     if when:
         out.append(f'<div class="version-date">{esc(when)}</div>')
+    withdrawn = P.withdrawn_versions(line.dir, line.inv, line.signed or line.inv["head"])
+    if n in withdrawn:
+        out.append(withdrawal_html(line.json(P.OBJ, withdrawn[n])))
     if P.changes_note(obj):
         out.append(f'<div class="changes">{esc(P.changes_note(obj))}</div>')
     out.append(f'<div class="files">{" · ".join(f for f in files if f)}</div>')

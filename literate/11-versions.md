@@ -130,6 +130,30 @@ history of the pinned version, which is what `at` is for.
         (section 4.2)."""
         return history_of(obj_dir, inv, at)[-1]
 
+A withdrawal (section 13.1) withdraws every document version deposited
+before it, in the order of deposit, and later description-only versions
+keep it; a new document version reinstates the line, and the versions
+withdrawn stay withdrawn. Which versions are withdrawn is read from the
+object versions themselves, up to `at`: each document version is mapped to
+the first withdrawal after the object version that first held it.
+
+    # in the object version holding the current version of a document:
+    def withdrawn_versions(obj_dir, inv, at=None):
+        """{document version: the object version of the withdrawal that withdrew it},
+        as of object version AT (default: the head) (section 13.1)."""
+        out, held = {}, []
+        for ver in inv["versions"]:
+            obj = read_json(obj_dir, inv, OBJ, ver) or {}
+            n = obj.get("documentVersion")
+            if n is not None and n not in held:
+                held.append(n)
+            if obj.get("status") == "withdrawn":
+                for k in held:
+                    out.setdefault(k, ver)
+            if ver == at:
+                break
+        return out
+
 Without `history`, the head is not always the answer. It holds the
 highest document version after a deposit and after the description-only
 versions of [chapter 14](14-description.md) that describe it; but a
