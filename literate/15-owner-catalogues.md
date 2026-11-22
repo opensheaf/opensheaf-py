@@ -186,9 +186,25 @@ their order are decisions of its curator, made with `osheaf collection`.
 An owner catalogue not yet made (when the owner is set up) has no
 identifier yet: it will be sealed below; `osheaf init --curated` asks for
 it curated from the start, empty and of order `manual`. The catalogue of
-the archive's first owner is labelled `main`, if that label is free; the
-others get no label, and are named by their identifiers (or labelled
-later, with `osheaf label`).
+the archive's first owner is labelled `main`, if that label is free; that
+of another owner `<label>-catalogue`, after the label of the owner's key
+log, if the owner has one and that label is free, and none otherwise: it
+is then named by its identifier. `osheaf label --owner` labels it so when
+the owner gets a label later (in the chapter on the
+[archive](10-archive.md)).
+
+    # in maintain the owner catalogues of the archive:
+    def catalogue_label(owner):
+        """The label the owner catalogue of OWNER is given: main for the archive's first owner,
+        <owner label>-catalogue for another owner with a label, else None."""
+        if owner == ARCHIVE["owner"]:
+            return CATALOGUE_LABEL
+        own = label_of(names.object_id(owner, owner))
+        return f"{own}-catalogue" if own and len(own) <= 64 - len("-catalogue") else None
+
+The owner catalogue of the owner is read from the discovery document; a
+curated one is left to its curator.
+
 
     # in leave a curated owner catalogue to its curator:
     coll_id = CATALOGUES.get(owner)
@@ -269,8 +285,9 @@ the owner, and the discovery document, which names the catalogue in
     # in write the files of the owner catalogue's new version:
     if coll_id is None:
         genesis, coll_id = seal("collection", owner)
-        if owner == ARCHIVE["owner"] and CATALOGUE_LABEL not in LABELS:
-            LABELS[CATALOGUE_LABEL] = coll_id
+        wanted = catalogue_label(owner)
+        if wanted and wanted not in LABELS:
+            LABELS[wanted] = coll_id
     else:
         genesis = read_logical(coll_dir, cinv, GENESIS).read_bytes()
     CATALOGUES[owner] = coll_id

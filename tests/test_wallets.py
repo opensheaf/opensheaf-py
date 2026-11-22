@@ -375,19 +375,22 @@ def test_wallets_of_each_owner(tmp_path, monkeypatch, capsys):
     assert json.loads(user.read_text())["wallets"] == ["github:me/keys"]
     with pytest.raises(SystemExit, match="not one of your wallets"):
         run(*r, "key", "wallets", "--remove", "github:me/nothing")
-    # the earlier forms: one wallet for the archive, and the user's "keys"
+    # the user's "keys", after the hints; one wallet for the archive, no longer read
     user.write_text(json.dumps({"keys": {"wallet": "github:me/keys"}}))
     cfg = json.loads((root / "osheaf.json").read_text())
-    cfg["keys"] = {"wallet": "github:me/other"}
+    cfg["keys"] = {second: {"wallets": ["github:me/other"]}}
     (root / "osheaf.json").write_text(json.dumps(cfg, indent=2) + "\n")
     P.configure(root)
     assert P.configured_wallet(second).name == "github:me/other"
-    assert P.configured_wallet(first).name == "github:me/other"     # hinted, and holds a key of it
-    monkeypatch.setattr(wallet.GitHubWallet, "entries", lambda self, owner=None: [] if self.repo == "me/other"
-                        else [(owner, "k")])
-    assert P.configured_wallet(first).name == "github:me/keys"      # the user's, holding its keys
-    with pytest.raises(SystemExit, match="every owner"):
-        run(*r, "key", "wallet", "--owner", second, "--remove", "github:me/other")
+    assert P.configured_wallet(first).name == "github:me/keys"      # the user's: none hinted for it
+    cfg["keys"] = {"wallet": "github:me/other"}
+    (root / "osheaf.json").write_text(json.dumps(cfg, indent=2) + "\n")
+    P.configure(root)
+    with pytest.raises(SystemExit, match="no longer read"):
+        P.configured_wallet(first)
+    cfg["keys"] = {second: {"wallets": ["github:me/other"]}}
+    (root / "osheaf.json").write_text(json.dumps(cfg, indent=2) + "\n")
+    P.configure(root)
     monkeypatch.setenv(wallet.WALLET, "github:me/env")
     assert P.configured_wallet(first).name == "github:me/env"
     monkeypatch.delenv(wallet.WALLET)
@@ -492,7 +495,7 @@ def test_command_wallet(tmp_path, monkeypatch, capsys):
     with pytest.raises(SystemExit, match="Move .keys. to .*config.json"):
         run(*r, "key", "list")
     assert not planted.exists()
-    cfg["keys"] = {"wallet": "github:me/keys"}
+    cfg["keys"] = {owner: {"wallets": ["github:me/keys"]}}
     (root / "osheaf.json").write_text(json.dumps(cfg))
     user.unlink()
     run(*r, "key", "list")

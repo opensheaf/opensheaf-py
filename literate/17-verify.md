@@ -1178,9 +1178,9 @@ each line read from its latest signed version); an entry that differs is
 stale, which happens when an object was changed by other means than these
 tools. Labels are distinct. `owners` names each owner once, each with a
 catalogue of its own: a collection it lists, of that owner, whose
-`members.json` is a catalogue (section 8.1); a warning, when `owners` is
-missing (it is recommended, section 3.1), when an owner listed has no key
-log held here, and when an owner catalogue lists a member that is not a
+`members.json` is a catalogue (section 8.1); `owners` missing is an error
+(section 3.1 requires it, empty when the archive hosts no owner); a
+warning, when an owner listed has no key log held here, and when an owner catalogue lists a member that is not a
 document of a line of its owner held here, which section 8.1 does not
 allow (a copy, another owner's line, a line of another archive); a member
 taken down here is left to the next version of the catalogue (section
@@ -1231,7 +1231,7 @@ The owners and their catalogues, the drafts and the extensions.
 
     # in check the owners and their catalogues, the drafts and the extensions listed:
     if "owners" not in disc:
-        f.warning("opensheaf.json", "no owners: the owners hosted and their catalogues are not named (section 3.1)")
+        f.error("opensheaf.json", "no owners: the owners hosted and their catalogues are not named (section 3.1)")
     seen_owners, seen_catalogues = set(), set()
     removed_here = {t.get("id") for t in disc.get("tombstones", []) if isinstance(t, dict)}
     for e in disc.get("owners", []):
@@ -1373,9 +1373,7 @@ whose line is held here has a landing page at `paper/<label>/` (or
 of that name are held, `page_address`), which gives the full `sheaf:` URI
 of its line in canonical form (appendix A.3, sections 12.1 and 12.2):
 `sheaf:<name>` for the originator's line, `sheaf:<name>:<owner>` for
-another. The form with an owner part is accepted too for the originator's
-line: it names the same line, and pages written before the canonical form
-was asked for gave it. Under the profile, what is missing is an
+another. Under the profile, what is missing is an
 error. An archive that presents pages without declaring the profile is
 told the same as warnings: one with an `index.html`, and one whose landing
 pages are written with a TeXmacs index (the profile `texmacs`, a readable
@@ -1429,16 +1427,15 @@ name).
 
     # in check the presentation files of the profile website:
     def landing_names(text, nm, owner, obj_id):
-        """Whether the landing page TEXT gives the sheaf: URI of the line (NM, OWNER), in canonical form
-        or with its owner part."""
-        if f"sheaf:{nm}:{owner}" in text:
-            return True
+        """Whether the landing page TEXT gives the sheaf: URI of the line (NM, OWNER), in canonical form."""
         g = read_logical(obj_dir(obj_id), load_inventory(obj_dir(obj_id)), GENESIS, "v1")
         try:
             originator = names.read_genesis(g.read_bytes()).get("originator") if g else None
         except ValueError:
             return False
-        return originator == owner and re.search(rf"sheaf:{nm}(?![a-z0-9:/])", text) is not None
+        if originator == owner:
+            return re.search(rf"sheaf:{nm}(?![a-z0-9:/])", text) is not None
+        return f"sheaf:{nm}:{owner}" in text
 
 Keys left in the archive
 ------------------------

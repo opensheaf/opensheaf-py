@@ -71,6 +71,12 @@ def withdrawal_html(state, where=""):
             f'{esc(w.get("reason", {}).get("text", ""))}</div>')
 
 
+def owner_tag(owner, root=""):
+    """The owner OWNER, named by the label of its key log or its short name, linked to its page."""
+    name = esc(P.label_of(names.object_id(owner, owner)) or names.short(owner))
+    return f'<a class="owner" href="{root}owner/{owner}/">{name}</a>' if P.key_log(owner) else name
+
+
 def versions_line(m, obj):
     """'version 3', or for a member of a selection 'vetted: versions 2, 3'."""
     if m.get("revisions"):
@@ -267,12 +273,13 @@ def abstract_html(dc):
     return ""
 
 
-def render(members, home=True, featured=None, keeper_fetch=None):
+def render(members, home=True, featured=None, keeper_fetch=None, groups=None):
     """Write index.html, paper/<label>/index.html for every line presented, owner/<owner>/,
     style.css and sitemap.xml; with home=False (a TeXmacs index is the home page),
     everything but index.html. FEATURED: the identifier of a collection of the archive
     whose members the home page lists first. KEEPER_FETCH: how the places of keepers are
-    read (owners.fetch_json by default)."""
+    read (owners.fetch_json by default). GROUPS: [(owner, members)], the members by owner
+    catalogue, for an archive with several owners."""
     global KEEPER_FETCH
     LINES.clear()
     KEEPERS.clear()
@@ -376,7 +383,25 @@ def render(members, home=True, featured=None, keeper_fetch=None):
         if html_link:
             urls.append((f"{base}site/{line.slug}/{line.slug}.html", lastmod))
     if home:
-        entries = [local_entry(m) if held(m) else remote_entry(m) for m in members]
+        groups_here = [(o, [m for m in ms if not removed(m)]) for o, ms in (groups or [])]
+        several = len(groups_here) > 1
+        by_owner = several and P.INDEX.get("owners", "together") == "by-owner"
+        entry = lambda m: (local_entry(m, show_owner=several and not by_owner) if held(m)
+                           else remote_entry(m, show_owner=several and not by_owner))
+        empty = '<li class="empty">No documents yet.</li>'
+        papers_heading = ""
+        if by_owner:
+            entries, blocks = [], []
+            for owner, ms in groups_here:
+                items = [entry(m) for m in ms]
+                entries += items
+                blocks.append((f'<h2 class="owner-heading">{owner_tag(owner)}</h2>', "\n".join(items) or empty))
+            papers_heading = blocks[0][0]
+            papers_html = blocks[0][1] + "".join(f'\n  </ol>\n{h}\n  <ol class="papers">\n{body}'
+                                                 for h, body in blocks[1:])
+        else:
+            entries = [entry(m) for m in (P.member_order(members) if several else members)]
+            papers_html = "\n".join(entries) or empty
         featured_html = ""
         if featured:
             fdc = fline.json("datacite.json", fline.signed)
@@ -403,9 +428,9 @@ def render(members, home=True, featured=None, keeper_fetch=None):
                     + '; programs start from <a href="opensheaf.json">opensheaf.json</a>.')
         index = fill(template("index.html"), {
             "root": "", "archive_name": esc(P.ARCHIVE["name"]), "base_url": esc(base), "lead": lead,
-            "papers": "\n".join(entries) if entries else '<li class="empty">No documents yet.</li>',
+            "papers": papers_html,
             "featured": featured_html,
-            "papers_heading": "<h2>In this archive</h2>" if featured else "",
+            "papers_heading": papers_heading or ("<h2>In this archive</h2>" if featured else ""),
             "count": str(len(entries)), "updated": esc(fmt_date(datetime.date.today().isoformat())),
         })
         (root_out / "index.html").write_text(index, encoding="utf-8")
@@ -460,7 +485,7 @@ def template_path(name):
     return p if p.exists() else DEFAULTS / name
 
 
-def remote_entry(m, root=""):
+def remote_entry(m, root="", show_owner=False):
     """The entry of a member held elsewhere: its metadata read from the first of its at
     that answers, checked against the pin, or else the cached citation."""
     cite = m.get("cite", {})
@@ -492,7 +517,9 @@ def remote_entry(m, root=""):
         (f'<a class="paper-title" href="{esc(landing)}">{esc(title)}</a>' if landing
          else f'<span class="paper-title">{esc(title)}</span>'),
         f'<div class="paper-authors">{esc(by)}</div>',
-        f'<div class="paper-meta">{esc(str(year))} · in <a href="{esc(at)}">{esc(archive_name)}</a>'
+        f'<div class="paper-meta">{esc(str(year))}'
+        + (f' · {owner_tag(m["owner"], root)}' if show_owner else "")
+        + f' · in <a href="{esc(at)}">{esc(archive_name)}</a>'
         + (f' · {versions_line(m, {})}' if m.get("revisions") else "")
         + (" · " + " · ".join(links) if links else "")
         + f' · <span class="pin" title="{pin}">pin {pin[:32]}…</span></div>',
@@ -555,10 +582,11 @@ def remote_view(m):
     return None
 
 
-def local_entry(m, root=""):
+def local_entry(m, root="", show_owner=False):
     """The entry of a member held here, in the version its collection presents (the main
     catalogue's, the featured one's, or that of the collection whose landing page lists it);
-    root: the way to the root of the archive from the page ("../../" on a landing page)."""
+    root: the way to the root of the archive from the page ("../../" on a landing page);
+    SHOW_OWNER: the owner of its line named after the year."""
     line = held(m)
     cur = P.presented_version(m, line.dir, line.inv)
     pin_ver, pin = P.member_pins(m)[-1][:2]
@@ -573,7 +601,8 @@ def local_entry(m, root=""):
         f'<li class="paper{" withdrawn" if line.withdrawn else ""}">',
         f'<a class="paper-title" href="{root}paper/{line.slug}/">{esc(dc["titles"][0]["title"])}</a>',
         f'<div class="paper-authors">{esc(authors(dc))}</div>',
-        f'<div class="paper-meta">{esc((issued or "")[:4])} · {versions_line(m, obj)}'
+        f'<div class="paper-meta">{esc((issued or "")[:4])}'
+        + (f' · {owner_tag(m["owner"], root)}' if show_owner else "") + f' · {versions_line(m, obj)}'
         + (f' · <a href="{esc(pdf)}">PDF</a>' if pdf else "")
         + (' · <span class="contested">contested</span>' if contested else "")
         + f' · <span class="pin" title="{pin}">pin {pin[:32]}…</span></div>',

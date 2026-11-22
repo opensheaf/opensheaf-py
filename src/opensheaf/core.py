@@ -23,11 +23,12 @@ An archive is a folder with a configuration file `osheaf.json`:
         "htmlPackage": "paper-html.ts",             style package of HTML versions
         "htmlResources": ["max-html/resources/max-html.css", ...]   from the plugins
       },
-      "index": {"template": "index-template.tm"},   optional: the readable index
+      "index": {"template": "index-template.tm"},   optional: the readable index; with
+                                         several owners, "owners": "together" (the default) or
+                                         "by-owner" says how the website's home page lists them
       "keys": {"<owner name>": {"wallets": ["github:OWNER/REPO", ...]}, ...}   optional:
                                          hints, the GitHub key wallets that hold the keys of
-                                         each owner (osheaf key wallet --add|--remove); a
-                                         general {"wallet": ...} is a hint for every owner;
+                                         each owner (osheaf key wallet --add|--remove);
                                          your own wallets are in ~/.config/opensheaf/config.json
       "formerAddresses": {"<address>": "sheaf:<name>:<owner>"}   written by osheaf label:
                                          the old addresses of relabelled lines, which redirect
@@ -156,9 +157,6 @@ def configure(root):
     LABELS = {o["label"]: o["id"] for o in disc.get("objects", []) if o.get("label")}
     CATALOGUES = {e["owner"]: e["catalogue"] for e in disc.get("owners", [])
                   if isinstance(e, dict) and e.get("owner") and e.get("catalogue")}
-    if disc.get("mainCollection") and ARCHIVE["owner"] not in CATALOGUES:
-        CATALOGUES[ARCHIVE["owner"]] = disc["mainCollection"]
-    ARCHIVE.pop("mainCollection", None)
     TOMBSTONES = list(disc.get("tombstones", []))
     return ROOT
 
@@ -262,8 +260,26 @@ def label_command(args):
           else f"Done: {obj_id} has no label any more (it was {old}).")
     if kind in ("document", "collection") and before != after:
         print(f"Its old address paper/{before}/ leads to paper/{after}/ ({CONFIG_NAME}, formerAddresses).")
-    if INDEX.get("template"):
+    relabelled = bool(owner) and relabel_catalogue(owner, old, featured)
+    if INDEX.get("template") and not relabelled:
         print("Run osheaf index to typeset the TeXmacs index with the new label.")
+
+
+def relabel_catalogue(owner, old, featured):
+    """After the label of OWNER changed from OLD: its owner catalogue labelled after it, if the
+    catalogue has no label or the one OLD gave it; FEATURED may not lose its label. Whether it was."""
+    cat = CATALOGUES.get(owner)
+    if owner == ARCHIVE["owner"] or not cat:
+        return False
+    have, wanted = label_of(cat), catalogue_label(owner)
+    if have == wanted or have not in (None, f"{old}-catalogue" if old else None):
+        return False
+    if wanted in LABELS or (wanted is None and have == featured):
+        print(f"The owner catalogue {have or cat} keeps its label: "
+              + (f"{wanted} is taken." if wanted else "it is the featured collection."))
+        return False
+    label_command(argparse_namespace(line=cat, label=wanted, owner=None, unset=wanted is None))
+    return True
 
 
 def move_html_version(obj_id, before, after, former):
@@ -1628,8 +1644,9 @@ def collect_owner(owner, args):
         issued = date_of(read_json(coll_dir, cinv, "datacite.json"), "Issued") or TODAY
     if coll_id is None:
         genesis, coll_id = seal("collection", owner)
-        if owner == ARCHIVE["owner"] and CATALOGUE_LABEL not in LABELS:
-            LABELS[CATALOGUE_LABEL] = coll_id
+        wanted = catalogue_label(owner)
+        if wanted and wanted not in LABELS:
+            LABELS[wanted] = coll_id
     else:
         genesis = read_logical(coll_dir, cinv, GENESIS).read_bytes()
     CATALOGUES[owner] = coll_id
@@ -1668,6 +1685,15 @@ def collect_owner(owner, args):
     write_discovery()
     print(f"Done: the owner catalogue {label} of {names.short(owner)} is at {inv['head']}, with "
           f"{plural(len(members), 'member') if members else 'no members'}.")
+
+
+def catalogue_label(owner):
+    """The label the owner catalogue of OWNER is given: main for the archive's first owner,
+    <owner label>-catalogue for another owner with a label, else None."""
+    if owner == ARCHIVE["owner"]:
+        return CATALOGUE_LABEL
+    own = label_of(names.object_id(owner, owner))
+    return f"{own}-catalogue" if own and len(own) <= 64 - len("-catalogue") else None
 
 
 def line_status(d, inv, head):
@@ -1987,10 +2013,10 @@ def index(args):
     print("opensheaf.json and the indexes written (no readable index configured)")
 
 
-def catalogue_members():
-    """The members of the latest signed version of each owner catalogue, in the order of the
+def catalogue_groups():
+    """[(owner, members of the latest signed version of its owner catalogue)], in the order of the
     owners, or None when no owner catalogue has a signed version."""
-    out, signed = [], False
+    out = []
     for owner in archive_owners():
         cid = CATALOGUES.get(owner)
         d = obj_dir(cid) if cid else None
@@ -2002,17 +2028,25 @@ def catalogue_members():
             print(f"warning: the owner catalogue of {names.short(owner)} has no signed version "
                   "(section 7.3): none of its members is presented", file=sys.stderr)
             continue
-        signed = True
-        out += read_json(d, inv, "members.json", ver)["members"]
-    return out if signed else None
+        out.append((owner, read_json(d, inv, "members.json", ver)["members"]))
+    return out or None
+
+
+def catalogue_members():
+    """The members of the owner catalogues in one list, in the order of the owners, or None."""
+    groups = catalogue_groups()
+    return None if groups is None else [m for _, ms in groups for m in ms]
 
 
 def readable_index(args):
     """The website, or the TeXmacs index with the landing pages of the website."""
     from . import html
-    members = catalogue_members()
-    if members is None:
+    groups = catalogue_groups()
+    if groups is None:
         return
+    members = [m for _, ms in groups for m in ms]
+    if INDEX.get("owners", "together") not in ("together", "by-owner"):
+        sys.exit(f"osheaf.json: index.owners is together or by-owner, not {INDEX['owners']}")
     if INDEX.get("html"):
         featured = INDEX["html"].get("featured") if isinstance(INDEX["html"], dict) else None
         fid = None
@@ -2024,7 +2058,7 @@ def readable_index(args):
             fd = obj_dir(fid)
             if (read_json(fd, load_inventory(fd), OBJ) or {}).get("kind") != "collection":
                 sys.exit(f"osheaf.json: index.html.featured names {featured}, which is not a collection")
-        pages = html.render(members, featured=fid)
+        pages = html.render(members, featured=fid, groups=groups)
         print(f"Done: opensheaf.json, index.html, {plural(pages, 'landing page')} and sitemap.xml written.")
         return
     template = (ROOT / INDEX["template"]).read_text(encoding="latin-1")
@@ -2832,7 +2866,7 @@ def check_archive(f, found, statuses, disc):
     for lb in sorted({x for x in labels if labels.count(x) > 1}):
         f.error("opensheaf.json", f"the label {lb} is given twice (section 3.1)")
     if "owners" not in disc:
-        f.warning("opensheaf.json", "no owners: the owners hosted and their catalogues are not named (section 3.1)")
+        f.error("opensheaf.json", "no owners: the owners hosted and their catalogues are not named (section 3.1)")
     seen_owners, seen_catalogues = set(), set()
     removed_here = {t.get("id") for t in disc.get("tombstones", []) if isinstance(t, dict)}
     for e in disc.get("owners", []):
@@ -2936,16 +2970,15 @@ def check_presentation(f, disc):
 
 
 def landing_names(text, nm, owner, obj_id):
-    """Whether the landing page TEXT gives the sheaf: URI of the line (NM, OWNER), in canonical form
-    or with its owner part."""
-    if f"sheaf:{nm}:{owner}" in text:
-        return True
+    """Whether the landing page TEXT gives the sheaf: URI of the line (NM, OWNER), in canonical form."""
     g = read_logical(obj_dir(obj_id), load_inventory(obj_dir(obj_id)), GENESIS, "v1")
     try:
         originator = names.read_genesis(g.read_bytes()).get("originator") if g else None
     except ValueError:
         return False
-    return originator == owner and re.search(rf"sheaf:{nm}(?![a-z0-9:/])", text) is not None
+    if originator == owner:
+        return re.search(rf"sheaf:{nm}(?![a-z0-9:/])", text) is not None
+    return f"sheaf:{nm}:{owner}" in text
 
 
 def look_for_keys(f):
@@ -3851,9 +3884,6 @@ def key_wallet(args):
         if isinstance(cfg.get("keys"), dict) else []
     if remove:
         if remove not in own:
-            if remove in wallet.hints(cfg.get("keys")):
-                stop(f'{CONFIG_NAME} hints {remove} for every owner ("keys": {{"wallet": ...}}): edit '
-                     f"{CONFIG_NAME} to remove it")
             print(f"{CONFIG_NAME} hints no {remove} for {who}.")
             return
         write_config(hinted(cfg, owner, remove, add=False))

@@ -116,31 +116,35 @@ def user_wallets():
 
 
 def _named(e):
-    """The wallets an entry of "keys" names: its "wallets", and its "wallet"."""
-    if not isinstance(e, dict):
+    """The wallets an entry of "keys" names: its "wallets"."""
+    if not isinstance(e, dict) or not isinstance(e.get("wallets"), list):
         return []
-    out = [w for w in e.get("wallets", []) if isinstance(w, str)] if isinstance(e.get("wallets"), list) else []
-    return out + ([str(e["wallet"])] if e.get("wallet") else [])
+    return [w for w in e["wallets"] if isinstance(w, str)]
 
 
 def hints(config, owner=None):
-    """The wallets CONFIG (the `keys` of osheaf.json) hints for OWNER: its own, then those for every owner."""
+    """The wallets CONFIG (the `keys` of osheaf.json) hints for OWNER."""
     config = config if isinstance(config, dict) else {}
     out = []
-    for w in (_named(config.get(owner)) if owner else []) + _named(config):
+    for w in _named(config.get(owner)) if owner else []:
         if w not in out:
             out.append(w)
     return out
 
 
 def check_archive_config(config):
-    """Refuse a command wallet in CONFIG, the `keys` of osheaf.json, in any of its entries."""
+    """Refuse a command wallet in CONFIG, the `keys` of osheaf.json, in any of its entries, and one wallet
+    for the whole archive, a form no longer read."""
     config = config if isinstance(config, dict) else {}
     for e in [config] + [v for k, v in config.items() if names.OWNER_NAME.match(k) and isinstance(v, dict)]:
-        if "command" in _named(e) or any(c in e for c in COMMANDS):
+        if "command" in _named(e) or e.get("wallet") == "command" or any(c in e for c in COMMANDS):
             raise WalletError(f'osheaf.json configures a command wallet ("keys"), whose commands would run on '
                               f"this machine: they are read only from your own configuration. Move \"keys\" to "
                               f"{user_config_path()} (or to {WALLET}), and leave osheaf.json without it")
+    if "wallet" in config:
+        raise WalletError(f'osheaf.json: "keys": {{"wallet": ...}}, one wallet for the whole archive, is no '
+                          f'longer read: write "keys": {{"<owner>": {{"wallets": ["{config["wallet"]}"]}}}}, '
+                          "one entry for each owner whose keys it holds")
 
 
 def candidates(config, owner=None):

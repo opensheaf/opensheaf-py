@@ -167,11 +167,12 @@ too.
             "htmlPackage": "paper-html.ts",             style package of HTML versions
             "htmlResources": ["max-html/resources/max-html.css", ...]   from the plugins
           },
-          "index": {"template": "index-template.tm"},   optional: the readable index
+          "index": {"template": "index-template.tm"},   optional: the readable index; with
+                                             several owners, "owners": "together" (the default) or
+                                             "by-owner" says how the website's home page lists them
           "keys": {"<owner name>": {"wallets": ["github:OWNER/REPO", ...]}, ...}   optional:
                                              hints, the GitHub key wallets that hold the keys of
-                                             each owner (osheaf key wallet --add|--remove); a
-                                             general {"wallet": ...} is a hint for every owner;
+                                             each owner (osheaf key wallet --add|--remove);
                                              your own wallets are in ~/.config/opensheaf/config.json
           "formerAddresses": {"<address>": "sheaf:<name>:<owner>"}   written by osheaf label:
                                              the old addresses of relabelled lines, which redirect
@@ -332,10 +333,9 @@ owner-name layout that section 3.2 recommends. The configuration may name
 the TeXmacs version the archive uses, which then goes into the toolchain of
 every typeset document. The labels, the owner catalogues and the
 tombstones are read from the discovery document, which keeps them (sections
-3.1, 8.1 and 13.3). A discovery document written before #72, with
-`mainCollection` and the owners as bare names, gives its main catalogue to
-the archive's first owner, so that a draft archive made then keeps working
-until it is rebuilt; a configuration's `mainCollection` is ignored.
+3.1, 8.1 and 13.3). Only the forms of the current draft are read, in the
+discovery document as in the configuration: `mainCollection`, and owners
+given as bare names, of earlier drafts of 0.2, are not.
 
 An archive made under version 0.1 is recognised by its configuration,
 which names an `archiveId`, or by its discovery document. Section 16.1
@@ -378,9 +378,6 @@ other command stops with that message (see the
         LABELS = {o["label"]: o["id"] for o in disc.get("objects", []) if o.get("label")}
         CATALOGUES = {e["owner"]: e["catalogue"] for e in disc.get("owners", [])
                       if isinstance(e, dict) and e.get("owner") and e.get("catalogue")}
-        if disc.get("mainCollection") and ARCHIVE["owner"] not in CATALOGUES:
-            CATALOGUES[ARCHIVE["owner"]] = disc["mainCollection"]
-        ARCHIVE.pop("mainCollection", None)
         TOMBSTONES = list(disc.get("tombstones", []))
         return ROOT
 
@@ -471,8 +468,14 @@ object has no page of its own at its label (its page is at
 The featured collection of the home page is named by its label in the
 configuration (`index.html.featured`): a new label is written there as
 well, and it may not lose its label. The owner catalogues are named by
-their identifiers in the discovery document, and their labels are free. A TeXmacs index is typeset again by `osheaf
-index`, which the command says.
+their identifiers in the discovery document, and their labels are free;
+the tools label that of an owner other than the archive's first after the
+owner ([owner catalogues](15-owner-catalogues.md)), so a new label of such
+an owner is given to its catalogue too, as `<label>-catalogue`, when the
+catalogue has no label or that of the owner's old one, and the new one is
+free; a label taken off the owner is taken off its catalogue so labelled.
+A TeXmacs index is typeset again by `osheaf index`, which the command
+says.
 
     # in load the configuration and set the paths of the archive:
     REDIRECT_MARK = "<!-- opensheaf: a former address -->"
@@ -543,8 +546,26 @@ index`, which the command says.
               else f"Done: {obj_id} has no label any more (it was {old}).")
         if kind in ("document", "collection") and before != after:
             print(f"Its old address paper/{before}/ leads to paper/{after}/ ({CONFIG_NAME}, formerAddresses).")
-        if INDEX.get("template"):
+        relabelled = bool(owner) and relabel_catalogue(owner, old, featured)
+        if INDEX.get("template") and not relabelled:
             print("Run osheaf index to typeset the TeXmacs index with the new label.")
+
+
+    def relabel_catalogue(owner, old, featured):
+        """After the label of OWNER changed from OLD: its owner catalogue labelled after it, if the
+        catalogue has no label or the one OLD gave it; FEATURED may not lose its label. Whether it was."""
+        cat = CATALOGUES.get(owner)
+        if owner == ARCHIVE["owner"] or not cat:
+            return False
+        have, wanted = label_of(cat), catalogue_label(owner)
+        if have == wanted or have not in (None, f"{old}-catalogue" if old else None):
+            return False
+        if wanted in LABELS or (wanted is None and have == featured):
+            print(f"The owner catalogue {have or cat} keeps its label: "
+                  + (f"{wanted} is taken." if wanted else "it is the featured collection."))
+            return False
+        label_command(argparse_namespace(line=cat, label=wanted, owner=None, unset=wanted is None))
+        return True
 
 The HTML version of a TeXmacs document is moved with its folder, the
 HTML file renamed for the new address, and a page that sends readers on

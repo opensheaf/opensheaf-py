@@ -169,12 +169,13 @@ osheaf.json:
 ```
 
 The entries of `osheaf.json` are *hints*: the wallets are private, and
-the person running the command may read some and not others. Of an
-owner's entry, `{"wallet": ...}` is read as a list of one; the form of
-one wallet for the whole archive, `"keys": {"wallet": ...}`, which earlier
-versions of the tools wrote, is a hint for every owner, after the owner's
-own; and the user's `"keys": {"wallet": ...}` comes after the user's
-`wallets`. The wallet of a command that names none is then:
+the person running the command may read some and not others. Only the
+form above is read: the one wallet for the whole archive,
+`"keys": {"wallet": ...}`, that the tools wrote during the draft, is
+refused with a message saying how to write it, and an owner's entry is
+read by its `wallets` alone. The user's `"keys"`, which configures a
+command wallet, comes after the user's `wallets`. The wallet of a command
+that names none is then:
 
 1. that of `OPENSHEAF_WALLET`, which wins;
 2. else, among the wallets hinted for the owner and then the user's
@@ -265,31 +266,35 @@ wallet refuses (below).
 
 
     def _named(e):
-        """The wallets an entry of "keys" names: its "wallets", and its "wallet"."""
-        if not isinstance(e, dict):
+        """The wallets an entry of "keys" names: its "wallets"."""
+        if not isinstance(e, dict) or not isinstance(e.get("wallets"), list):
             return []
-        out = [w for w in e.get("wallets", []) if isinstance(w, str)] if isinstance(e.get("wallets"), list) else []
-        return out + ([str(e["wallet"])] if e.get("wallet") else [])
+        return [w for w in e["wallets"] if isinstance(w, str)]
 
 
     def hints(config, owner=None):
-        """The wallets CONFIG (the `keys` of osheaf.json) hints for OWNER: its own, then those for every owner."""
+        """The wallets CONFIG (the `keys` of osheaf.json) hints for OWNER."""
         config = config if isinstance(config, dict) else {}
         out = []
-        for w in (_named(config.get(owner)) if owner else []) + _named(config):
+        for w in _named(config.get(owner)) if owner else []:
             if w not in out:
                 out.append(w)
         return out
 
 
     def check_archive_config(config):
-        """Refuse a command wallet in CONFIG, the `keys` of osheaf.json, in any of its entries."""
+        """Refuse a command wallet in CONFIG, the `keys` of osheaf.json, in any of its entries, and one wallet
+        for the whole archive, a form no longer read."""
         config = config if isinstance(config, dict) else {}
         for e in [config] + [v for k, v in config.items() if names.OWNER_NAME.match(k) and isinstance(v, dict)]:
-            if "command" in _named(e) or any(c in e for c in COMMANDS):
+            if "command" in _named(e) or e.get("wallet") == "command" or any(c in e for c in COMMANDS):
                 raise WalletError(f'osheaf.json configures a command wallet ("keys"), whose commands would run on '
                                   f"this machine: they are read only from your own configuration. Move \"keys\" to "
                                   f"{user_config_path()} (or to {WALLET}), and leave osheaf.json without it")
+        if "wallet" in config:
+            raise WalletError(f'osheaf.json: "keys": {{"wallet": ...}}, one wallet for the whole archive, is no '
+                              f'longer read: write "keys": {{"<owner>": {{"wallets": ["{config["wallet"]}"]}}}}, '
+                              "one entry for each owner whose keys it holds")
 
 
     def candidates(config, owner=None):

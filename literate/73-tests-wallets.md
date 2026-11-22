@@ -444,9 +444,9 @@ wallet` lists the wallets of an owner in order, adds and removes hints;
 `osheaf key wallets` lists the person's wallets with the owners each
 holds and their locks, and adds and removes wallets of the configuration
 file (the temporary one of the test), keeping what else it holds. The
-earlier forms still read: one wallet for the archive, a hint for every
-owner that `--remove` does not remove, and the user's `"keys": {"wallet":
-...}`. A command wallet is refused in any entry of `osheaf.json`.
+user's `"keys": {"wallet": ...}` comes after the hints; one wallet for the
+whole archive, a form of the draft, is refused with a message saying how
+to write it. A command wallet is refused in any entry of `osheaf.json`.
 
     # in wallet tests: the wallet of each owner:
     def test_wallets_of_each_owner(tmp_path, monkeypatch, capsys):
@@ -506,19 +506,22 @@ owner that `--remove` does not remove, and the user's `"keys": {"wallet":
         assert json.loads(user.read_text())["wallets"] == ["github:me/keys"]
         with pytest.raises(SystemExit, match="not one of your wallets"):
             run(*r, "key", "wallets", "--remove", "github:me/nothing")
-        # the earlier forms: one wallet for the archive, and the user's "keys"
+        # the user's "keys", after the hints; one wallet for the archive, no longer read
         user.write_text(json.dumps({"keys": {"wallet": "github:me/keys"}}))
         cfg = json.loads((root / "osheaf.json").read_text())
-        cfg["keys"] = {"wallet": "github:me/other"}
+        cfg["keys"] = {second: {"wallets": ["github:me/other"]}}
         (root / "osheaf.json").write_text(json.dumps(cfg, indent=2) + "\n")
         P.configure(root)
         assert P.configured_wallet(second).name == "github:me/other"
-        assert P.configured_wallet(first).name == "github:me/other"     # hinted, and holds a key of it
-        monkeypatch.setattr(wallet.GitHubWallet, "entries", lambda self, owner=None: [] if self.repo == "me/other"
-                            else [(owner, "k")])
-        assert P.configured_wallet(first).name == "github:me/keys"      # the user's, holding its keys
-        with pytest.raises(SystemExit, match="every owner"):
-            run(*r, "key", "wallet", "--owner", second, "--remove", "github:me/other")
+        assert P.configured_wallet(first).name == "github:me/keys"      # the user's: none hinted for it
+        cfg["keys"] = {"wallet": "github:me/other"}
+        (root / "osheaf.json").write_text(json.dumps(cfg, indent=2) + "\n")
+        P.configure(root)
+        with pytest.raises(SystemExit, match="no longer read"):
+            P.configured_wallet(first)
+        cfg["keys"] = {second: {"wallets": ["github:me/other"]}}
+        (root / "osheaf.json").write_text(json.dumps(cfg, indent=2) + "\n")
+        P.configure(root)
         monkeypatch.setenv(wallet.WALLET, "github:me/env")
         assert P.configured_wallet(first).name == "github:me/env"
         monkeypatch.delenv(wallet.WALLET)
@@ -599,7 +602,7 @@ listing uses the `list` command. `OPENSHEAF_WALLET` overrides the
 configuration: here, with a wallet of JSON, the same commands in another
 folder, which holds nothing. The same commands in `osheaf.json` are
 refused, before any is run, with a message that says where they belong; a
-GitHub wallet there is accepted.
+GitHub wallet hinted there for the owner is accepted.
 
     # in wallet tests: a command wallet:
     def test_command_wallet(tmp_path, monkeypatch, capsys):
@@ -647,7 +650,7 @@ GitHub wallet there is accepted.
         with pytest.raises(SystemExit, match="Move .keys. to .*config.json"):
             run(*r, "key", "list")
         assert not planted.exists()
-        cfg["keys"] = {"wallet": "github:me/keys"}
+        cfg["keys"] = {owner: {"wallets": ["github:me/keys"]}}
         (root / "osheaf.json").write_text(json.dumps(cfg))
         user.unlink()
         run(*r, "key", "list")

@@ -343,11 +343,10 @@ A GitHub wallet given to a command that keeps keys in it, `osheaf init
 --new-owner --keys`, `owner init --keys`, `owner rotate --keys` and `key
 push --wallet`, is recorded in `osheaf.json` as a hint for the owner,
 `"keys": {"<owner>": {"wallets": ["github:OWNER/REPO"]}}`, added to the
-wallets hinted already, unless it is one of them (the owner's, or one for
-every owner). The command says so. Since the keys of an owner may be in
-several wallets, a hint is never replaced: `osheaf key wallet --remove`
-removes one. An owner's entry of the form `{"wallet": ...}` becomes a list
-when a wallet is added to it. A command wallet is never recorded
+wallets hinted already for the owner, unless it is one of them. The
+command says so. Since the keys of an owner may be in several wallets, a
+hint is never replaced: `osheaf key wallet --remove` removes one. A
+command wallet is never recorded
 ([chapter 9](09-wallets.md)), nor anything at the offline level.
 
 `write_config` writes `osheaf.json` back as the tools write it, and
@@ -1005,9 +1004,8 @@ the wallets in which its keys are looked for, in order, and where each is
 named (the environment, `osheaf.json`, the user's file); `--add` records
 a GitHub wallet as a hint for the owner in `osheaf.json`, `--remove`
 removes one. Only an owner the archive hosts gets hints, and only GitHub
-wallets that are not repositories of the archive. A hint for every owner,
-`"keys": {"wallet": ...}`, is the archive's to edit by hand: `--remove`
-says so rather than remove it for all. This command reads no wallet.
+wallets that are not repositories of the archive. This command reads no
+wallet.
 
 ```
 $ osheaf key wallet
@@ -1051,9 +1049,6 @@ Done: osheaf.json hints github:jdoe/opensheaf-keys for q7tz2m4x...b3ka.
             if isinstance(cfg.get("keys"), dict) else []
         if remove:
             if remove not in own:
-                if remove in wallet.hints(cfg.get("keys")):
-                    stop(f'{CONFIG_NAME} hints {remove} for every owner ("keys": {{"wallet": ...}}): edit '
-                         f"{CONFIG_NAME} to remove it")
                 print(f"{CONFIG_NAME} hints no {remove} for {who}.")
                 return
             write_config(hinted(cfg, owner, remove, add=False))

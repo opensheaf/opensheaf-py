@@ -44,7 +44,8 @@ removed but when the line returns ([takedowns](25-takedown.md)). Version
 archive, and a mirror is listed like any line (section 11). The first
 drafts of 0.2 had `mainCollection`, the one catalogue of the archive,
 which `owners`, naming each owner with its catalogue, has replaced (#72);
-an owner whose catalogue is not made yet (between its key log and its
+`owners` is always written (section 3.1 requires it); an owner whose
+catalogue is not made yet (between its key log and its
 catalogue, when it is set up) is left out of `owners` until it is. `indexes`
 declares the three indexes, which are written with the discovery document
 (below); `feed` is not written yet.
@@ -320,13 +321,14 @@ catalogue, not from its head: nothing relies on a version that is not
 signed (section 7.3). An owner catalogue without a signed version (its
 owner's keys all exposed since) presents none of its members, and the
 command says so; an archive none of whose catalogues has a signed version
-presents nothing.
+presents nothing. The members are given by owner, for a home page that
+groups them so (`catalogue_groups`), or in one list.
 
     # in write the discovery document and the index:
-    def catalogue_members():
-        """The members of the latest signed version of each owner catalogue, in the order of the
+    def catalogue_groups():
+        """[(owner, members of the latest signed version of its owner catalogue)], in the order of the
         owners, or None when no owner catalogue has a signed version."""
-        out, signed = [], False
+        out = []
         for owner in archive_owners():
             cid = CATALOGUES.get(owner)
             d = obj_dir(cid) if cid else None
@@ -338,14 +340,23 @@ presents nothing.
                 print(f"warning: the owner catalogue of {names.short(owner)} has no signed version "
                       "(section 7.3): none of its members is presented", file=sys.stderr)
                 continue
-            signed = True
-            out += read_json(d, inv, "members.json", ver)["members"]
-        return out if signed else None
+            out.append((owner, read_json(d, inv, "members.json", ver)["members"]))
+        return out or None
+
+
+    def catalogue_members():
+        """The members of the owner catalogues in one list, in the order of the owners, or None."""
+        groups = catalogue_groups()
+        return None if groups is None else [m for _, ms in groups for m in ms]
 
 With `index.html.featured` set to the label of a collection of the
 archive, the home page lists that collection first (a reading list, a
 journal's issues), then the owner catalogues; a setting that names something
-else stops the command.
+else stops the command. `index.owners` says how the home page of an
+archive with several owners presents the owner catalogues (appendix A.3):
+`together` (the default), in one list, or `by-owner`, under a heading for
+each owner ([website](30-website.md)); another value stops the command. A
+TeXmacs index lists them together, in the order of the owners.
 
 Only members held here can be shown in a TeXmacs index: its entries are
 read from the local storage root. A curated owner catalogue with members of
@@ -356,9 +367,12 @@ out of `index.tm`, with a warning.
     def readable_index(args):
         """The website, or the TeXmacs index with the landing pages of the website."""
         from . import html
-        members = catalogue_members()
-        if members is None:
+        groups = catalogue_groups()
+        if groups is None:
             return
+        members = [m for _, ms in groups for m in ms]
+        if INDEX.get("owners", "together") not in ("together", "by-owner"):
+            sys.exit(f"osheaf.json: index.owners is together or by-owner, not {INDEX['owners']}")
         if INDEX.get("html"):
             featured = INDEX["html"].get("featured") if isinstance(INDEX["html"], dict) else None
             fid = None
@@ -370,7 +384,7 @@ out of `index.tm`, with a warning.
                 fd = obj_dir(fid)
                 if (read_json(fd, load_inventory(fd), OBJ) or {}).get("kind") != "collection":
                     sys.exit(f"osheaf.json: index.html.featured names {featured}, which is not a collection")
-            pages = html.render(members, featured=fid)
+            pages = html.render(members, featured=fid, groups=groups)
             print(f"Done: opensheaf.json, index.html, {plural(pages, 'landing page')} and sitemap.xml written.")
             return
         template = (ROOT / INDEX["template"]).read_text(encoding="latin-1")
