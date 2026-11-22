@@ -84,7 +84,7 @@ def seal(args):
     obj = {"format": obj["format"], "specification": obj["specification"], "kind": obj["kind"],
            "name": line.split(":")[1], "owner": owner,
            **{k: v for k, v in obj.items() if k not in ("format", "specification", "kind")}}
-    dc["url"] = P.landing_url(label)
+    dc["url"] = P.landing_url(line)
     files[P.GENESIS] = genesis
     files["datacite.json"] = P.json_bytes(dc)
     new = P.add_version(line, files, obj, getattr(args, "message", None) or f"Sealed from the draft {args.id}")

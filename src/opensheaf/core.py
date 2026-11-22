@@ -185,15 +185,33 @@ def label_of(obj_id):
     return next((lb for lb, i in LABELS.items() if i == obj_id), None)
 
 
-def page_address(obj_id):
-    """The address of the landing page of the line OBJ_ID below paper/ (appendix A.3): its label,
-    or its name, followed by -<owner> when the archive holds several lines of that name."""
-    label = label_of(obj_id)
-    if label:
-        return label
+def name_address(obj_id, originator=None):
+    """The address of the landing page of the line OBJ_ID below paper/ built from its name
+    (appendix A.3): the name, followed by -<owner> unless the owner is the originator (ORIGINATOR,
+    if given, else read from the genesis record held, else the owner)."""
     _, nm, owner = obj_id.split(":")
-    same = [i for i, _, _ in objects() if isinstance(i, str) and i.startswith(f"sheaf:{nm}:")]
-    return nm if len(same) <= 1 else f"{nm}-{owner}"
+    d = obj_dir(obj_id)
+    inv = load_inventory(d) if originator is None and (d / "inventory.json").is_file() else None
+    g = read_logical(d, inv, GENESIS, "v1") if inv else None
+    originator = originator or owner
+    if g is not None:
+        try:
+            originator = json.loads(g.read_bytes()).get("originator", owner)
+        except ValueError:
+            pass
+    return nm if originator == owner else f"{nm}-{owner}"
+
+
+def page_address(obj_id):
+    """The address of the line OBJ_ID below paper/ that pages link to: its label, or else the
+    address from its name."""
+    return label_of(obj_id) or name_address(obj_id)
+
+
+def landing_url(obj_id, originator=None):
+    """The address readers are sent to from fixed files (section 4.4): the landing page at the
+    address built from the name (appendix A.3), which never changes."""
+    return f"{ARCHIVE['baseUrl']}paper/{name_address(obj_id, originator)}/"
 
 
 REDIRECT_MARK = "<!-- opensheaf: a former address -->"
@@ -1064,14 +1082,6 @@ def check_rights(rights):
     return rights
 
 
-def landing_url(label):
-    """The address readers are sent to: the landing page, written with either
-    kind of index, or else the HTML version of a TeXmacs document."""
-    if INDEX.get("html") or INDEX.get("template"):
-        return f"{ARCHIVE['baseUrl']}paper/{label}/"
-    return f"{ARCHIVE['baseUrl']}site/{label}/{label}.html"
-
-
 def seal(kind, owner):
     """A new genesis record of a work of OWNER, of KIND, and the identifier of its line,
     free in this archive (sections 5.3, 5.4 and 10.2)."""
@@ -1200,7 +1210,7 @@ def deposit(args):
         "publicationYear": int(issued[:4]),
         "types": {"resourceTypeGeneral": args.type},
         "version": str(doc_version),
-        "url": landing_url(label),
+        "url": None,
         "dates": [],
         "language": args.language or "en",
         "formats": formats,
@@ -1263,6 +1273,9 @@ def deposit(args):
         files[GENESIS] = read_logical(d, inv, GENESIS)
     if not draft:
         obj["name"] = obj_id.split(":")[1]
+        datacite["url"] = landing_url(obj_id)
+    else:
+        datacite.pop("url", None)
     if prev_obj and prev_obj.get("parent"):
         obj["parent"] = prev_obj["parent"]
         for lp in evidence_paths(inv):
@@ -3029,7 +3042,7 @@ def check_presentation(f, disc):
         except (ValueError, TypeError):
             continue
         if held_here:
-            landing = ROOT / "paper" / page_address(obj_id) / "index.html"
+            landing = ROOT / "paper" / name_address(obj_id) / "index.html"
             text = landing.read_text(encoding="utf-8", errors="replace") if landing.is_file() else ""
             if not landing_names(text, m["name"], m["owner"], obj_id):
                 report(landing.relative_to(ROOT).as_posix(), f"no landing page giving the sheaf: URI of "

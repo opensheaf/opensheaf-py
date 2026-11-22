@@ -506,8 +506,7 @@ section 9.7), the branch's own address, no DOI of the parent's, and an
     dc = {key: v for key, v in pdc.items() if key not in ("doi", "url")}
     dc["publisher"] = {"name": P.ARCHIVE["name"]}
     dc["version"] = str(obj["documentVersion"])
-    if label or P.label_of(obj_id):
-        dc["url"] = P.landing_url(label or P.label_of(obj_id))
+    dc["url"] = P.landing_url(obj_id, names.read_genesis(files[P.GENESIS]).get("originator"))
     rel = ({"relatedIdentifier": pdc["doi"], "relatedIdentifierType": "DOI", "relationType": "IsIdenticalTo"}
            if pdc.get("doi") else {"relatedIdentifier": parent["url"], "relatedIdentifierType": "URL",
                                    "relationType": "IsIdenticalTo"} if parent.get("url") else None)

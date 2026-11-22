@@ -283,9 +283,12 @@ A line without a signed version (all its versions contested) is read from
 its head instead. Statuses take a little work, so each line is read once
 per run of `render`, and kept in `LINES`.
 
-The address of its pages, `slug`, is its label, or its name when it has
-none, followed by its owner name when the archive holds several lines of
-that name (`page_address`, in the chapter on the [archive](10-archive.md)).
+Its page is written at `home`, the address built from its name, which
+fixed files record and which never changes, and, for a line with a label,
+also at `slug`, its label, the address the pages link to and the
+canonical one: the same page at both, so that the readable address and the
+permanent one both work (`name_address` and `page_address`, in the chapter
+on the [archive](10-archive.md); appendix A.3).
 The originator of its work, read from its genesis record, tells whether
 its `sheaf:` URI needs an owner part (below).
 
@@ -302,6 +305,7 @@ its `sheaf:` URI needs an owner part (below).
             self.dir = P.obj_dir(obj_id)
             self.inv = P.load_inventory(self.dir)
             self.slug = P.page_address(obj_id)
+            self.home = P.name_address(obj_id)
             g = P.read_logical(self.dir, self.inv, P.GENESIS, "v1")
             try:
                 self.originator = names.read_genesis(g.read_bytes()).get("originator") if g else None
@@ -537,10 +541,11 @@ the base URL.
             "authors": esc(authors(dc)), "abstract": abstract_html(dc),
             "pdf": esc(pdf_address(root, line, cur, obj) or f"#v{obj['documentVersion']}"),
             "html_link": html_link}))
-    out = root_out / "paper" / line.slug / "index.html"
-    out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(page, encoding="utf-8")
-    written.append(line.slug)
+    for address in dict.fromkeys([line.home, line.slug]):
+        out = root_out / "paper" / address / "index.html"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(page, encoding="utf-8")
+        written.append(address)
     lastmod = line.inv["versions"][line.inv["head"]]["created"][:10]
     urls.append((f"{base}paper/{line.slug}/", lastmod))
     if html_link:

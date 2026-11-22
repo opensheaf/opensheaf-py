@@ -517,7 +517,7 @@ def import_paper(folder, taken, report, dry, texmacs=None, licences=None, existi
             "publicationYear": int(first_date[:4]),
             "types": {"resourceTypeGeneral": "Preprint"},
             "version": str(docn),
-            "url": P.landing_url(label),
+            "url": P.landing_url(obj_id) if obj_id else None,
             "dates": [{"date": first_date, "dateType": "Issued"},
                       {"date": v["date"][:10], "dateType": "Available"}],
             "language": "en",
@@ -558,6 +558,7 @@ def import_paper(folder, taken, report, dry, texmacs=None, licences=None, existi
                 genesis, obj_id = P.seal("document", owner)
                 obj["name"] = obj_id.split(":")[1]
                 P.LABELS[label] = obj_id
+            datacite["url"] = P.landing_url(obj_id)
             d = P.obj_dir(obj_id)
             inv0 = P.load_inventory(d)
             if inv0 is not None:

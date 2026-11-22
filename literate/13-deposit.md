@@ -37,9 +37,6 @@ A few helpers turn what a depositor types into DataCite properties.
     <<the licence of a new document version>>
 
 
-    <<the landing address of a document>>
-
-
     <<seal a new work>>
 
 An author is given as printed in the document, family name first, with an
@@ -195,17 +192,11 @@ with the [website](30-website.md), and also beside a
 [TeXmacs index](16-index.md), which has no landing pages of its own. The
 [branches](23-branches.md) and [collections](21-collections.md) use it too.
 
-The address is made from the label of the line (section 3.1), which is
-the archive's choice for readable URLs; permanent links are `sheaf:` URIs
-(section 12), which the landing pages will give.
-
-    # in the landing address of a document:
-    def landing_url(label):
-        """The address readers are sent to: the landing page, written with either
-        kind of index, or else the HTML version of a TeXmacs document."""
-        if INDEX.get("html") or INDEX.get("template"):
-            return f"{ARCHIVE['baseUrl']}paper/{label}/"
-        return f"{ARCHIVE['baseUrl']}site/{label}/{label}.html"
+The address is built from the name of the line, never from its label,
+which may change (section 3.1, appendix A.3): `landing_url`, in the
+chapter on the [archive](10-archive.md). A new work has its name only once
+it is sealed, so the address is written last, with the name; a draft,
+which has none, has no `url`.
 
 Sealing
 -------
@@ -466,7 +457,7 @@ the document version, as a string; the publication year is that of the
         "publicationYear": int(issued[:4]),
         "types": {"resourceTypeGeneral": args.type},
         "version": str(doc_version),
-        "url": landing_url(label),
+        "url": None,
         "dates": [],
         "language": args.language or "en",
         "formats": formats,
@@ -562,6 +553,9 @@ as it was (only `site/` may have a new HTML version).
         files[GENESIS] = read_logical(d, inv, GENESIS)
     if not draft:
         obj["name"] = obj_id.split(":")[1]
+        datacite["url"] = landing_url(obj_id)
+    else:
+        datacite.pop("url", None)
     if prev_obj and prev_obj.get("parent"):
         obj["parent"] = prev_obj["parent"]
         for lp in evidence_paths(inv):

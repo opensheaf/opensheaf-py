@@ -1397,9 +1397,9 @@ the files alone. The home page presents the latest signed version of the
 owner catalogues: it shows the pin of every member, the beginning of its
 digest, as the [website](30-website.md) and the [TeXmacs index](16-index.md)
 write it, which tells a stale home page from a current one. Each member
-whose line is held here has a landing page at `paper/<label>/` (or
-`paper/<name>/` without a label, `paper/<name>-<owner>/` when several lines
-of that name are held, `page_address`), which gives the full `sheaf:` URI
+whose line is held here has a landing page at the address built from its
+name, which fixed files record (`paper/<name>/` for the originator's line,
+`paper/<name>-<owner>/` for another, `name_address`), which gives the full `sheaf:` URI
 of its line in canonical form (appendix A.3, sections 12.1 and 12.2):
 `sheaf:<name>` for the originator's line, `sheaf:<name>:<owner>` for
 another. Under the profile, what is missing is an
@@ -1443,7 +1443,7 @@ the takedown removed it from the pages (section 13.2).
             except (ValueError, TypeError):
                 continue
             if held_here:
-                landing = ROOT / "paper" / page_address(obj_id) / "index.html"
+                landing = ROOT / "paper" / name_address(obj_id) / "index.html"
                 text = landing.read_text(encoding="utf-8", errors="replace") if landing.is_file() else ""
                 if not landing_names(text, m["name"], m["owner"], obj_id):
                     report(landing.relative_to(ROOT).as_posix(), f"no landing page giving the sheaf: URI of "

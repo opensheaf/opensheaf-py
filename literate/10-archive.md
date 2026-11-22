@@ -413,23 +413,45 @@ Commands name lines by their labels; a full identifier is accepted too.
         """The label of the line OBJ_ID, or None."""
         return next((lb for lb, i in LABELS.items() if i == obj_id), None)
 
-A line held here has a landing page (appendix A.3) at an address of the
-archive's choice, different for each line: `paper/<label>/`, or, for a
-line without a label, `paper/<name>/`, unless the archive holds several
-lines of that name (the originator's line and a branch of it, a mirror of
-another owner's), which would share it: their pages are then at
-`paper/<name>-<owner>/`. The address is presentation, not an identifier.
+A line held here has a landing page (appendix A.3) at an address built
+from its name, which never changes: `paper/<name>/` for the originator's
+line, `paper/<name>-<owner>/` for any other (a branch, a mirror of a
+branch), as the canonical form of its `sheaf:` URI drops the owner of the
+originator's line only (section 12.2). That address is the one fixed files
+record (`url` in `datacite.json`, section 4.4). A line with a label also
+has its page at `paper/<label>/`, the address the pages link to, which is
+a convenience and may change (section 3.1). The originator is read from
+the genesis record held, or is given for a branch being made, or is the
+owner for a line being sealed.
 
     # in load the configuration and set the paths of the archive:
-    def page_address(obj_id):
-        """The address of the landing page of the line OBJ_ID below paper/ (appendix A.3): its label,
-        or its name, followed by -<owner> when the archive holds several lines of that name."""
-        label = label_of(obj_id)
-        if label:
-            return label
+    def name_address(obj_id, originator=None):
+        """The address of the landing page of the line OBJ_ID below paper/ built from its name
+        (appendix A.3): the name, followed by -<owner> unless the owner is the originator (ORIGINATOR,
+        if given, else read from the genesis record held, else the owner)."""
         _, nm, owner = obj_id.split(":")
-        same = [i for i, _, _ in objects() if isinstance(i, str) and i.startswith(f"sheaf:{nm}:")]
-        return nm if len(same) <= 1 else f"{nm}-{owner}"
+        d = obj_dir(obj_id)
+        inv = load_inventory(d) if originator is None and (d / "inventory.json").is_file() else None
+        g = read_logical(d, inv, GENESIS, "v1") if inv else None
+        originator = originator or owner
+        if g is not None:
+            try:
+                originator = json.loads(g.read_bytes()).get("originator", owner)
+            except ValueError:
+                pass
+        return nm if originator == owner else f"{nm}-{owner}"
+
+
+    def page_address(obj_id):
+        """The address of the line OBJ_ID below paper/ that pages link to: its label, or else the
+        address from its name."""
+        return label_of(obj_id) or name_address(obj_id)
+
+
+    def landing_url(obj_id, originator=None):
+        """The address readers are sent to from fixed files (section 4.4): the landing page at the
+        address built from the name (appendix A.3), which never changes."""
+        return f"{ARCHIVE['baseUrl']}paper/{name_address(obj_id, originator)}/"
 
 ### Changing a label
 

@@ -172,13 +172,14 @@ here. The owner catalogue keeps its member, a pin of a version now removed
                 "inventorySha512": owners.sidecar_digest((d / "inventory.json.sha512").read_bytes()),
                 "date": P.TODAY, "reason": args.reason.strip()}
         P.write_indexes()
+        home = P.name_address(obj_id)
         label = P.label_of(obj_id)
         if label:
             del P.LABELS[label]
         cfg = json.loads((P.ROOT / P.CONFIG_NAME).read_text(encoding="utf-8"))
         former = dict(cfg.get("formerAddresses") or {})
         gone = [a for a, i in former.items() if i == obj_id]
-        for folder in [P.ROOT / "paper" / (label or nm), P.SITE / (label or nm)] + \
+        for folder in [P.ROOT / "paper" / home, P.ROOT / "paper" / (label or nm), P.SITE / (label or nm)] + \
                 [P.SITE / a for a in gone if P.LABEL_RE.match(a)]:
             shutil.rmtree(folder, ignore_errors=True)
         if gone:

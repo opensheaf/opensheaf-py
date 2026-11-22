@@ -1191,10 +1191,10 @@ def test_index_pins_required_by_the_profile_website(archive, monkeypatch):
     assert finish() == []
     nm = P.LABELS["paper-a"].split(":")[1]
     (archive / "index.html").write_text("<p>an index made by other tools</p>")
-    shutil.rmtree(archive / "paper" / "paper-a")
+    shutil.rmtree(archive / "paper" / nm)
     errors = P.verify_errors()
     assert f"index.html: does not show the pin of {nm}" in errors
-    assert any(e.startswith("paper/paper-a/index.html: no landing page giving the sheaf: URI") for e in errors)
+    assert any(e.startswith(f"paper/{nm}/index.html: no landing page giving the sheaf: URI") for e in errors)
     monkeypatch.setitem(P.ARCHIVE, "profiles", [])
     P.write_discovery()
     found = P.verify_findings()
@@ -1333,8 +1333,9 @@ def test_relabel(tmp_path, capsys):
     run(*r, "deposit", "new", *paper, "--changes", "Typos.")
     d = P.obj_dir(obj_id)
     inv = P.load_inventory(d)
-    assert P.read_json(d, inv, "datacite.json", "v1")["url"] == "https://example.org/T/paper/old/"
-    assert P.read_json(d, inv, "datacite.json")["url"] == "https://example.org/T/paper/new/"
+    assert P.read_json(d, inv, "datacite.json", "v1")["url"] == f"https://example.org/T/paper/{nm}/"
+    assert P.read_json(d, inv, "datacite.json")["url"] == f"https://example.org/T/paper/{nm}/"
+    assert "T" in (root / "paper" / nm / "index.html").read_text()
     run(*r, "label", "new", "newer")
     assert json.loads((root / "osheaf.json").read_text())["formerAddresses"] == {"new": obj_id, "old": obj_id}
     assert "url=../newer/" in (root / "paper" / "old" / "index.html").read_text()
@@ -1412,28 +1413,29 @@ def test_texmacs_index_with_landing_pages(tmp_path):
     assert "https://example.org/T/paper/p/" in sitemap and "https://example.org/T/site/p/p.html" in sitemap
     assert not (root / "index.html").exists() and not (root / "style.css").exists()
     d = P.obj_dir(P.LABELS["p"])
-    assert P.read_json(d, P.load_inventory(d), "datacite.json")["url"] == "https://example.org/T/paper/p/"
+    assert P.read_json(d, P.load_inventory(d), "datacite.json")["url"] == \
+        f"https://example.org/T/paper/{P.LABELS['p'].split(':')[1]}/"
     assert P.changes_note({"changes": {"text": "61 pages"},
                            "external": [{"role": "source", "service": "arXiv"}]}) == "arXiv comments: 61 pages"
     assert P.verify_errors() == []
     assert not [x for x in P.verify_findings() if x["place"].startswith(("paper/", "index.html"))]
-    (root / "paper" / "p" / "index.html").write_text(page.replace(f"{canonical}<ol>", f"{P.LABELS['p']}<ol>"))
+    home = root / "paper" / P.LABELS["p"].split(":")[1] / "index.html"
+    home.write_text(page.replace(f"{canonical}<ol>", f"{P.LABELS['p']}<ol>"))
     assert not [x for x in P.verify_findings() if x["place"].startswith(("paper/", "index.html"))]
-    (root / "paper" / "p" / "index.html").write_text(page.replace(canonical, "a line"))
+    home.write_text(page.replace(canonical, "a line"))
     found = P.verify_findings()
     assert [x for x in found if x["severity"] == "error"] == []
-    assert {"severity": "warning", "place": "paper/p/index.html", "message": f"no landing page giving the "
+    assert {"severity": "warning", "place": home.relative_to(root).as_posix(), "message": f"no landing page giving the "
             f"sheaf: URI of p (appendix A.3) (the archive does not declare the profile website)"} in found
 
 
-def test_page_addresses(monkeypatch):
+def test_page_addresses(archive, monkeypatch):
     n, m, o1, o2 = "n" * 51 + "a", "m" * 51 + "a", "o" * 51 + "a", "p" * 51 + "a"
     held = [f"sheaf:{n}:{o1}", f"sheaf:{n}:{o2}", f"sheaf:{m}:{o1}"]
-    monkeypatch.setattr(P, "objects", lambda: [(i, None, None) for i in held])
+    assert [P.name_address(i, o1) for i in held] == [n, f"{n}-{o2}", m]
     monkeypatch.setattr(P, "LABELS", {"lab": held[0]})
-    assert [P.page_address(i) for i in held] == ["lab", f"{n}-{o2}", m]
-    monkeypatch.setattr(P, "LABELS", {})
-    assert [P.page_address(i) for i in held] == [f"{n}-{o1}", f"{n}-{o2}", m]
+    assert P.page_address(held[0]) == "lab" and P.page_address(held[2]) == m
+    assert P.landing_url(held[1], o1) == f"{P.ARCHIVE['baseUrl']}paper/{n}-{o2}/"
 
 
 def test_keeper_of_the_owner(tmp_path, monkeypatch, capsys):
@@ -1526,7 +1528,7 @@ def test_arxiv_import_of_two_versions(tmp_path):
     assert v2["agreement"]["method"] == "deposited by an author"
     assert v2["agreement"]["by"] == ["Doe, Jane", "Roe, Richard"]
     dc = P.read_json(d, inv, "datacite.json", "v2")
-    assert dc["url"] == "https://example.org/T/paper/first-paper/" and dc["version"] == "2"
+    assert dc["url"] == f"https://example.org/T/paper/{obj_id.split(':')[1]}/" and dc["version"] == "2"
     assert P.read_logical(d, inv, P.GENESIS).read_bytes() == P.read_logical(d, inv, P.GENESIS, "v1").read_bytes()
     run(*r, "arxiv", "import", str(dl))
     run(*r, "arxiv", "import", str(dl), "--update")
@@ -1616,7 +1618,7 @@ def test_zenodo_deposit(tmp_path, fake_zenodo):
     assert entry["role"] == "deposit" and entry["service"] == "Zenodo" and entry["doi"] == dc["doi"]
     assert dc["doi"].startswith("10.5281/zenodo.") and entry["record"].startswith("https://zenodo.org/records/")
     assert obj["previous"] == P.digest(d / "v1" / "inventory.json") and obj["documentVersion"] == 1
-    assert dc["url"] == "https://example.org/T/paper/p/"
+    assert dc["url"] == f"https://example.org/T/paper/{P.LABELS['p'].split(':')[1]}/"
     assert sorted(fake_zenodo[True].uploads) == ["datacite.json", "genesis.json", "object.json", "p.tex", "paper.pdf"]
     assert fake_zenodo[True].uploads["object.json"] == P.read_logical(d, inv, P.OBJ).read_bytes()
     with pytest.raises(SystemExit, match="already on Zenodo"):

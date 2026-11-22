@@ -370,7 +370,8 @@ def test_featured_collection_on_the_home_page(tmp_path):
     home = (a / "index.html").read_text()
     assert home.index("<h2>A reading list</h2>") < home.index("<h2>In this archive</h2>")
     assert "Papers to read first." in home
-    assert '<a class="paper-title" href="https://example.org/papers/paper/one/">One</a>' in home
+    assert f'<a class="paper-title" href="https://example.org/papers/paper/{line(p, "one").split(":")[1]}/">One</a>' \
+        in home
     assert "in <a href=\"https://example.org/papers/\">Papers</a>" in home
     for m in members(a, "reading-list")["members"] + main:
         assert P.member_pins(m)[-1][1][:32] in home
@@ -543,6 +544,8 @@ def test_accept_vetted_versions(tmp_path):
     assert obj["parent"]["owner"] == a_owner and obj["parent"]["objectVersion"] == "v2"
     assert obj["parent"]["url"] == f"https://example.org/authors/ocfl/{a_owner}/{nm}/v2/"
     assert obj["documentVersion"] == 1 and obj["parent"]["documentVersion"] == 2 and "previous" not in obj
+    jbase = json.loads((j / P.CONFIG_NAME).read_text())["baseUrl"]
+    assert P.read_json(d, inv, "datacite.json")["url"] == f"{jbase}paper/{nm}-{j_owner}/"
     held = {p for ps in inv["versions"]["v1"]["state"].values() for p in ps}
     assert {"genesis.json", "paper.pdf", "parent/inventory.json", "parent/object.json"} <= held
     assert any(p.startswith("parent/signatures/signature-") for p in held)

@@ -569,7 +569,7 @@ becomes public now, and its `Available` date is today (section 4.4);
     # in Zenodo: the DOI and the relations in datacite.json:
     today = datetime.date.today().isoformat()
     dc["doi"] = doi
-    dc["url"] = dc.get("url") or P.landing_url(label)
+    dc["url"] = dc.get("url") or P.landing_url(obj_id)
     rel = [r for r in dc.get("relatedIdentifiers", [])
            if not (r["relationType"] in ("IsVersionOf", "IsNewVersionOf")
                    and "zenodo" in r["relatedIdentifier"])]

@@ -89,7 +89,7 @@ def sort_revisions(revs, order):
                                        else len(order) + x["documentVersion"]))
 
 
-def describe(title, description, version, issued, members, label=None):
+def describe(title, description, version, issued, members, url=None):
     cur = P.ARCHIVE["curator"]
     creator = {"name": cur["name"], "nameType": "Personal", "familyName": cur["familyName"]}
     if cur.get("givenName"):
@@ -99,8 +99,8 @@ def describe(title, description, version, issued, members, label=None):
           "version": str(version),
           "dates": [{"date": issued, "dateType": "Issued"}, {"date": P.TODAY, "dateType": "Available"}],
           "rightsList": [dict(P.RIGHTS["cc0-1.0"])]}
-    if label:
-        dc["url"] = P.landing_url(label)
+    if url:
+        dc["url"] = url
     if description:
         dc["descriptions"] = [{"description": description, "descriptionType": "Abstract"}]
     dois = [m["doi"] for m in members if m.get("doi")] + \
@@ -146,7 +146,7 @@ def write(coll_id, mem, *, message, title=None, description=None, owner=None, la
     label = label or P.label_of(coll_id)
     files = {"members.json": P.json_bytes(mem), P.GENESIS: genesis,
              "datacite.json": P.json_bytes(describe(title, description, version, issued, mem["members"],
-                                                    label))}
+                                                    P.landing_url(coll_id) if label else None))}
     obj = {"format": P.OBJ_FORMAT, "specification": P.SPEC, "kind": "collection",
            "name": coll_id.split(":")[1], "owner": owner, "documentVersion": version, "status": "active"}
     if label:

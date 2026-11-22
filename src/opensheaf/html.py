@@ -97,6 +97,7 @@ class Line:
         self.dir = P.obj_dir(obj_id)
         self.inv = P.load_inventory(self.dir)
         self.slug = P.page_address(obj_id)
+        self.home = P.name_address(obj_id)
         g = P.read_logical(self.dir, self.inv, P.GENESIS, "v1")
         try:
             self.originator = names.read_genesis(g.read_bytes()).get("originator") if g else None
@@ -379,10 +380,11 @@ def render(members, home=True, featured=None, keeper_fetch=None, groups=None):
                 "authors": esc(authors(dc)), "abstract": abstract_html(dc),
                 "pdf": esc(pdf_address(root, line, cur, obj) or f"#v{obj['documentVersion']}"),
                 "html_link": html_link}))
-        out = root_out / "paper" / line.slug / "index.html"
-        out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text(page, encoding="utf-8")
-        written.append(line.slug)
+        for address in dict.fromkeys([line.home, line.slug]):
+            out = root_out / "paper" / address / "index.html"
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_text(page, encoding="utf-8")
+            written.append(address)
         lastmod = line.inv["versions"][line.inv["head"]]["created"][:10]
         urls.append((f"{base}paper/{line.slug}/", lastmod))
         if html_link:

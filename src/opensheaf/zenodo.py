@@ -360,7 +360,7 @@ def deposit(P, label, z):
                 files[n["path"]] = obj_dir / P.content_path(inv, signed, n["path"])
         today = datetime.date.today().isoformat()
         dc["doi"] = doi
-        dc["url"] = dc.get("url") or P.landing_url(label)
+        dc["url"] = dc.get("url") or P.landing_url(obj_id)
         rel = [r for r in dc.get("relatedIdentifiers", [])
                if not (r["relationType"] in ("IsVersionOf", "IsNewVersionOf")
                        and "zenodo" in r["relatedIdentifier"])]
