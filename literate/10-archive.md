@@ -461,7 +461,11 @@ line's page wherever it is now, as long as no line has its page there
 `site/<new>/<new>.html`, its other files (images) with it, under their
 names, to which it refers; a page of the same kind is left at the old
 place. The next version deposited gives the new address. A line taken
-down loses its old addresses too ([takedowns](25-takedown.md)). An owner
+down loses its old addresses too ([takedowns](25-takedown.md)). A
+collection's description gives the archive's address, not that of its
+page, so its old address is kept only if it had a page there (a member of
+a collection with a page, or labelled before): an owner catalogue
+labelled for the first time leaves none. An owner
 object has no page of its own at its label (its page is at
 `owner/<owner>/`), so its label changes nothing else.
 
@@ -534,7 +538,9 @@ says.
         after = page_address(obj_id)
         former = dict(cfg.get("formerAddresses") or {})
         former.pop(after, None)
-        if kind in ("document", "collection") and before != after:
+        moves = before != after and (kind == "document" or (
+            kind == "collection" and (ROOT / "paper" / before / "index.html").is_file()))
+        if moves:
             former[before] = obj_id
             move_html_version(obj_id, before, after, former)
         if former:
@@ -547,7 +553,7 @@ says.
         write_discovery()
         print(f"Done: {obj_id} is labelled {new}" + (f", no longer {old}." if old else ".") if new
               else f"Done: {obj_id} has no label any more (it was {old}).")
-        if kind in ("document", "collection") and before != after:
+        if moves:
             print(f"Its old address paper/{before}/ leads to paper/{after}/ ({CONFIG_NAME}, formerAddresses).")
         relabelled = bool(owner) and relabel_catalogue(owner, old, featured)
         if INDEX.get("template") and not relabelled:

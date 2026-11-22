@@ -247,7 +247,9 @@ def label_command(args):
     after = page_address(obj_id)
     former = dict(cfg.get("formerAddresses") or {})
     former.pop(after, None)
-    if kind in ("document", "collection") and before != after:
+    moves = before != after and (kind == "document" or (
+        kind == "collection" and (ROOT / "paper" / before / "index.html").is_file()))
+    if moves:
         former[before] = obj_id
         move_html_version(obj_id, before, after, former)
     if former:
@@ -260,7 +262,7 @@ def label_command(args):
     write_discovery()
     print(f"Done: {obj_id} is labelled {new}" + (f", no longer {old}." if old else ".") if new
           else f"Done: {obj_id} has no label any more (it was {old}).")
-    if kind in ("document", "collection") and before != after:
+    if moves:
         print(f"Its old address paper/{before}/ leads to paper/{after}/ ({CONFIG_NAME}, formerAddresses).")
     relabelled = bool(owner) and relabel_catalogue(owner, old, featured)
     if INDEX.get("template") and not relabelled:

@@ -645,6 +645,7 @@ def test_owner_catalogues(tmp_path):
     run(*r, "label", "--owner", second, "jane")
     P.configure(a)
     assert P.label_of(cat2) == "jane-catalogue"
+    assert cat2 not in (P.ARCHIVE.get("formerAddresses") or {}).values()   # it had no page before
     run(*r, "label", "--owner", second, "jo")
     P.configure(a)
     assert P.label_of(cat2) == "jo-catalogue" and P.label_of(cat1) == "main"
