@@ -842,6 +842,38 @@ def test_line_returns(tmp_path):
     assert errors(lib) == []
 
 
+def test_object_pages(tmp_path, monkeypatch):
+    monkeypatch.setattr(P, "OBJECTS_PER_PAGE", 2)
+    a = make(tmp_path, "a")
+    for label in ("one", "two", "three"):
+        deposit(a, label, label, new=True)
+    disc = json.loads((a / "opensheaf.json").read_text())
+    assert "objects" not in disc and disc["objectPages"]
+    pages = [json.loads((a / p).read_text()) for p in disc["objectPages"]]
+    assert all(p["format"] == "opensheaf-objects/0.2" and len(p["objects"]) <= 2 for p in pages)
+    listed = [o["id"] for p in pages for o in p["objects"]]
+    assert len(listed) == len(set(listed)) == len(P.discovery()["objects"])
+    assert errors(a) == []
+    P.configure(a)
+    assert P.LABELS["two"] == line(a, "two")
+    _, nm, owner = line(a, "two").split(":")
+    with remote.Resolver(here=False) as r:
+        assert r.pin(nm, owner, "v1", head_digest(a, "two", "v1"), [str(a)]).status == "verified"
+    first = a / disc["objectPages"][0]
+    saved = first.read_bytes()
+    first.unlink()
+    assert any("is missing (section 3.1)" in e for e in errors(a))
+    with remote.Resolver(here=False) as r:
+        assert r.source(str(a)) is None
+    first.write_bytes(saved)
+    monkeypatch.setattr(P, "OBJECTS_PER_PAGE", 1000)
+    P.configure(a)
+    P.write_discovery()
+    disc = json.loads((a / "opensheaf.json").read_text())
+    assert "objectPages" not in disc and not (a / "objects").exists()
+    assert errors(a) == []
+
+
 def test_indexes(tmp_path):
     a = make(tmp_path, "a")
     deposit(a, "paper", "one", new=True)

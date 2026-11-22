@@ -375,7 +375,11 @@ other command stops with that message (see the
         TEXMACS = cfg.get("texmacs", {})
         TEXMACS_VERSION = TEXMACS.get("version", TEXMACS_VERSION)
         INDEX = cfg.get("index", {})
-        LABELS = {o["label"]: o["id"] for o in disc.get("objects", []) if o.get("label")}
+        try:
+            listed = listed_objects(disc, local_page)
+        except ValueError:
+            listed = []
+        LABELS = {o["label"]: o["id"] for o in listed if o.get("label")}
         CATALOGUES = {e["owner"]: e["catalogue"] for e in disc.get("owners", [])
                       if isinstance(e, dict) and e.get("owner") and e.get("catalogue")}
         TOMBSTONES = list(disc.get("tombstones", []))

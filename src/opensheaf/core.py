@@ -154,7 +154,11 @@ def configure(root):
     TEXMACS = cfg.get("texmacs", {})
     TEXMACS_VERSION = TEXMACS.get("version", TEXMACS_VERSION)
     INDEX = cfg.get("index", {})
-    LABELS = {o["label"]: o["id"] for o in disc.get("objects", []) if o.get("label")}
+    try:
+        listed = listed_objects(disc, local_page)
+    except ValueError:
+        listed = []
+    LABELS = {o["label"]: o["id"] for o in listed if o.get("label")}
     CATALOGUES = {e["owner"]: e["catalogue"] for e in disc.get("owners", [])
                   if isinstance(e, dict) and e.get("owner") and e.get("catalogue")}
     TOMBSTONES = list(disc.get("tombstones", []))
@@ -1740,9 +1744,73 @@ def discovery():
 
 
 def write_discovery():
-    """Write the discovery document opensheaf.json and the indexes from the storage root."""
+    """Write the discovery document opensheaf.json, its pages of objects and the indexes from the
+    storage root."""
     write_indexes()
-    write_json(ROOT / "opensheaf.json", discovery())
+    doc = discovery()
+    pages = object_pages(doc["objects"])
+    folder = ROOT / OBJECT_PAGES
+    if folder.is_dir():
+        for f in folder.glob("*.json"):
+            if f"{OBJECT_PAGES}/{f.name}" not in pages:
+                f.unlink()
+        if not any(folder.iterdir()):
+            folder.rmdir()
+    if pages:
+        for path, entries in pages.items():
+            write_json(ROOT / path, {"format": "opensheaf-objects/0.2", "objects": entries})
+        doc = {("objectPages" if k == "objects" else k): (list(pages) if k == "objects" else v)
+               for k, v in doc.items()}
+    write_json(ROOT / "opensheaf.json", doc)
+
+
+OBJECTS_PER_PAGE = 1000
+OBJECT_PAGES = "objects"
+
+
+def object_pages(objs):
+    """The pages of the entries OBJS (section 3.1), {path: entries}; {} when they are not paged."""
+    if len(objs) <= OBJECTS_PER_PAGE:
+        return {}
+    for k in range(1, 53):
+        groups = {}
+        for o in objs:
+            groups.setdefault(o["name"][:k], []).append(o)
+        if max(len(g) for g in groups.values()) <= OBJECTS_PER_PAGE:
+            break
+    return {f"{OBJECT_PAGES}/{p}.json": groups[p] for p in sorted(groups)}
+
+
+def page_path_ok(path):
+    return (owners.safe_relative(path) and path.endswith(".json")
+            and ":" not in path.split("/")[0])
+
+
+def listed_objects(disc, read):
+    """The entries of objects of the discovery document DISC (section 3.1), from its pages if it
+    pages them, READ(path) giving the bytes of a page or None; ValueError if a page is not found."""
+    if "objectPages" not in disc:
+        return [o for o in disc.get("objects") or [] if isinstance(o, dict)]
+    out = []
+    for path in disc.get("objectPages") or []:
+        if not page_path_ok(path):
+            raise ValueError(f"{path!r} is not the path of a page below the discovery document (section 3.1)")
+        data = read(path)
+        if data is None:
+            raise ValueError(f"the page of objects {path} is missing (section 3.1)")
+        try:
+            page = json.loads(data)
+        except ValueError:
+            raise ValueError(f"the page of objects {path} is not JSON") from None
+        if not isinstance(page, dict) or not isinstance(page.get("objects"), list):
+            raise ValueError(f"{path} is not a page of objects (section 3.1)")
+        out += [o for o in page["objects"] if isinstance(o, dict)]
+    return out
+
+
+def local_page(path):
+    f = ROOT / path
+    return f.read_bytes() if page_path_ok(path) and f.is_file() else None
 
 
 INDEXES = {"names": 2, "owners": 2, "sha512": 2}
@@ -3024,6 +3092,8 @@ def verify_findings(remote=False, keeper_fetch=None):
             f.error("archive", "specification 0.1: rebuild (section 16.1)")
             return f
         schema("opensheaf.json", disc, "archive")
+        if "objectPages" in disc:
+            disc["objects"] = check_object_pages(f, schema, disc)
     found = check_storage(f, schema, disc)
     logs = check_key_logs(f, found, schema)
     check_keepers(f, logs, remote, keeper_fetch)
@@ -3044,6 +3114,26 @@ def verify_findings(remote=False, keeper_fetch=None):
     check_presentation(f, disc)
     look_for_keys(f)
     return f
+
+
+def check_object_pages(f, schema, disc):
+    """The entries of the pages of objects of DISC (section 3.1), each page checked; a page
+    missing or not valid is an error, and its entries are not read."""
+    out = []
+    for path in disc.get("objectPages") or []:
+        data = local_page(path) if isinstance(path, str) else None
+        if data is None:
+            f.error("opensheaf.json", f"the page of objects {path} is missing (section 3.1)")
+            continue
+        try:
+            page = json.loads(data)
+        except ValueError as e:
+            f.error(path, f"not JSON: {e}")
+            continue
+        schema(path, page, "objects")
+        if isinstance(page, dict) and isinstance(page.get("objects"), list):
+            out += [o for o in page["objects"] if isinstance(o, dict)]
+    return out
 
 
 def verify_errors():

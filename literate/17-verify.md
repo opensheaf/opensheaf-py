@@ -144,7 +144,11 @@ The checks
 
 The verifier first tells an archive of version 0.1 by its configuration
 or its discovery document, and reports a single error: section 16.1 says
-that such an archive is rebuilt, and these tools do not read it. Then the
+that such an archive is rebuilt, and these tools do not read it. The pages
+of an archive that pages its objects (section 3.1) are read and checked
+against their schema with the discovery document, a page missing being an
+error, and their entries are checked as `objects` are: that every object
+of the storage root is listed, and none twice, also across pages. Then the
 steps of section 14, in order.
 
     # in check an archive and list its findings:
@@ -169,6 +173,8 @@ steps of section 14, in order.
                 f.error("archive", "specification 0.1: rebuild (section 16.1)")
                 return f
             schema("opensheaf.json", disc, "archive")
+            if "objectPages" in disc:
+                disc["objects"] = check_object_pages(f, schema, disc)
         found = check_storage(f, schema, disc)
         logs = check_key_logs(f, found, schema)
         check_keepers(f, logs, remote, keeper_fetch)
@@ -189,6 +195,26 @@ steps of section 14, in order.
         check_presentation(f, disc)
         look_for_keys(f)
         return f
+
+
+    def check_object_pages(f, schema, disc):
+        """The entries of the pages of objects of DISC (section 3.1), each page checked; a page
+        missing or not valid is an error, and its entries are not read."""
+        out = []
+        for path in disc.get("objectPages") or []:
+            data = local_page(path) if isinstance(path, str) else None
+            if data is None:
+                f.error("opensheaf.json", f"the page of objects {path} is missing (section 3.1)")
+                continue
+            try:
+                page = json.loads(data)
+            except ValueError as e:
+                f.error(path, f"not JSON: {e}")
+                continue
+            schema(path, page, "objects")
+            if isinstance(page, dict) and isinstance(page.get("objects"), list):
+                out += [o for o in page["objects"] if isinstance(o, dict)]
+        return out
 
 
     def verify_errors():

@@ -122,6 +122,11 @@ class Source:
                 raise Unavailable(f"{self}: the discovery document is not JSON ({e})") from None
             if not isinstance(disc, dict) or disc.get("specification") != "0.2":
                 raise Unavailable(f"{self}: not an archive of specification 0.2")
+            if "objectPages" in disc:
+                try:
+                    disc["objects"] = P.listed_objects(disc, self.get)
+                except ValueError as e:
+                    raise Unavailable(f"{self}: {e}") from None
             self._disc = disc
         return self._disc
 

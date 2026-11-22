@@ -1096,6 +1096,44 @@ from a copy holding the version its tombstone pins.
         assert not P.TOMBSTONES and P.obj_dir(obj_id).exists()
         assert errors(lib) == []
 
+An archive with more objects than a page holds lists them in pages
+(section 3.1): here a page holds two objects. The pages pass verification,
+the labels are read from them, and another archive resolves a line through
+them; a page missing is an error, and makes the archive unavailable to
+resolvers. Back under the threshold, the pages go.
+
+    # in across: takedowns and indexes:
+    def test_object_pages(tmp_path, monkeypatch):
+        monkeypatch.setattr(P, "OBJECTS_PER_PAGE", 2)
+        a = make(tmp_path, "a")
+        for label in ("one", "two", "three"):
+            deposit(a, label, label, new=True)
+        disc = json.loads((a / "opensheaf.json").read_text())
+        assert "objects" not in disc and disc["objectPages"]
+        pages = [json.loads((a / p).read_text()) for p in disc["objectPages"]]
+        assert all(p["format"] == "opensheaf-objects/0.2" and len(p["objects"]) <= 2 for p in pages)
+        listed = [o["id"] for p in pages for o in p["objects"]]
+        assert len(listed) == len(set(listed)) == len(P.discovery()["objects"])
+        assert errors(a) == []
+        P.configure(a)
+        assert P.LABELS["two"] == line(a, "two")
+        _, nm, owner = line(a, "two").split(":")
+        with remote.Resolver(here=False) as r:
+            assert r.pin(nm, owner, "v1", head_digest(a, "two", "v1"), [str(a)]).status == "verified"
+        first = a / disc["objectPages"][0]
+        saved = first.read_bytes()
+        first.unlink()
+        assert any("is missing (section 3.1)" in e for e in errors(a))
+        with remote.Resolver(here=False) as r:
+            assert r.source(str(a)) is None
+        first.write_bytes(saved)
+        monkeypatch.setattr(P, "OBJECTS_PER_PAGE", 1000)
+        P.configure(a)
+        P.write_discovery()
+        disc = json.loads((a / "opensheaf.json").read_text())
+        assert "objectPages" not in disc and not (a / "objects").exists()
+        assert errors(a) == []
+
 The indexes (section 12.5): `names/` lists every object with a genesis
 record, with its genesis text; `owners/` the lines of each owner; `sha512/`
 every version. A tampered index is reported by the verifier.

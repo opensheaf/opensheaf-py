@@ -222,7 +222,10 @@ the layout the archive's discovery document names, which is authoritative
 the specification allows, is read as it is. `object_url` is the URL of an
 object version, `<storage root URL><path>/<version>/`, which a branch
 records as `parent.url` (section 9.1); it exists only for a source with a
-base URL to record.
+base URL to record. The pages of an archive that pages its objects
+(section 3.1) are read with its discovery document, and their entries put
+in its `objects`, so that everything after reads one list; a page missing
+makes the archive unavailable.
 
     # in resolution: the discovery document and the objects of an archive:
     def discovery(self):
@@ -237,6 +240,11 @@ base URL to record.
                 raise Unavailable(f"{self}: the discovery document is not JSON ({e})") from None
             if not isinstance(disc, dict) or disc.get("specification") != "0.2":
                 raise Unavailable(f"{self}: not an archive of specification 0.2")
+            if "objectPages" in disc:
+                try:
+                    disc["objects"] = P.listed_objects(disc, self.get)
+                except ValueError as e:
+                    raise Unavailable(f"{self}: {e}") from None
             self._disc = disc
         return self._disc
 
