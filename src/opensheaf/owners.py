@@ -123,7 +123,7 @@ def sidecar_digest(data):
         parts = data.decode("ascii").split()
     except UnicodeDecodeError:
         return None
-    return parts[0].lower() if len(parts) == 2 and parts[1] == "inventory.json" else None
+    return parts[0] if len(parts) == 2 and parts[1] == "inventory.json" else None
 
 
 def first_keys(rec):

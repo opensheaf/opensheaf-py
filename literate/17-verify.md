@@ -292,6 +292,7 @@ key logs (section 14.3), so they are left out here.
         place = where(obj_id)
         if inv.get("digestAlgorithm") != "sha512":
             f.error(place, "the digest algorithm is not sha512 (section 4.1)")
+        <<check that the digests of an inventory are in lower case>>
         root = (d / "inventory.json").read_bytes()
         sc = d / "inventory.json.sha512"
         if not sc.exists() or owners.sidecar_digest(sc.read_bytes()) != names.sha512_hex(root):
@@ -331,6 +332,25 @@ key logs (section 14.3), so they are left out here.
             if kind != "owner":
                 schema(f"{at}/{OBJ}", obj, "object")
                 <<check previous in an object version>>
+
+Digests in inventories and checksum files are in lower case (section 4.1),
+so that they compare as strings and every quotation of a pin is the same
+string. A digest in upper case is reported as such, before the comparisons
+that it would otherwise fail with a misleading "does not have the digest".
+The checksum files are those of the root inventory and of every version
+folder; the copies of the inventory in version folders are checked equal
+to the root's, so their digests need no check of their own.
+
+    # in check that the digests of an inventory are in lower case:
+    stated = list(inv.get("manifest", {}))
+    stated += [x for v in inv.get("versions", {}).values() for x in (v.get("state") or {})]
+    stated += [x for alg in (inv.get("fixity") or {}).values() if isinstance(alg, dict) for x in alg]
+    if any(isinstance(x, str) and x != x.lower() for x in stated):
+        f.error(place, "the inventory has digests not in lower case (section 4.1)")
+    for sc in [d / "inventory.json.sha512"] + sorted(d.glob("v*/inventory.json.sha512")):
+        words = sc.read_bytes().split() if sc.exists() else []
+        if words and words[0] != words[0].lower():
+            f.error(place, f"{sc.relative_to(d)} states its digest not in lower case (section 4.1)")
 
 The copy of the inventory in the version folder, and its checksum file.
 

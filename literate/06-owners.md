@@ -210,7 +210,9 @@ computed, which lets the tests check the digests of appendix C.
 
 An inventory file is the indented JSON of the archive, with a final line
 feed, except the computed first version's, in JCS; its checksum file states
-its SHA-512 digest and its name, as `sha512sum` writes it.
+its SHA-512 digest and its name, as `sha512sum` writes it. The digest is
+read as written, in lower case (section 4.1): a checksum file in upper case
+states no digest that matches, and the verifier says why.
 
     # in owners: inventories of key logs:
     def inventory_file(inv):
@@ -229,7 +231,7 @@ its SHA-512 digest and its name, as `sha512sum` writes it.
             parts = data.decode("ascii").split()
         except UnicodeDecodeError:
             return None
-        return parts[0].lower() if len(parts) == 2 and parts[1] == "inventory.json" else None
+        return parts[0] if len(parts) == 2 and parts[1] == "inventory.json" else None
 
 The computed first version
 --------------------------

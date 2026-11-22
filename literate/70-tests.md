@@ -481,6 +481,28 @@ pinned object version does not hold.
         assert any("has no version, inventorySha512 or follow" in e for e in errors)
         assert any("v1: does not hold document version 2" in e for e in errors)
 
+Digests in inventories and checksum files are in lower case (section 4.1).
+A checksum file rewritten in upper case, and an inventory whose manifest
+and state are rewritten in upper case, are each reported as such.
+
+    # in test: the rules of document versions:
+    def test_upper_case_digests_are_reported(archive):
+        put("paper-a", 1, FILES1)
+        put("paper-b", 1, FILES2)
+        assert finish() == []
+        d = P.obj_dir(P.LABELS["paper-a"])
+        sc = d / "inventory.json.sha512"
+        sc.write_bytes(sc.read_bytes().split()[0].upper() + b"  inventory.json\n")
+        d = P.obj_dir(P.LABELS["paper-b"])
+        inv = json.loads((d / "inventory.json").read_text())
+        inv["manifest"] = {k.upper(): v for k, v in inv["manifest"].items()}
+        for v in inv["versions"].values():
+            v["state"] = {k.upper(): p for k, p in v["state"].items()}
+        (d / "inventory.json").write_text(json.dumps(inv, indent=2) + "\n")
+        errors = P.verify_errors()
+        assert "paper-a: inventory.json.sha512 states its digest not in lower case (section 4.1)" in errors
+        assert "paper-b: the inventory has digests not in lower case (section 4.1)" in errors
+
 A version may have no sources, only its PDF, as for some old versions on
 arXiv. Its `object.json` then says why in `sourcesMissing` and names no
 main source.

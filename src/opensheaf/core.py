@@ -2313,6 +2313,15 @@ def check_object_storage(f, schema, obj_id, d, inv):
     place = where(obj_id)
     if inv.get("digestAlgorithm") != "sha512":
         f.error(place, "the digest algorithm is not sha512 (section 4.1)")
+    stated = list(inv.get("manifest", {}))
+    stated += [x for v in inv.get("versions", {}).values() for x in (v.get("state") or {})]
+    stated += [x for alg in (inv.get("fixity") or {}).values() if isinstance(alg, dict) for x in alg]
+    if any(isinstance(x, str) and x != x.lower() for x in stated):
+        f.error(place, "the inventory has digests not in lower case (section 4.1)")
+    for sc in [d / "inventory.json.sha512"] + sorted(d.glob("v*/inventory.json.sha512")):
+        words = sc.read_bytes().split() if sc.exists() else []
+        if words and words[0] != words[0].lower():
+            f.error(place, f"{sc.relative_to(d)} states its digest not in lower case (section 4.1)")
     root = (d / "inventory.json").read_bytes()
     sc = d / "inventory.json.sha512"
     if not sc.exists() or owners.sidecar_digest(sc.read_bytes()) != names.sha512_hex(root):
