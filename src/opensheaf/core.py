@@ -225,6 +225,8 @@ def label_command(args):
             sys.exit("a label must match ^[a-z0-9]+(-[a-z0-9]+)*$ and have at most 64 characters")
         if new == old:
             print(f"{new}: unchanged")
+            if owner:
+                relabel_catalogue(owner, old, featured)
             return
         if new in LABELS:
             sys.exit(f"{new} is the label of another line already: {LABELS[new]}")
@@ -3280,7 +3282,8 @@ def wallet_for(args, owner=None):
     w = level_wallet(args, owner) or configured_wallet(owner)
     if w is None:
         stop("no key wallet: give --wallet github:OWNER/REPO (or command), or configure one in "
-             f'{wallet.user_config_path()} or osheaf.json ("keys": {{"wallet": ...}}) or in OPENSHEAF_WALLET')
+             f'{wallet.user_config_path()}, or in osheaf.json for the owner ("keys": {{"<owner>": {{"wallets": [...]}}}}), '
+             "or in OPENSHEAF_WALLET")
     return w
 
 

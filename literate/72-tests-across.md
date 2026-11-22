@@ -766,7 +766,7 @@ paper (section 9) go into its catalogue only: `osheaf collect` leaves the
 first owner's catalogue at the version it had, and `--owner` takes one
 owner's catalogue alone. The second owner's catalogue has no label until
 the owner gets one, `jane`: it is then `jane-catalogue`, and follows the
-owner's label when it changes or goes. The home page lists the documents of both
+owner's label when it changes or goes, or is given again. The home page lists the documents of both
 catalogues together, each naming its owner, or, with `index.owners`
 `by-owner`, under a heading for each owner, in the order of `owners`
 (appendix A.3), and the archive verifies. A discovery document giving one
@@ -797,6 +797,10 @@ a discovery document without `owners` is an error (section 3.1).
         run(*r, "label", "--owner", second, "--unset")
         P.configure(a)
         assert P.label_of(cat2) is None
+        run(*r, "label", "--owner", second, "jo")
+        P.configure(a)
+        assert P.label_of(cat2) == "jo-catalogue"
+        run(*r, "label", "jo-catalogue", "--unset")
         run(*r, "label", "--owner", second, "jo")
         P.configure(a)
         assert P.label_of(cat2) == "jo-catalogue"

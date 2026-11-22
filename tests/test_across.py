@@ -654,6 +654,10 @@ def test_owner_catalogues(tmp_path):
     run(*r, "label", "--owner", second, "jo")
     P.configure(a)
     assert P.label_of(cat2) == "jo-catalogue"
+    run(*r, "label", "jo-catalogue", "--unset")
+    run(*r, "label", "--owner", second, "jo")
+    P.configure(a)
+    assert P.label_of(cat2) == "jo-catalogue"
 
     def listed(cat):
         d = P.obj_dir(cat)

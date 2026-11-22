@@ -334,7 +334,8 @@ the wallet, which refuses them.
         w = level_wallet(args, owner) or configured_wallet(owner)
         if w is None:
             stop("no key wallet: give --wallet github:OWNER/REPO (or command), or configure one in "
-                 f'{wallet.user_config_path()} or osheaf.json ("keys": {{"wallet": ...}}) or in OPENSHEAF_WALLET')
+                 f'{wallet.user_config_path()}, or in osheaf.json for the owner ("keys": {{"<owner>": {{"wallets": [...]}}}}), '
+                 "or in OPENSHEAF_WALLET")
         return w
 
 ### The wallet recorded in the configuration

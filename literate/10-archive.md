@@ -474,6 +474,7 @@ owner ([owner catalogues](15-owner-catalogues.md)), so a new label of such
 an owner is given to its catalogue too, as `<label>-catalogue`, when the
 catalogue has no label or that of the owner's old one, and the new one is
 free; a label taken off the owner is taken off its catalogue so labelled.
+Giving an owner the label it has labels its catalogue so, if it has none.
 A TeXmacs index is typeset again by `osheaf index`, which the command
 says.
 
@@ -511,6 +512,8 @@ says.
                 sys.exit("a label must match ^[a-z0-9]+(-[a-z0-9]+)*$ and have at most 64 characters")
             if new == old:
                 print(f"{new}: unchanged")
+                if owner:
+                    relabel_catalogue(owner, old, featured)
                 return
             if new in LABELS:
                 sys.exit(f"{new} is the label of another line already: {LABELS[new]}")
