@@ -29,6 +29,9 @@ does. They are in `tests/test_across.py`.
     <<across: branches and accepted copies>>
 
 
+    <<across: owner catalogues>>
+
+
     <<across: drafts>>
 
 
@@ -432,12 +435,12 @@ member; a revision the member does not have is refused.
 
 An author's archive `author` holds a paper of its own and a reading list,
 a selection with a paper of another archive and the author's own paper. The
-main catalogue lists the archive's own documents (the reading list is a
-line of the archive, not a member of the main catalogue); with
+owner catalogue lists the archive's own documents (the reading list is a
+line of the archive, not a member of the owner catalogue); with
 `index.html.featured` naming the reading list by its label, the home page
 lists it first, under its title and with its description as the lead
-paragraph, then the main catalogue, under its own heading. Both show their
-pins, and the verifier, which checks the main catalogue's, is satisfied.
+paragraph, then the owner catalogue, under its own heading. Both show their
+pins, and the verifier, which checks the owner catalogue's, is satisfied.
 The paper of the other archive is read from there, checked against its
 pin: its title links its own landing page, there. A collection of the
 archive inside the featured one gets a landing page listing its members by
@@ -498,7 +501,7 @@ Mirrors and key logs
 A library mirrors an openly licensed paper of the authors (section 11):
 every version up to the latest signed, with the authors' key log beside
 it; a paper whose licence does not allow redistribution is refused. The
-mirror is listed like any line, without `mirrorOf`; the main catalogue
+mirror is listed like any line, without `mirrorOf`; the owner catalogue
 leaves it out, since its owner does not write here. Run again, the mirror
 gets the new versions; a version without signatures is not added
 (section 7.5).
@@ -753,6 +756,86 @@ the rename justified.
         assert not any("renamed by algorithm" in x["message"] for x in found)
         with pytest.raises(SystemExit, match="neither the parent's owner nor the originator"):
             run("--root", str(a), "branch", uri(j, "accepted", 1), "--label", "back")
+
+Each owner an archive hosts has its owner catalogue (section 8.1). A
+second owner set up in the archive with `osheaf owner init` gets one at
+once, empty, signed by its own key, and the discovery document names both
+owners with their catalogues, in order, without `mainCollection`. A
+deposit by the second owner and a branch it makes of the first owner's
+paper (section 9) go into its catalogue only: `osheaf collect` leaves the
+first owner's catalogue at the version it had, and `--owner` takes one
+owner's catalogue alone. The home page presents the catalogues in the
+order of `owners` (appendix A.3), and the archive verifies. A discovery
+document giving one owner's catalogue to another, or naming an owner
+twice, is an error; an owner catalogue listing another owner's line is
+warned of (section 14.6). A discovery document of the first drafts, with
+`mainCollection` and bare owner names, gives its main catalogue to the
+archive's first owner.
+
+    # in across: owner catalogues:
+    def test_owner_catalogues(tmp_path):
+        a = make(tmp_path, "a")
+        r = ["--root", str(a)]
+        first = line(a, "main").split(":")[2]
+        deposit(a, "paper", "one", new=True)
+        run(*r, "collect")
+        run(*r, "owner", "init", "--export", str(tmp_path / "second-keys"), "--no-passphrase", "--yes")
+        P.configure(a)
+        second = P.ARCHIVE["owners"][0]
+        disc = json.loads((a / "opensheaf.json").read_text())
+        assert [e["owner"] for e in disc["owners"]] == [first, second] and "mainCollection" not in disc
+        cat1, cat2 = (e["catalogue"] for e in disc["owners"])
+        assert cat1 == line(a, "main") and cat2.split(":")[2] == second and P.label_of(cat2) is None
+
+        def listed(cat):
+            d = P.obj_dir(cat)
+            return [(m["name"], m["owner"]) for m in P.read_json(d, P.load_inventory(d), "members.json")["members"]]
+
+        def head(cat):
+            return P.load_inventory(P.obj_dir(cat))["head"]
+
+        assert listed(cat2) == [] and head(cat2) == "v1"
+        head1 = head(cat1)
+        deposit(a, "theirs", "two", "--owner", second, new=True)
+        run(*r, "branch", uri(a, "paper", 1), "--owner", second, "--label", "continued")
+        run(*r, "collect", "--owner", second)
+        P.configure(a)
+        assert head(cat1) == head1 and head(cat2) == "v2"
+        run(*r, "collect")
+        P.configure(a)
+        assert head(cat1) == head1
+        assert listed(cat1) == [tuple(line(a, "paper").split(":")[1:])]
+        assert sorted(listed(cat2)) == sorted(tuple(line(a, x).split(":")[1:]) for x in ("theirs", "continued"))
+        assert errors(a) == []
+        home = (a / "index.html").read_text()
+        pins = [head_digest(a, x, "v1")[:32] for x in ("paper", "theirs")]
+        assert home.index(pins[0]) < home.index(pins[1])
+        with pytest.raises(SystemExit, match="not an owner this archive hosts"):
+            run(*r, "collect", "--owner", "a" * 51 + "q")
+        disc = json.loads((a / "opensheaf.json").read_text())
+        wrong = dict(disc, owners=[disc["owners"][0], {"owner": second, "catalogue": cat1}, disc["owners"][0]])
+        (a / "opensheaf.json").write_text(json.dumps(wrong))
+        messages = [x["message"] for x in findings(a) if x["severity"] == "error"]
+        assert any(f"the catalogue of {second} in owners" in m for m in messages)
+        assert any(f"owners lists {first} twice" in m for m in messages)
+        (a / "opensheaf.json").write_text(json.dumps(dict(disc, owners=disc["owners"][::-1])))
+        assert errors(a) == []
+        d = P.obj_dir(cat2)
+        mem = P.read_json(d, P.load_inventory(d), "members.json")
+        theirs = next(m for m in mem["members"] if m["name"] == line(a, "theirs").split(":")[1])
+        mine = dict(theirs, name=line(a, "paper").split(":")[1], owner=first,
+                    version="v1", inventorySha512=head_digest(a, "paper", "v1"))
+        from opensheaf import collections
+        collections.write(cat2, dict(mem, order="manual", members=mem["members"] + [mine]), message="Another's")
+        found = findings(a)
+        assert any(x["severity"] == "warning" and f"the owner catalogue of {second} lists" in x["message"]
+                   for x in found)
+        old = dict(disc, owners=[first, second], mainCollection=cat1)
+        (a / "opensheaf.json").write_text(json.dumps(old))
+        P.configure(a)
+        assert P.CATALOGUES == {first: cat1}
+        P.write_discovery()
+        assert json.loads((a / "opensheaf.json").read_text())["owners"] == [{"owner": first, "catalogue": cat1}]
 
 A branch point whose evidence is tampered with is inconsistent, an error.
 

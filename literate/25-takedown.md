@@ -138,8 +138,9 @@ presentation files (the home page, the pages of the collections that list
 it, the sitemap) are written again by the [command line](60-command-line.md)
 after the command, as after every change (appendix A.3), and the
 [website](30-website.md) leaves out every member whose line has a tombstone
-here. The main catalogue keeps its member, a pin of a version now removed
-(section 8.5), until `osheaf collect` writes its next version.
+here. The owner catalogue keeps its member, a pin of a version now removed
+(section 8.5), until `osheaf collect` writes its next version (section
+13.2).
 
     # in takedown: the command:
     def main(args):

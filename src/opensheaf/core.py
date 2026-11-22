@@ -7,13 +7,13 @@ An archive is a folder with a configuration file `osheaf.json`:
 
     {
       "owner": "<owner name>",           the owner of the archive (section 6), who signs
-                                         its documents and its main catalogue
-      "owners": ["<owner name>", ...],   optional: other owners it hosts
+                                         its documents and its owner catalogue
+      "owners": ["<owner name>", ...],   optional: other owners it hosts, each with its own
+                                         owner catalogue (section 8.1)
       "name": "...", "contact": "https://...", "baseUrl": "https://.../",
       "profiles": ["website", "texmacs"],
       "storageLayout": "opensheaf-owner-name-storage-layout",   or
                        "0003-hash-and-id-n-tuple-storage-layout" (section 3.2)
-      "mainCollection": "main",          the label of the main catalogue
       "curator": {"name": "Family, Given", "givenName": "...", "familyName": "...",
                   "affiliation": "..."},
       "depositor": {"name": "Given Family", "address": "https://..."},
@@ -35,7 +35,8 @@ An archive is a folder with a configuration file `osheaf.json`:
 
 and, next to it, `ocfl/` (the OCFL 1.1 storage root), `opensheaf.json` (the
 discovery document, rewritten whenever an object changes, which also keeps
-the labels of the lines: `osheaf deposit LABEL`, `osheaf label`), `site/` (HTML versions)
+the labels of the lines: `osheaf deposit LABEL`, `osheaf label`, and the owner
+catalogue of each owner, in `owners`), `site/` (HTML versions)
 and `index.tm`, `index.html` (generated). TeXmacs runs headless with a
 private profile in `texmacs_home/` (not committed).
 
@@ -83,6 +84,7 @@ TEXMACS = {}
 INDEX = {}
 LAYOUT = None
 LABELS = {}
+CATALOGUES = {}
 TOMBSTONES = []
 OLD = False
 
@@ -95,7 +97,8 @@ LAYOUT_TEXT = ("Lines at <owner>/<name>/, drafts at draft/<id>/: the owner-name 
                "OpenSheaf specification 0.2, section 3.2\n")
 LABEL_RE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*\Z")
 TEXMACS_VERSION = "2.1.5"
-REQUIRED = ("owner", "name", "baseUrl", "mainCollection", "curator", "depositor")
+REQUIRED = ("owner", "name", "baseUrl", "curator", "depositor")
+CATALOGUE_LABEL = "main"
 REBUILD = ("this archive is of specification 0.1, which these tools no longer read: rebuild it under "
            "specification 0.2 (section 16.1)")
 
@@ -131,7 +134,7 @@ def set_paths(root, layout=OWNER_NAME_LAYOUT):
 
 def configure(root):
     """Load the archive configuration and set the paths."""
-    global ARCHIVE, TEXMACS, INDEX, TEXMACS_VERSION, LABELS, TOMBSTONES, OLD
+    global ARCHIVE, TEXMACS, INDEX, TEXMACS_VERSION, LABELS, CATALOGUES, TOMBSTONES, OLD
     cfg = read_config(root)
     disc_path = Path(root) / "opensheaf.json"
     disc = json.loads(disc_path.read_text(encoding="utf-8")) if disc_path.exists() else {}
@@ -151,6 +154,11 @@ def configure(root):
     TEXMACS_VERSION = TEXMACS.get("version", TEXMACS_VERSION)
     INDEX = cfg.get("index", {})
     LABELS = {o["label"]: o["id"] for o in disc.get("objects", []) if o.get("label")}
+    CATALOGUES = {e["owner"]: e["catalogue"] for e in disc.get("owners", [])
+                  if isinstance(e, dict) and e.get("owner") and e.get("catalogue")}
+    if disc.get("mainCollection") and ARCHIVE["owner"] not in CATALOGUES:
+        CATALOGUES[ARCHIVE["owner"]] = disc["mainCollection"]
+    ARCHIVE.pop("mainCollection", None)
     TOMBSTONES = list(disc.get("tombstones", []))
     return ROOT
 
@@ -220,17 +228,16 @@ def label_command(args):
         if new == old:
             print(f"{new}: unchanged")
             return
-        if new in LABELS or (new == cfg.get("mainCollection") and old != new):
-            sys.exit(f"{new} is the label of another line already: {LABELS.get(new, 'the main catalogue')}")
+        if new in LABELS:
+            sys.exit(f"{new} is the label of another line already: {LABELS[new]}")
         if len(new) > 32:
             print(f"warning: {new} is longer than 32 characters (it appears in every URL of the website)",
                   file=sys.stderr)
     elif old is None:
         print(f"{obj_id}: has no label")
         return
-    elif old in (cfg.get("mainCollection"), featured):
-        sys.exit(f"{old} names the {'main catalogue' if old == cfg.get('mainCollection') else 'featured collection'}"
-                 f" in {CONFIG_NAME}: give it another label instead")
+    elif old == featured:
+        sys.exit(f"{old} names the featured collection in {CONFIG_NAME}: give it another label instead")
     kind = (read_json(obj_dir(obj_id), load_inventory(obj_dir(obj_id)), OBJ) or {}).get("kind")
     before = page_address(obj_id)
     if old:
@@ -247,8 +254,6 @@ def label_command(args):
         cfg["formerAddresses"] = dict(sorted(former.items()))
     else:
         cfg.pop("formerAddresses", None)
-    if old and cfg.get("mainCollection") == old:
-        cfg["mainCollection"] = new
     if old and featured == old:
         cfg["index"]["html"]["featured"] = new
     write_config(cfg)
@@ -1243,10 +1248,10 @@ def deposit(args):
     print(f"{label}: {inv['head']} (document version {doc_version}) {obj_id}")
 
 
-def documents():
+def documents(owner=None):
     """(obj_id, dir, inventory, latest signed version, current object version, its
-    object.json and datacite.json) of every document of the archive's owners."""
-    out, mine = [], set(archive_owners())
+    object.json and datacite.json) of every document of OWNER, or of the archive's owners."""
+    out, mine = [], {owner} if owner else set(archive_owners())
     for obj_id, d, inv in objects():
         if inv is None or obj_id is None or obj_id.startswith("sheaf:draft:"):
             continue
@@ -1545,20 +1550,30 @@ def member_order(members):
 
 
 def collect(args):
-    """A new version of the main catalogue when a document has a new signed version;
-    members pin the latest signed version of their line and follow it (section 8.3)."""
+    """A new version of each owner catalogue (or of that of --owner) whose documents have a new
+    signed version; members pin the latest signed version of their line and follow it (section 8.3)."""
     init_storage_root()
-    label = ARCHIVE["mainCollection"]
-    coll_id = LABELS.get(label)
+    only = getattr(args, "owner", None)
+    if only and only not in archive_owners():
+        sys.exit(f"{only} is not an owner this archive hosts")
+    for owner in [only] if only else archive_owners():
+        collect_owner(owner, args)
+
+
+def collect_owner(owner, args):
+    """A new version of the owner catalogue of OWNER when its documents have changed; its first
+    version, sealed, when the owner has none yet."""
+    coll_id = CATALOGUES.get(owner)
     coll_dir = obj_dir(coll_id) if coll_id else None
     cinv = load_inventory(coll_dir) if coll_dir else None
+    label = (label_of(coll_id) if coll_id else None) or names.short(owner)
     if cinv and read_json(coll_dir, cinv, "members.json").get("order") == "manual":
         print(f"{label} is curated (order manual): use osheaf collection add|sync|update")
         return
     curated = cinv is None and bool(getattr(args, "curated", False))
     order = "manual" if curated else ORDER
     members = []
-    for obj_id, d, inv, signed, cur, obj, dc in documents():
+    for obj_id, d, inv, signed, cur, obj, dc in documents(owner):
         cite = {"title": dc["titles"][0]["title"],
                 "creators": [display_name(c) for c in dc["creators"]],
                 "year": dc["publicationYear"]}
@@ -1581,11 +1596,16 @@ def collect(args):
             return
         version = read_json(coll_dir, cinv, OBJ)["documentVersion"] + 1
         issued = date_of(read_json(coll_dir, cinv, "datacite.json"), "Issued") or TODAY
-    owner = ARCHIVE["owner"]
     if coll_id is None:
         genesis, coll_id = seal("collection", owner)
+        if owner == ARCHIVE["owner"] and CATALOGUE_LABEL not in LABELS:
+            LABELS[CATALOGUE_LABEL] = coll_id
     else:
         genesis = read_logical(coll_dir, cinv, GENESIS).read_bytes()
+    CATALOGUES[owner] = coll_id
+    title = ARCHIVE["name"]
+    if owner != ARCHIVE["owner"]:
+        title += ", " + (label_of(names.object_id(owner, owner)) or names.short(owner))
     cur = ARCHIVE["curator"]
     creator_ = {"name": cur["name"], "nameType": "Personal", "familyName": cur["familyName"]}
     if cur.get("givenName"):
@@ -1596,7 +1616,7 @@ def collect(args):
         "members.json": json_bytes({"format": "opensheaf-collection/0.2", "type": "catalogue",
                                     "order": order, "members": members}),
         "datacite.json": json_bytes({
-            "titles": [{"title": ARCHIVE["name"]}],
+            "titles": [{"title": title}],
             "creators": [creator_],
             "publisher": {"name": ARCHIVE["name"]},
             "publicationYear": int(issued[:4]),
@@ -1604,19 +1624,19 @@ def collect(args):
             "version": str(version),
             "url": ARCHIVE["baseUrl"],
             "dates": [{"date": issued, "dateType": "Issued"}, {"date": TODAY, "dateType": "Available"}],
-            "descriptions": [{"description": "The documents deposited in this archive, newest first.",
-                              "descriptionType": "Abstract"}],
+            "descriptions": [{"description": "The documents of one owner deposited in this archive, "
+                                             "newest first.", "descriptionType": "Abstract"}],
             "rightsList": [dict(RIGHTS["cc0-1.0"])],
         }),
         GENESIS: genesis,
     }
     obj = {"format": OBJ_FORMAT, "specification": SPEC, "kind": "collection",
            "name": coll_id.split(":")[1], "owner": owner, "documentVersion": version, "status": "active"}
-    LABELS[label] = coll_id
+    label = label_of(coll_id) or coll_id
     inv = add_version(coll_id, files, obj, f"Collection version {version}: {len(members)} documents",
                       acknowledged=bool(getattr(args, "i_know", False)))
     write_discovery()
-    print(f"Done: the main catalogue {label} is at {inv['head']}, with "
+    print(f"Done: the owner catalogue {label} of {names.short(owner)} is at {inv['head']}, with "
           f"{plural(len(members), 'member') if members else 'no members'}.")
 
 
@@ -1654,9 +1674,8 @@ def discovery():
         objs.append(entry)
     doc = {"format": "opensheaf-archive/0.2", "specification": SPEC, "name": ARCHIVE["name"],
            "contact": ARCHIVE["contact"], "storageRoot": "ocfl/", "storageLayout": LAYOUT}
-    if ARCHIVE["mainCollection"] in LABELS:
-        doc["mainCollection"] = LABELS[ARCHIVE["mainCollection"]]
-    doc.update(profiles=ARCHIVE["profiles"], extensions=sorted(used), owners=archive_owners(),
+    hosted = [{"owner": o, "catalogue": CATALOGUES[o]} for o in archive_owners() if o in CATALOGUES]
+    doc.update(profiles=ARCHIVE["profiles"], extensions=sorted(used), owners=hosted,
                indexes=dict(INDEXES), objects=objs)
     if drafts:
         doc["drafts"] = drafts
@@ -1938,25 +1957,30 @@ def index(args):
     print("opensheaf.json and the indexes written (no readable index configured)")
 
 
-def main_members():
-    """The members of the latest signed version of the main catalogue, or None."""
-    main_id = LABELS.get(ARCHIVE["mainCollection"])
-    d = obj_dir(main_id) if main_id else None
-    inv = load_inventory(d) if d else None
-    if inv is None:
-        return None
-    ver = latest_signed(d, inv)
-    if ver is None:
-        print(f"warning: the main catalogue has no signed version (section 7.3): nothing is presented",
-              file=sys.stderr)
-        return None
-    return read_json(d, inv, "members.json", ver)["members"]
+def catalogue_members():
+    """The members of the latest signed version of each owner catalogue, in the order of the
+    owners, or None when no owner catalogue has a signed version."""
+    out, signed = [], False
+    for owner in archive_owners():
+        cid = CATALOGUES.get(owner)
+        d = obj_dir(cid) if cid else None
+        inv = load_inventory(d) if d else None
+        if inv is None:
+            continue
+        ver = latest_signed(d, inv)
+        if ver is None:
+            print(f"warning: the owner catalogue of {names.short(owner)} has no signed version "
+                  "(section 7.3): none of its members is presented", file=sys.stderr)
+            continue
+        signed = True
+        out += read_json(d, inv, "members.json", ver)["members"]
+    return out if signed else None
 
 
 def readable_index(args):
     """The website, or the TeXmacs index with the landing pages of the website."""
     from . import html
-    members = main_members()
+    members = catalogue_members()
     if members is None:
         return
     if INDEX.get("html"):
@@ -2002,7 +2026,7 @@ def present():
         return
     from . import html
     try:
-        members = main_members()
+        members = catalogue_members()
         if members is None:
             return
         if INDEX.get("html"):
@@ -2172,11 +2196,11 @@ def description_errors(d, inv, ver):
             out.append("main source not in the version")
         if obj.get("sourcesMissing") and obj.get("mainSource"):
             out.append("sourcesMissing together with a main source")
-        for r in obj.get("renditions", []):
-            if r["path"] not in logical:
-                out.append(f"rendition {r['path']} not in the version")
     elif obj.get("kind") == "collection" and "members.json" not in logical:
         out.append("collection without members.json")
+    for r in obj.get("renditions", []):
+        if r["path"] not in logical:
+            out.append(f"rendition {r['path']} not in the version")
     return out
 
 
@@ -2724,24 +2748,47 @@ def check_archive(f, found, statuses, disc):
     labels = [o["label"] for o in listed.values() if o.get("label")]
     for lb in sorted({x for x in labels if labels.count(x) > 1}):
         f.error("opensheaf.json", f"the label {lb} is given twice (section 3.1)")
-    main = disc.get("mainCollection")
-    if main is None:
-        f.warning("opensheaf.json", "no mainCollection (section 3.1)")
-    elif main not in listed or listed[main].get("kind") != "collection":
-        f.error("opensheaf.json", f"mainCollection {main} is not a collection it lists")
-    elif main in found:
-        md, minv = found[main]
+    if "owners" not in disc:
+        f.warning("opensheaf.json", "no owners: the owners hosted and their catalogues are not named (section 3.1)")
+    seen_owners, seen_catalogues = set(), set()
+    removed_here = {t.get("id") for t in disc.get("tombstones", []) if isinstance(t, dict)}
+    for e in disc.get("owners", []):
+        if not isinstance(e, dict):
+            continue  # the schema reports it
+        o, cat = e.get("owner"), e.get("catalogue")
+        if o in seen_owners:
+            f.error("opensheaf.json", f"owners lists {o} twice (section 3.1)")
+        if cat in seen_catalogues:
+            f.error("opensheaf.json", f"owners gives {cat} as the catalogue of two owners (section 3.1)")
+        seen_owners.add(o)
+        seen_catalogues.add(cat)
+        try:
+            if names.object_id(o, o) not in found:
+                f.warning("opensheaf.json", f"owners lists {o}, whose key log is not held here (section 3.1)")
+        except (ValueError, TypeError):
+            continue
+        entry = listed.get(cat) or {}
+        if entry.get("kind") != "collection" or entry.get("owner") != o:
+            f.error("opensheaf.json", f"the catalogue of {o} in owners, {cat}, is not a collection of that "
+                    "owner it lists (section 8.1)")
+            continue
+        if cat not in found:
+            continue
+        md, minv = found[cat]
         mem = read_json(md, minv, "members.json") or {}
         if mem.get("type") != "catalogue":
-            f.error("opensheaf.json", "mainCollection is not a catalogue (section 8.1)")
-        if "owners" in disc:
-            for m in mem.get("members", []):
-                if m.get("owner") not in disc["owners"]:
-                    f.warning("opensheaf.json", f"the main catalogue lists {m.get('name')}, a line of an owner "
-                              "that owners does not list (section 8.1)")
-    for o in disc.get("owners", []):
-        if names.object_id(o, o) not in found:
-            f.warning("opensheaf.json", f"owners lists {o}, whose key log is not held here (section 3.1)")
+            f.error("opensheaf.json", f"the owner catalogue of {o}, {where(cat)}, is not a catalogue (section 8.1)")
+        for m in mem.get("members", []):
+            if f"sheaf:{m.get('name')}:{m.get('owner')}" in removed_here:
+                continue  # taken down: section 13.2 asks for a version without it
+            try:
+                mine = (m.get("owner") == o and m.get("kind") == "document"
+                        and names.object_id(m.get("name"), o) in found)
+            except (ValueError, TypeError):
+                mine = False
+            if not mine:
+                f.warning("opensheaf.json", f"the owner catalogue of {o} lists {m.get('name')}, which is not a "
+                          "document of a line of that owner held here (section 8.1)")
     drafts = {o["id"]: o for o in now_disc.get("drafts", [])}
     for dr in disc.get("drafts", []):
         if dr.get("id") not in drafts or drafts[dr["id"]]["head"] != dr.get("head"):
@@ -2769,7 +2816,7 @@ def check_archive(f, found, statuses, disc):
 
 def check_presentation(f, disc):
     """Appendix A.3: the home page shows the pin of every member of the latest signed
-    version of the main catalogue, and each member held here has a landing page giving the
+    version of each owner catalogue, and each member held here has a landing page giving the
     full sheaf: URI of its line; errors under the profile website, warnings for an archive
     that presents pages without declaring it."""
     profiles = disc.get("profiles") or []
@@ -2781,7 +2828,7 @@ def check_presentation(f, disc):
         return
     report = f.error if website else f.warning
     note = "" if website else " (the archive does not declare the profile website)"
-    members = main_members() or []
+    members = catalogue_members() or []
     page = home.read_text(encoding="utf-8", errors="replace") if home.exists() else None
     if page is None and website:
         report("index.html", "the home page is missing (appendix A.3)")
@@ -2917,7 +2964,7 @@ sha512/**      -text -filter -ident -working-tree-encoding -export-subst -merge
 
 def init(args):
     """Create an archive in the folder: osheaf.json, the storage root, the owner and its
-    key log (made, or copied), the empty main catalogue, the discovery document, and the
+    key log (made, or copied), its empty owner catalogue, the discovery document, and the
     website with its templates (to edit), or, with --index texmacs, the TeXmacs index
     with its template."""
     root = Path(args.folder or ".").resolve()
@@ -2943,7 +2990,6 @@ def init(args):
         "baseUrl": args.base_url if args.base_url.endswith("/") else args.base_url + "/",
         "profiles": [kind],
         "storageLayout": layout,
-        "mainCollection": "main",
         "curator": {"name": f"{family}, {given}" if given else family, "givenName": given,
                     "familyName": family, "affiliation": args.affiliation or ""},
         "depositor": {"name": f"{given} {family}".strip(), "address": args.contact or args.base_url},
@@ -3125,7 +3171,7 @@ def wallet_for(args, owner=None):
 def write_config(cfg):
     """Write CFG to osheaf.json, and to the settings of this run."""
     (ROOT / CONFIG_NAME).write_text(json.dumps(cfg, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-    for k in ("keys", "formerAddresses", "mainCollection", "index"):
+    for k in ("keys", "formerAddresses", "index"):
         if k in cfg:
             ARCHIVE[k] = cfg[k]
         else:
@@ -3410,6 +3456,8 @@ def owner_init_command(args):
         if changed:
             cfg_path.write_text(json.dumps(cfg, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
         record_wallet(log.owner, getattr(args, "keys", None))
+        if log.owner in archive_owners() and log.owner not in CATALOGUES:
+            collect(argparse_namespace(owner=log.owner))
     write_discovery()
 
 

@@ -21,7 +21,7 @@ A = "56wo6cdpjsxk7ddgnqfp2quipfghukhtmvjuahvwzko7m4tkz3pa"     # the authors' ow
 J = "tqr6lchnd2vk7ezskdc5zdxpaidpsiuduo5sqhiis3i55iautdka"     # the journal's owner
 N = "zzgdggwlldcrw4bdeuvntiaobtw2kge6bc4go737pfekhfc5oz4q"     # the paper
 N1 = "aajozkubvmxu37pbu2lumdl37llv4ntkazd6j2es54zn23fkiknb"    # the paper, by algorithm 1
-C = "kdye5s4igsyn6i6c46lqhercobkiv5avkepkdy6hcs6wr2pakxeq"     # the main catalogue
+C = "kdye5s4igsyn6i6c46lqhercobkiv5avkepkdy6hcs6wr2pakxeq"     # the owner catalogue
 ORCID_A = "https://orcid.org/0000-0002-1234-5677"
 KL1 = ("afaabe7b9489bc408ecbb20e8477a7eeb4e8a0ebde0dc15e32d30be17d922207"
        "504953e3e52101015f770844449c8382c4c4d9bec472a908ed47200efaef1220")

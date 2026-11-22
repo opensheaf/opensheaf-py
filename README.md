@@ -100,7 +100,7 @@ osheaf deposit kpz-uniqueness paper.tex --pdf paper.pdf --new \
 osheaf deposit kpz-uniqueness paper.tex --pdf paper.pdf --changes "Typos corrected." \
   --title "Energy solutions of KPZ are unique" --author "Doe, Jane|Example University"
 osheaf notice kpz-uniqueness --about 1 --text "Lemma 2 is wrong as stated; see version 2."
-osheaf collect          # a new version of the main catalogue, pinning the latest signed versions
+osheaf collect          # new versions of the owner catalogues, pinning the latest signed versions
 osheaf index            # opensheaf.json, the indexes, the website
 osheaf verify
 ```
@@ -352,21 +352,24 @@ or from `--root`. They maintain:
   owners (at `<owner>/<owner>/`), copies of lines written elsewhere with
   their owners' key logs, and drafts at `draft/<id>/`;
 - `opensheaf.json`: the discovery document, with the labels of the lines,
-  the drafts and the tombstones of objects taken down;
+  the owners hosted with their owner catalogues (`owners`), the drafts and
+  the tombstones of objects taken down;
 - `names/`, `owners/`, `sha512/`: the indexes (section 12.5);
-- the website (the profile `website`, appendix A.3): `index.html`, presenting
-  the latest signed version of the main catalogue with the pin of every
-  member (and a featured collection first, if one is set); a landing page
-  `paper/<label>/` per line held (`paper/<name>/` without a label, with
-  `-<owner>` added when several lines share the name; its full `sheaf:` URI
-  in canonical form and a short form, its owner and keeper, marked
-  confirmed when the keeper's ORCID record or domain links the owner, the current version, every signed document version in the order of
-  the history with its status, contested ones marked, notices, files, pins,
-  DOI, the withdrawal if any, the `citation_*` tags read by Google Scholar,
-  JSON-LD, Signposting links); a page `owner/<owner>/` per owner, summarising
-  its key log (current keys, rotations, exposed keys, an end, a successor,
-  the keeper); and `sitemap.xml`; from the templates in `templates/`
-  (`{{name}}` placeholders; MathJax renders `$...$`), copied there by `init`;
+- the website (the profile `website`, appendix A.3): `index.html`,
+  presenting the latest signed version of each owner catalogue, in the order
+  of `owners`, with the pin of every member (and a featured collection
+  first, if one is set); a landing page `paper/<label>/` per line held
+  (`paper/<name>/` without a label, with `-<owner>` added when several lines
+  share the name; its full `sheaf:` URI in canonical form and a short form,
+  its owner and keeper, marked confirmed when the keeper's ORCID record or
+  domain links the owner, the current version, every signed document version
+  in the order of the history with its status, contested ones marked,
+  notices, files, pins, DOI, the withdrawal if any, the `citation_*` tags
+  read by Google Scholar, JSON-LD, Signposting links); a page
+  `owner/<owner>/` per owner, summarising its key log (current keys,
+  rotations, exposed keys, an end, a successor, the keeper); and
+  `sitemap.xml`; from the templates in `templates/` (`{{name}}`
+  placeholders; MathJax renders `$...$`), copied there by `init`;
 - or, with a TeXmacs index (`osheaf init --index texmacs [--index-template
   FILE]`), `site/<label>/` (HTML versions of TeXmacs
   documents) and an index made from a TeXmacs template, with the same
@@ -502,7 +505,7 @@ osheaf arxiv import DOWNLOADS [ARXIV-ID ...] [--update] [--versions v1,v3] [--ag
     - {label: my-paper}
   ```
 
-  `osheaf init --curated` makes an archive whose main catalogue is curated
+  `osheaf init --curated` makes an archive whose owner catalogue is curated
   so; `osheaf verify --remote` resolves every member of other archives.
 - **mirror** (a library, a preservation copy; section 11): copies a line
   written elsewhere, up to its latest signed version, byte for byte, each
@@ -553,8 +556,11 @@ osheaf arxiv import DOWNLOADS [ARXIV-ID ...] [--update] [--versions v1,v3] [--ag
   replacing the keywords; arXiv categories stay) or the authors (`--author`,
   repeated, as in a deposit, replacing the list); the other fields are kept,
   and a correction that changes nothing is refused.
-- **collect**: a new version of the main catalogue when a document of the
-  archive's owners has a new signed version; members are ordered
+- **collect**: a new version of the owner catalogue of each owner the
+  archive hosts (or of `--owner`) when a document of that owner, a branch
+  included, has a new signed version; each owner has its own catalogue,
+  sealed when it is set up (`osheaf init`, `osheaf owner init`), and signs
+  only it; members are ordered
   `issued-desc`, pin the latest signed version of their line and follow it.
 - **index**: the discovery document, the indexes `names/`, `owners/` and
   `sha512/` (also written by every command that changes an object), and
@@ -569,7 +575,7 @@ osheaf arxiv import DOWNLOADS [ARXIV-ID ...] [--update] [--versions v1,v3] [--ag
   and `datacite.json`, numbering of document versions, history and notices,
   branch points, collections and their pins, the discovery document,
   tombstones and indexes, and, under the profile website, that the home page
-  shows the pin of every member of the main catalogue and each landing page
+  shows the pin of every member of the owner catalogues and each landing page
   the `sheaf:` URI of its line; with `--remote`, the members of collections
   held in other archives, resolved, with their statuses, and the link of
   each owner to its keeper, confirmed or claimed only, read from the

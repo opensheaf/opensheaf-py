@@ -6,7 +6,7 @@ served as a website: the discovery document `opensheaf.json`, the storage
 root, the indexes, and pages for readers, the *presentation files* of
 section 3 of the specification. This chapter describes the pages, written
 by `src/opensheaf/html.py` for archives that follow the *website profile*
-(appendix A.3): a home page presenting the main catalogue, one landing page
+(appendix A.3): a home page presenting the owner catalogues, one landing page
 for each line, a page for each owner, and a sitemap. The pages are filled
 into templates, which are described in the [next chapter](31-templates.md).
 
@@ -50,10 +50,12 @@ withdrawn, is read from the same version (section 13.1), and a withdrawal
 is shown on every page that shows the line, whatever version that page
 presents, as section 13.1 requires.
 
-The members shown are those of the latest signed version of the main
-catalogue (appendix A.3), in its order, which is authoritative (section
-8.2): the documents of the lines the archive's owners write here, or, for a
-curated archive, the members its curator chose, from any archive. A member
+The members shown are those of the latest signed version of each owner
+catalogue, the catalogues in the order of `owners` in the discovery
+document and the members of each in its order, which is authoritative
+(section 8.2; appendix A.3): the documents of the lines each owner writes
+here, or, for a curated catalogue, the members its curator chose, from any
+archive. A member
 whose line is held here, written here or copied here as a mirror, gets a
 landing page; a member held elsewhere gets an entry on the home page only,
 linking to its own archive, which has its own landing pages. Each member is
@@ -71,7 +73,7 @@ An archive may also **feature** one of its collections on the home page
 (`index.html.featured` in `osheaf.json`: the label of a collection of the
 archive): a reading list, a journal's issues, the papers of a seminar. Its
 members are listed first, under its title, and its description becomes the
-lead paragraph; the main catalogue follows, so that the home page still
+lead paragraph; the owner catalogues follow, so that the home page still
 presents the archive's own documents and the pin of every member. Curation
 lives in the collections of the archive, which are lines of their own
 (section 8.1).
@@ -380,7 +382,7 @@ inventory, which is what a citation of a fixed version should carry.
 Writing the website
 -------------------
 
-`render` writes everything from the member list of the main catalogue.
+`render` writes everything from the member lists of the owner catalogues.
 It first decides which lines get a landing page, and in which version
 (below); then it writes the landing pages; then the home page, from the
 members in the catalogue's order: an entry for each, from its landing page
@@ -432,12 +434,12 @@ sheets gets no stray `style.css`.
 
 ### Which lines get a page
 
-A member of the main catalogue held here gets a landing page, in the
+A member of an owner catalogue held here gets a landing page, in the
 version the catalogue presents; so does a member held here of the featured
 collection; and so, further down, does every member held here of a
 collection that gets a landing page, since that page lists its members, in
 the version that collection presents. The first collection to reach a line
-decides its version: the main catalogue first, so that a line of the
+decides its version: the owner catalogues first, so that a line of the
 archive is presented in its current version (appendix A.3) even when a
 featured selection vetted an earlier revision of it. Collections are
 followed once each, so a collection that includes itself, directly or not,
@@ -484,7 +486,7 @@ the name its source gave it.
 
 A landing page is at `paper/<label>/` and presents the version the member
 that reached it presents (`presented_version`, in the chapter on the
-[main collection](15-main-collection.md)): the current version, as of the
+[owner catalogues](15-owner-catalogues.md)): the current version, as of the
 version pinned, for a catalogue (section 8.3), or the last revision for a
 selection, whose vetted document versions are marked in the list of
 versions (section 8.4). Three things are read from the latest signed
@@ -894,8 +896,9 @@ of a selection, the versions vetted, the last of which is presented.
         return f"version {obj['documentVersion']}"
 
 The lead paragraph of the home page says what the archive is. An archive
-of its owners' documents gets a fixed text; a curated main catalogue
-(order `manual`), or the featured collection, gets its description, and a
+of its owners' documents gets a fixed text; an archive with one owner
+catalogue, curated (order `manual`), or the featured collection, gets its
+description, and a
 sentence saying that its members are kept in their own archives, and, for
 a selection, that each is shown in the version its curator vetted.
 
@@ -903,7 +906,8 @@ a selection, that each is shown in the version its curator vetted.
     lead = ('Papers with their sources, every version, fixed by digests and signed by their owners. An '
             '<a href="https://opensheaf.org">OpenSheaf</a> archive: programs start from '
             '<a href="opensheaf.json">opensheaf.json</a>.')
-    main_id = P.LABELS.get(P.ARCHIVE["mainCollection"])
+    cats = [P.CATALOGUES[o] for o in P.archive_owners() if o in P.CATALOGUES]
+    main_id = cats[0] if len(cats) == 1 else None
     cline = fline if featured else (LINES.get(main_id) or (held({"name": main_id.split(":")[1],
                                                                  "owner": main_id.split(":")[2]})
                                                            if main_id else None))

@@ -1,9 +1,9 @@
 Collections across archives
 ===========================
 
-An OpenSheaf archive lists its own documents in its *main catalogue*,
-which `osheaf collect` builds from the documents deposited
-([chapter 15](15-main-collection.md)). This chapter is about the
+An OpenSheaf archive lists the documents of each owner it hosts in that
+owner's *owner catalogue*, which `osheaf collect` builds from the documents
+deposited ([chapter 15](15-owner-catalogues.md)). This chapter is about the
 collections a curator composes: a reading list, the papers of a group, the
 issue of a journal. Their members may be lines of this archive or of any
 other, each fixed by a pin, so that a collection states exactly what it
@@ -247,7 +247,7 @@ Writing a collection version
 A new version of a collection holds its `members.json`, its
 `datacite.json` and its genesis record. The members are placed by the
 collection's `order`: in `manual` order as the curator gave them, or by
-date, as the main catalogue orders them (section 8.2). The document
+date, as the owner catalogues order them (section 8.2). The document
 version goes up only when the member list changes (section 4.2); a change
 of the title or description alone is a description-only version. Nothing
 is written when nothing changes.
@@ -509,7 +509,7 @@ once it knows that the owner's key log forks, to anything (section 7.5).
 For a selection it only reports the document versions of the latest
 signed version's history that are not vetted: changing a revision set is
 the curator's act. Without a label, every collection of the archive's
-owners is updated, but a main catalogue kept by `osheaf collect`.
+owners is updated, but the owner catalogues kept by `osheaf collect`.
 
     # in collections: the commands:
     def update(args):
@@ -539,7 +539,7 @@ owners is updated, but a main catalogue kept by `osheaf collect`.
         if (head or {}).get("kind") != "collection" or head.get("owner") not in P.archive_owners():
             return False
         mem = P.read_json(d, inv, "members.json") or {}
-        return not (label == P.ARCHIVE.get("mainCollection") and mem.get("order") != "manual")
+        return not (obj_id in P.CATALOGUES.values() and mem.get("order") != "manual")
 
 
     def follow_member(r, label, m):

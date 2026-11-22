@@ -13,7 +13,7 @@ the [owners](06-owners.md), the lines with their
 [document versions and their history](11-versions.md), the descriptions
 written by [deposits](13-deposit.md) and
 [description-only versions](14-description.md), the
-[main catalogue](15-main-collection.md) and the
+[owner catalogues](15-owner-catalogues.md) and the
 [discovery document](16-index.md).
 
 Section 14 orders the checks: files and storage (14.2), key logs (14.3),
@@ -1088,11 +1088,17 @@ list every object but drafts, each with the values its object gives, which
 are those the tools would write now (`discovery()`, with the status of
 each line read from its latest signed version); an entry that differs is
 stale, which happens when an object was changed by other means than these
-tools. Labels are distinct. `mainCollection` names a catalogue it lists;
-when `owners` is present, the members of the main catalogue are lines of
-those owners, and the owners listed are owner objects held, a breach of
-these being a warning. `drafts` lists only drafts, with their heads. The
-extensions the objects use are listed, a warning otherwise.
+tools. Labels are distinct. `owners` names each owner once, each with a
+catalogue of its own: a collection it lists, of that owner, whose
+`members.json` is a catalogue (section 8.1); a warning, when `owners` is
+missing (it is recommended, section 3.1), when an owner listed has no key
+log held here, and when an owner catalogue lists a member that is not a
+document of a line of its owner held here, which section 8.1 does not
+allow (a copy, another owner's line, a line of another archive); a member
+taken down here is left to the next version of the catalogue (section
+13.2).
+`drafts` lists only drafts, with their heads. The extensions the objects
+use are listed, a warning otherwise.
 
 The tombstones (section 13.3): each with `id` the line of its `name` and
 `owner`, no two with the same `id`, and none for an object of the storage
@@ -1130,30 +1136,53 @@ justifies (section 13.2).
         labels = [o["label"] for o in listed.values() if o.get("label")]
         for lb in sorted({x for x in labels if labels.count(x) > 1}):
             f.error("opensheaf.json", f"the label {lb} is given twice (section 3.1)")
-        <<check the main catalogue, the owners, the drafts and the extensions listed>>
+        <<check the owners and their catalogues, the drafts and the extensions listed>>
         <<check the tombstones of the discovery document>>
 
-The main catalogue, the owners, the drafts and the extensions.
+The owners and their catalogues, the drafts and the extensions.
 
-    # in check the main catalogue, the owners, the drafts and the extensions listed:
-    main = disc.get("mainCollection")
-    if main is None:
-        f.warning("opensheaf.json", "no mainCollection (section 3.1)")
-    elif main not in listed or listed[main].get("kind") != "collection":
-        f.error("opensheaf.json", f"mainCollection {main} is not a collection it lists")
-    elif main in found:
-        md, minv = found[main]
+    # in check the owners and their catalogues, the drafts and the extensions listed:
+    if "owners" not in disc:
+        f.warning("opensheaf.json", "no owners: the owners hosted and their catalogues are not named (section 3.1)")
+    seen_owners, seen_catalogues = set(), set()
+    removed_here = {t.get("id") for t in disc.get("tombstones", []) if isinstance(t, dict)}
+    for e in disc.get("owners", []):
+        if not isinstance(e, dict):
+            continue  # the schema reports it
+        o, cat = e.get("owner"), e.get("catalogue")
+        if o in seen_owners:
+            f.error("opensheaf.json", f"owners lists {o} twice (section 3.1)")
+        if cat in seen_catalogues:
+            f.error("opensheaf.json", f"owners gives {cat} as the catalogue of two owners (section 3.1)")
+        seen_owners.add(o)
+        seen_catalogues.add(cat)
+        try:
+            if names.object_id(o, o) not in found:
+                f.warning("opensheaf.json", f"owners lists {o}, whose key log is not held here (section 3.1)")
+        except (ValueError, TypeError):
+            continue
+        entry = listed.get(cat) or {}
+        if entry.get("kind") != "collection" or entry.get("owner") != o:
+            f.error("opensheaf.json", f"the catalogue of {o} in owners, {cat}, is not a collection of that "
+                    "owner it lists (section 8.1)")
+            continue
+        if cat not in found:
+            continue
+        md, minv = found[cat]
         mem = read_json(md, minv, "members.json") or {}
         if mem.get("type") != "catalogue":
-            f.error("opensheaf.json", "mainCollection is not a catalogue (section 8.1)")
-        if "owners" in disc:
-            for m in mem.get("members", []):
-                if m.get("owner") not in disc["owners"]:
-                    f.warning("opensheaf.json", f"the main catalogue lists {m.get('name')}, a line of an owner "
-                              "that owners does not list (section 8.1)")
-    for o in disc.get("owners", []):
-        if names.object_id(o, o) not in found:
-            f.warning("opensheaf.json", f"owners lists {o}, whose key log is not held here (section 3.1)")
+            f.error("opensheaf.json", f"the owner catalogue of {o}, {where(cat)}, is not a catalogue (section 8.1)")
+        for m in mem.get("members", []):
+            if f"sheaf:{m.get('name')}:{m.get('owner')}" in removed_here:
+                continue  # taken down: section 13.2 asks for a version without it
+            try:
+                mine = (m.get("owner") == o and m.get("kind") == "document"
+                        and names.object_id(m.get("name"), o) in found)
+            except (ValueError, TypeError):
+                mine = False
+            if not mine:
+                f.warning("opensheaf.json", f"the owner catalogue of {o} lists {m.get('name')}, which is not a "
+                          "document of a line of that owner held here (section 8.1)")
     drafts = {o["id"]: o for o in now_disc.get("drafts", [])}
     for dr in disc.get("drafts", []):
         if dr.get("id") not in drafts or drafts[dr["id"]]["head"] != dr.get("head"):
@@ -1248,7 +1277,7 @@ Presentation files are never authoritative (section 3), and a verifier
 does not trust them; but an archive that declares the profile `website`
 (appendix A.3) promises what they show, and some of it can be checked from
 the files alone. The home page presents the latest signed version of the
-main catalogue: it shows the pin of every member, the beginning of its
+owner catalogues: it shows the pin of every member, the beginning of its
 digest, as the [website](30-website.md) and the [TeXmacs index](16-index.md)
 write it, which tells a stale home page from a current one. Each member
 whose line is held here has a landing page at `paper/<label>/` (or
@@ -1270,7 +1299,7 @@ the takedown removed it from the pages (section 13.2).
     # in check the presentation files of the profile website:
     def check_presentation(f, disc):
         """Appendix A.3: the home page shows the pin of every member of the latest signed
-        version of the main catalogue, and each member held here has a landing page giving the
+        version of each owner catalogue, and each member held here has a landing page giving the
         full sheaf: URI of its line; errors under the profile website, warnings for an archive
         that presents pages without declaring it."""
         profiles = disc.get("profiles") or []
@@ -1282,7 +1311,7 @@ the takedown removed it from the pages (section 13.2).
             return
         report = f.error if website else f.warning
         note = "" if website else " (the archive does not declare the profile website)"
-        members = main_members() or []
+        members = catalogue_members() or []
         page = home.read_text(encoding="utf-8", errors="replace") if home.exists() else None
         if page is None and website:
             report("index.html", "the home page is missing (appendix A.3)")
@@ -1369,7 +1398,7 @@ continuous integration: an archive with warnings passes (section 14.1).
 With `--remote`, the members of collections held in other archives are
 resolved from their locations and given their statuses (section 14.5).
 The standard output of `--json` is the JSON list alone: what the checks
-say on the way (a main catalogue without a signed version, met while the
+say on the way (an owner catalogue without a signed version, met while the
 presentation files are checked) goes to the standard error, as every
 warning of these tools does, so that a program can parse the output
 whatever the state of the archive.

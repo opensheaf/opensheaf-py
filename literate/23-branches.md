@@ -384,7 +384,10 @@ evidence needs (section 6.5), from the copies found; names the branch, or
 finds the branch whose branch point moves; and writes the version, after
 checking its branch point as a verifier will. The first version holds the
 parent's document version; a version that moves the branch point takes
-the next number of the branch.
+the next number of the branch. A branch is a line of its owner: `osheaf
+collect` lists it in that owner's [catalogue](15-owner-catalogues.md),
+never in the catalogue of the parent's owner (section 9), and an accepted
+copy likewise in the catalogue of the selection's owner.
 
     # in branches: making a branch or moving its branch point:
     def make_branch(uri, where, *, owner=None, label=None, message=None):

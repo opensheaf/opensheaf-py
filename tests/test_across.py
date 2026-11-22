@@ -629,6 +629,71 @@ def test_the_archive_of_a_parent_url(tmp_path):
         assert not [n for n in r.notes if "unavailable" in n[1]]
 
 
+def test_owner_catalogues(tmp_path):
+    a = make(tmp_path, "a")
+    r = ["--root", str(a)]
+    first = line(a, "main").split(":")[2]
+    deposit(a, "paper", "one", new=True)
+    run(*r, "collect")
+    run(*r, "owner", "init", "--export", str(tmp_path / "second-keys"), "--no-passphrase", "--yes")
+    P.configure(a)
+    second = P.ARCHIVE["owners"][0]
+    disc = json.loads((a / "opensheaf.json").read_text())
+    assert [e["owner"] for e in disc["owners"]] == [first, second] and "mainCollection" not in disc
+    cat1, cat2 = (e["catalogue"] for e in disc["owners"])
+    assert cat1 == line(a, "main") and cat2.split(":")[2] == second and P.label_of(cat2) is None
+
+    def listed(cat):
+        d = P.obj_dir(cat)
+        return [(m["name"], m["owner"]) for m in P.read_json(d, P.load_inventory(d), "members.json")["members"]]
+
+    def head(cat):
+        return P.load_inventory(P.obj_dir(cat))["head"]
+
+    assert listed(cat2) == [] and head(cat2) == "v1"
+    head1 = head(cat1)
+    deposit(a, "theirs", "two", "--owner", second, new=True)
+    run(*r, "branch", uri(a, "paper", 1), "--owner", second, "--label", "continued")
+    run(*r, "collect", "--owner", second)
+    P.configure(a)
+    assert head(cat1) == head1 and head(cat2) == "v2"
+    run(*r, "collect")
+    P.configure(a)
+    assert head(cat1) == head1
+    assert listed(cat1) == [tuple(line(a, "paper").split(":")[1:])]
+    assert sorted(listed(cat2)) == sorted(tuple(line(a, x).split(":")[1:]) for x in ("theirs", "continued"))
+    assert errors(a) == []
+    home = (a / "index.html").read_text()
+    pins = [head_digest(a, x, "v1")[:32] for x in ("paper", "theirs")]
+    assert home.index(pins[0]) < home.index(pins[1])
+    with pytest.raises(SystemExit, match="not an owner this archive hosts"):
+        run(*r, "collect", "--owner", "a" * 51 + "q")
+    disc = json.loads((a / "opensheaf.json").read_text())
+    wrong = dict(disc, owners=[disc["owners"][0], {"owner": second, "catalogue": cat1}, disc["owners"][0]])
+    (a / "opensheaf.json").write_text(json.dumps(wrong))
+    messages = [x["message"] for x in findings(a) if x["severity"] == "error"]
+    assert any(f"the catalogue of {second} in owners" in m for m in messages)
+    assert any(f"owners lists {first} twice" in m for m in messages)
+    (a / "opensheaf.json").write_text(json.dumps(dict(disc, owners=disc["owners"][::-1])))
+    assert errors(a) == []
+    d = P.obj_dir(cat2)
+    mem = P.read_json(d, P.load_inventory(d), "members.json")
+    theirs = next(m for m in mem["members"] if m["name"] == line(a, "theirs").split(":")[1])
+    mine = dict(theirs, name=line(a, "paper").split(":")[1], owner=first,
+                version="v1", inventorySha512=head_digest(a, "paper", "v1"))
+    from opensheaf import collections
+    collections.write(cat2, dict(mem, order="manual", members=mem["members"] + [mine]), message="Another's")
+    found = findings(a)
+    assert any(x["severity"] == "warning" and f"the owner catalogue of {second} lists" in x["message"]
+               for x in found)
+    old = dict(disc, owners=[first, second], mainCollection=cat1)
+    (a / "opensheaf.json").write_text(json.dumps(old))
+    P.configure(a)
+    assert P.CATALOGUES == {first: cat1}
+    P.write_discovery()
+    assert json.loads((a / "opensheaf.json").read_text())["owners"] == [{"owner": first, "catalogue": cat1}]
+
+
 def test_draft_and_seal(tmp_path):
     a = make(tmp_path, "a")
     pdf = tmp_path / "d.pdf"

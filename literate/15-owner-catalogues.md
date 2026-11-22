@@ -1,35 +1,45 @@
-The main collection
-===================
+The owner catalogues
+====================
 
-The documents of an archive are listed by its *main catalogue* (section
-8.1): an object of kind `collection` whose `members.json` (section 8.2)
-names each document by its line, `name` and `owner`, and pins it, by an
-object version and the SHA-512 digest of that version's inventory. It is a
-*catalogue*: it keeps the archive's documents whole, every version, without
-judging them, so each member pins the latest signed version of its line,
-and follows it as it grows (section 8.3). The collection is itself a line,
-like any object: each change of the list is a new version, signed by its
-owner, so that the list of an archive at any past moment can be recovered
-and checked. The index and the website are made from it
+The documents of an archive are listed by *owner catalogues* (section
+8.1): each owner the archive hosts has there a catalogue of its own, an
+object of kind `collection` whose `members.json` (section 8.2) names each
+of the owner's documents in the archive by its line, `name` and `owner`,
+and pins it, by an object version and the SHA-512 digest of that version's
+inventory. It is a *catalogue*: it keeps the documents whole, every
+version, without judging them, so each member pins the latest signed
+version of its line, and follows it as it grows (section 8.3). The
+collection is itself a line of its owner, like any object: each change of
+the list is a new version, signed by that owner, so that the list at any
+past moment can be recovered and checked. The index and the website are
+made from the owner catalogues, in the order of the owners
 ([next chapter](16-index.md)), and other archives' collections can include
-it.
+them.
 
-An archive that makes collections does so as an owner (section 8.1): the
-main catalogue is a line of the archive's owner, sealed when the archive is
-[created](18-init.md), labelled by `mainCollection` of the configuration,
-and named by its identifier in `mainCollection` of the discovery document.
-It lists the documents of the lines that the archive's owners write in the
-archive, never the copies it holds of others' lines.
+Version 0.2 had at first one *main catalogue* per archive, a line of the
+archive's owner listing the lines of every owner it hosts; a deposit by
+another owner then needed a new version signed by the archive's owner.
+Since #72 each owner keeps its own: a change by an owner touches its
+catalogue only, and no owner signs for another. An owner catalogue is
+sealed when the owner is set up in the archive: by
+[`osheaf init`](18-init.md) for the archive's first owner, by
+[`osheaf owner init`](19-owner-commands.md) for another. The discovery
+document names it with its owner in `owners` (section 3.1), and the tools
+read it from there (`CATALOGUES`, in the chapter on the
+[archive](10-archive.md)). It lists the documents of the lines that its
+owner writes in the archive, branches of its own included (section 9),
+never the copies the archive holds of others' lines, and is never mirrored
+(section 11).
 
-This chapter is `osheaf collect`, which writes a new version of the main
-catalogue when the documents have changed. Collections curated by hand,
-with members of other archives, are the subject of
-[collections](21-collections.md); a main collection may be one of those
-(a *curated* archive, `osheaf init --curated`), and then `collect` leaves
-it alone.
+This chapter is `osheaf collect`, which writes a new version of the owner
+catalogues whose documents have changed, or, with `--owner`, of one
+owner's. Collections curated by hand, with members of other archives, are
+the subject of [collections](21-collections.md); an owner catalogue may be
+one of those (a *curated* archive, `osheaf init --curated`), and then
+`collect` leaves it alone.
 
-    # in maintain the main collection of the archive:
-    <<the order of the main collection>>
+    # in maintain the owner catalogues of the archive:
+    <<the order of an owner catalogue>>
 
 
     <<the pins of a member and the version presented>>
@@ -38,28 +48,29 @@ it alone.
     <<order the members of a collection by date>>
 
 
-    <<write a new version of the main collection>>
+    <<write a new version of the owner catalogues>>
 
 The documents and their current versions
 ----------------------------------------
 
-The documents of the archive are the objects of kind `document` whose
-owner is one of the archive's owners (the configuration's `owner` and
-`owners`). Collections, key logs and drafts are left out, and so are the
-lines of other owners that the archive holds as copies (section 11). For
+The documents of an owner in the archive are the objects of kind
+`document` of that owner, which the archive hosts (the configuration's
+`owner` and `owners`); without an owner, those of every owner it hosts.
+Collections, key logs and drafts are left out, and so are the lines of
+other owners that the archive holds as copies (section 11). For
 each document, the function returns the latest signed version of its line
 (section 7.3), from which its history, current version and status are read
 (section 4.2), the object version holding its
 [current version](11-versions.md), and that version's two descriptions:
-what readers are shown, and what the citation cached in the main
+what readers are shown, and what the citation cached in the owner
 catalogue is made from. A line without a signed version is left out, with
 a warning: nothing relies on a version that is not signed (section 7.3).
 
     # in the documents of the archive with their current versions:
-    def documents():
+    def documents(owner=None):
         """(obj_id, dir, inventory, latest signed version, current object version, its
-        object.json and datacite.json) of every document of the archive's owners."""
-        out, mine = [], set(archive_owners())
+        object.json and datacite.json) of every document of OWNER, or of the archive's owners."""
+        out, mine = [], {owner} if owner else set(archive_owners())
         for obj_id, d, inv in objects():
             if inv is None or obj_id is None or obj_id.startswith("sheaf:draft:"):
                 continue
@@ -81,10 +92,10 @@ The order
 
 `members.json` lists members in the order in which they are presented, and
 that order is authoritative (section 8.2): a reader does not sort. A
-collection may say by which rule its tools place members; the main
+collection may say by which rule its tools place members; an owner
 catalogue is newest first, by date, `issued-desc`.
 
-    # in the order of the main collection:
+    # in the order of an owner catalogue:
     ORDER = "issued-desc"
 
 The pins
@@ -143,29 +154,47 @@ descending.
 Writing a new version
 ---------------------
 
-`osheaf collect` takes four steps, the last only if something changed.
+`osheaf collect` goes through the owners the archive hosts, in their
+order, or takes the one `--owner` names, and gives each owner catalogue a
+new version when its documents have changed. An owner whose catalogue
+would not change signs nothing, so the command needs the keys of only the
+owners whose documents changed: a deposit by one owner touches its
+catalogue only.
 
-    # in write a new version of the main collection:
+    # in write a new version of the owner catalogues:
     def collect(args):
-        """A new version of the main catalogue when a document has a new signed version;
-        members pin the latest signed version of their line and follow it (section 8.3)."""
-        <<leave a curated main collection to its curator>>
-        <<pin the current version of every document of the archive>>
-        <<stop if the main collection would not change>>
-        <<write the files of the main collection's new version>>
+        """A new version of each owner catalogue (or of that of --owner) whose documents have a new
+        signed version; members pin the latest signed version of their line and follow it (section 8.3)."""
+        init_storage_root()
+        only = getattr(args, "owner", None)
+        if only and only not in archive_owners():
+            sys.exit(f"{only} is not an owner this archive hosts")
+        for owner in [only] if only else archive_owners():
+            collect_owner(owner, args)
 
-A main collection whose order is `manual` is curated: its members and
+
+    def collect_owner(owner, args):
+        """A new version of the owner catalogue of OWNER when its documents have changed; its first
+        version, sealed, when the owner has none yet."""
+        <<leave a curated owner catalogue to its curator>>
+        <<pin the current version of every document of the owner>>
+        <<stop if the owner catalogue would not change>>
+        <<write the files of the owner catalogue's new version>>
+
+An owner catalogue whose order is `manual` is curated: its members and
 their order are decisions of its curator, made with `osheaf collection`.
-A main catalogue not yet made (by `osheaf init`, which calls this command)
-has no identifier yet: it will be sealed below; `osheaf init --curated`
-asks for it curated from the start, empty and of order `manual`.
+An owner catalogue not yet made (when the owner is set up) has no
+identifier yet: it will be sealed below; `osheaf init --curated` asks for
+it curated from the start, empty and of order `manual`. The catalogue of
+the archive's first owner is labelled `main`, if that label is free; the
+others get no label, and are named by their identifiers (or labelled
+later, with `osheaf label`).
 
-    # in leave a curated main collection to its curator:
-    init_storage_root()
-    label = ARCHIVE["mainCollection"]
-    coll_id = LABELS.get(label)
+    # in leave a curated owner catalogue to its curator:
+    coll_id = CATALOGUES.get(owner)
     coll_dir = obj_dir(coll_id) if coll_id else None
     cinv = load_inventory(coll_dir) if coll_dir else None
+    label = (label_of(coll_id) if coll_id else None) or names.short(owner)
     if cinv and read_json(coll_dir, cinv, "members.json").get("order") == "manual":
         print(f"{label} is curated (order manual): use osheaf collection add|sync|update")
         return
@@ -173,11 +202,11 @@ asks for it curated from the start, empty and of order `manual`.
     order = "manual" if curated else ORDER
 
 Each document becomes a member pinned at the latest signed version of its
-line, with `follow: latest`: the main catalogue follows its members whatever
-their new versions hold (a new document version, a description, a notice,
-a withdrawal; section 8.3), and pins only signed versions (section 8.5).
-Since the inventory of a version lists every earlier version, and its
-`object.json` the digest of the inventory before it, the pin fixes the
+line, with `follow: latest`: the owner catalogue follows its members
+whatever their new versions hold (a new document version, a description, a
+notice, a withdrawal; section 8.3), and pins only signed versions (section
+8.5). Since the inventory of a version lists every earlier version, and
+its `object.json` the digest of the inventory before it, the pin fixes the
 whole object up to it. A member names its line by `name` and `owner`,
 never by a label or a location, and lists in `at` where copies may be
 found: the archive's base URL (section 8.2). The citation is that of the
@@ -189,9 +218,9 @@ date (or `Created`, for a version not public at the time) is needed only to
 order the members, and is removed afterwards: it describes a version, not
 the work, and would make the citation change at every new version.
 
-    # in pin the current version of every document of the archive:
+    # in pin the current version of every document of the owner:
     members = []
-    for obj_id, d, inv, signed, cur, obj, dc in documents():
+    for obj_id, d, inv, signed, cur, obj, dc in documents(owner):
         cite = {"title": dc["titles"][0]["title"],
                 "creators": [display_name(c) for c in dc["creators"]],
                 "year": dc["publicationYear"]}
@@ -214,7 +243,7 @@ of the collection meaningful. The document version of a collection counts
 the changes of its member list (section 4.2), and the `Issued` date of its
 first version is kept.
 
-    # in stop if the main collection would not change:
+    # in stop if the owner catalogue would not change:
     version, issued = 1, TODAY
     if cinv:
         old = read_json(coll_dir, cinv, "members.json")
@@ -227,20 +256,27 @@ first version is kept.
 The new version holds the files of a collection (section 8.2):
 `members.json`, which states that the collection is a catalogue, its
 `datacite.json` and its `object.json`, with its genesis record. The first
-version seals the catalogue as a work of the archive's owner (section 10.2);
-later ones carry its genesis record. Its `datacite.json` describes the
-archive as a whole: titled with the archive's name, created by its curator,
-of type `Collection`, available today, under CC0 like every member list
-(section 8.6). Its `object.json` has only the fields common to all objects,
-with the line. The version is signed by the archive's owner, and the
-discovery document is rewritten.
+version seals the catalogue as a work of its owner (section 10.2); later
+ones carry its genesis record. Its `datacite.json` describes the owner's
+documents in the archive: titled with the archive's name (followed, for an
+owner other than the archive's first, by the owner's label or short name),
+created by the archive's curator, of type `Collection`, available today,
+under CC0 like every member list (section 8.6). Its `object.json` has only
+the fields common to all objects, with the line. The version is signed by
+the owner, and the discovery document, which names the catalogue in
+`owners`, is rewritten.
 
-    # in write the files of the main collection's new version:
-    owner = ARCHIVE["owner"]
+    # in write the files of the owner catalogue's new version:
     if coll_id is None:
         genesis, coll_id = seal("collection", owner)
+        if owner == ARCHIVE["owner"] and CATALOGUE_LABEL not in LABELS:
+            LABELS[CATALOGUE_LABEL] = coll_id
     else:
         genesis = read_logical(coll_dir, cinv, GENESIS).read_bytes()
+    CATALOGUES[owner] = coll_id
+    title = ARCHIVE["name"]
+    if owner != ARCHIVE["owner"]:
+        title += ", " + (label_of(names.object_id(owner, owner)) or names.short(owner))
     cur = ARCHIVE["curator"]
     creator_ = {"name": cur["name"], "nameType": "Personal", "familyName": cur["familyName"]}
     if cur.get("givenName"):
@@ -251,7 +287,7 @@ discovery document is rewritten.
         "members.json": json_bytes({"format": "opensheaf-collection/0.2", "type": "catalogue",
                                     "order": order, "members": members}),
         "datacite.json": json_bytes({
-            "titles": [{"title": ARCHIVE["name"]}],
+            "titles": [{"title": title}],
             "creators": [creator_],
             "publisher": {"name": ARCHIVE["name"]},
             "publicationYear": int(issued[:4]),
@@ -259,17 +295,17 @@ discovery document is rewritten.
             "version": str(version),
             "url": ARCHIVE["baseUrl"],
             "dates": [{"date": issued, "dateType": "Issued"}, {"date": TODAY, "dateType": "Available"}],
-            "descriptions": [{"description": "The documents deposited in this archive, newest first.",
-                              "descriptionType": "Abstract"}],
+            "descriptions": [{"description": "The documents of one owner deposited in this archive, "
+                                             "newest first.", "descriptionType": "Abstract"}],
             "rightsList": [dict(RIGHTS["cc0-1.0"])],
         }),
         GENESIS: genesis,
     }
     obj = {"format": OBJ_FORMAT, "specification": SPEC, "kind": "collection",
            "name": coll_id.split(":")[1], "owner": owner, "documentVersion": version, "status": "active"}
-    LABELS[label] = coll_id
+    label = label_of(coll_id) or coll_id
     inv = add_version(coll_id, files, obj, f"Collection version {version}: {len(members)} documents",
                       acknowledged=bool(getattr(args, "i_know", False)))
     write_discovery()
-    print(f"Done: the main catalogue {label} is at {inv['head']}, with "
+    print(f"Done: the owner catalogue {label} of {names.short(owner)} is at {inv['head']}, with "
           f"{plural(len(members), 'member') if members else 'no members'}.")

@@ -4,7 +4,7 @@ The command line
 This chapter is the outer layer of opensheaf-py: the command `osheaf`,
 which reads the options of a command and calls the function that does the
 work. Almost nothing is decided here. Deposits, description-only versions,
-the main catalogue, the index and verification are explained in the
+the owner catalogues, the index and verification are explained in the
 chapters on the core; collections, mirrors and accepted copies in the
 chapter on collections; arXiv and Zenodo in chapters of their own. Two
 modules are tangled from this chapter: `cli.py`, the command itself, and
@@ -62,7 +62,7 @@ core.
     named by their labels in the archive.
 
     Commands:
-      init                   create an archive (osheaf.json, storage root, owner, main catalogue)
+      init                   create an archive (osheaf.json, storage root, owner, owner catalogue)
       owner init|rotate|expose|end|show   make an owner, change its keys, end it, show it
       key new                a new current key for this device
       key push|pull|list|forget   current keys to and from a key wallet (--wallet)
@@ -76,7 +76,7 @@ core.
       notice LABEL           a notice about a document version
       withdraw LABEL         withdraw a document (the content stays)
       complete LABEL         add the sources of a version deposited without them
-      collect                new version of the main catalogue when needed
+      collect                new versions of the owner catalogues when needed (--owner: one)
       collection new|add|remove|follow|update|status|sync
                              catalogues and selections, with members of any archive
       resolve URI            find and check what a sheaf: URI names, in any archive
@@ -668,7 +668,9 @@ osheaf collect && osheaf index && osheaf verify
 ```
 
     # in the options of osheaf collect, index and verify:
-    sub.add_parser("collect", help="new version of the main catalogue when needed").set_defaults(func=core.collect)
+    c = sub.add_parser("collect", help="new versions of the owner catalogues when needed")
+    c.add_argument("--owner", help="only the catalogue of this owner, an owner the archive hosts")
+    c.set_defaults(func=core.collect)
     i = sub.add_parser("index", help="write opensheaf.json, the indexes and the readable index")
     i.add_argument("--no-html", action="store_true",
                    help="do not write the HTML of the website (opensheaf.json and the indexes only)")
@@ -716,7 +718,7 @@ osheaf arxiv import downloads --agreement "deposited by an author"
 
 `init` makes an archive in a folder (by default the current one): the
 configuration `osheaf.json`, the storage root, the owner of the archive
-with its key log, the main catalogue, the discovery document and the
+with its key log, its owner catalogue, the discovery document and the
 website, with its templates copied into `templates/`. Three
 facts are needed: its name, its address and its curator, which may come
 from a file, and so are not marked required here. The owner is made at
@@ -730,7 +732,7 @@ osheaf init my-papers --name "Papers of Jane Doe" --base-url https://example.org
     --curator "Doe, Jane" --new-owner --export /Volumes/USB/opensheaf-keys --print
 ```
 
-With `--curated` the main catalogue is a curated one, whose members, from
+With `--curated` the owner catalogue is a curated one, whose members, from
 any archive, and order are the curator's, kept with `osheaf collection`
 ([collections](21-collections.md)). With `--index texmacs` the home page is
 a TeXmacs index instead of the website, made from the template given with
@@ -743,7 +745,7 @@ osheaf init papers --name "Papers of Jane Doe" --base-url https://example.org/pa
 ```
 
     # in the options of osheaf init:
-    n = sub.add_parser("init", help="create an archive (osheaf.json, storage root, owner, main catalogue)")
+    n = sub.add_parser("init", help="create an archive (osheaf.json, storage root, owner, owner catalogue)")
     n.add_argument("folder", nargs="?", help="where (default: the current folder)")
     n.add_argument("--name", help="the name of the archive, e.g. 'Papers of Jane Doe'")
     n.add_argument("--base-url", help="where the archive is served, e.g. https://example.org/papers/")
@@ -756,7 +758,7 @@ osheaf init papers --name "Papers of Jane Doe" --base-url https://example.org/pa
     n.add_argument("--new-owner", action="store_true", help="make a new owner (see osheaf owner init)")
     owner_init_options(n)
     n.add_argument("--curated", action="store_true",
-                   help="the main catalogue is curated (osheaf collection add|sync)")
+                   help="the owner catalogue is curated (osheaf collection add|sync)")
     n.add_argument("--index", choices=["website", "texmacs"],
                    help="the home page: the website (default, profile website) or a TeXmacs index "
                         "(profile texmacs)")

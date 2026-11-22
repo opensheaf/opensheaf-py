@@ -199,8 +199,11 @@ would be lost when the command ends.
         return log
 
 `osheaf owner init` makes an owner in an existing archive, which then hosts
-it: its owner name joins `owners` in the configuration, and the discovery
-document lists it. A GitHub wallet chosen for it is recorded in the
+it: its owner name joins `owners` in the configuration, its owner catalogue
+is sealed, empty, and signed with its new current key (section 8.1: the
+catalogue is created when the owner is set up in the archive; see
+[the owner catalogues](15-owner-catalogues.md)), and the discovery document
+lists it with its catalogue. A GitHub wallet chosen for it is recorded in the
 configuration as the owner's (`record_wallet`, below), so that later
 commands find the keys there.
 
@@ -218,6 +221,8 @@ commands find the keys there.
             if changed:
                 cfg_path.write_text(json.dumps(cfg, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
             record_wallet(log.owner, getattr(args, "keys", None))
+            if log.owner in archive_owners() and log.owner not in CATALOGUES:
+                collect(argparse_namespace(owner=log.owner))
         write_discovery()
 
 
@@ -352,7 +357,7 @@ when a wallet is added to it. A command wallet is never recorded
     def write_config(cfg):
         """Write CFG to osheaf.json, and to the settings of this run."""
         (ROOT / CONFIG_NAME).write_text(json.dumps(cfg, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-        for k in ("keys", "formerAddresses", "mainCollection", "index"):
+        for k in ("keys", "formerAddresses", "index"):
             if k in cfg:
                 ARCHIVE[k] = cfg[k]
             else:

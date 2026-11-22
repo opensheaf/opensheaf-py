@@ -6,7 +6,7 @@ the current one that has an osheaf.json (see `osheaf help-config`). Lines are
 named by their labels in the archive.
 
 Commands:
-  init                   create an archive (osheaf.json, storage root, owner, main catalogue)
+  init                   create an archive (osheaf.json, storage root, owner, owner catalogue)
   owner init|rotate|expose|end|show   make an owner, change its keys, end it, show it
   key new                a new current key for this device
   key push|pull|list|forget   current keys to and from a key wallet (--wallet)
@@ -20,7 +20,7 @@ Commands:
   notice LABEL           a notice about a document version
   withdraw LABEL         withdraw a document (the content stays)
   complete LABEL         add the sources of a version deposited without them
-  collect                new version of the main catalogue when needed
+  collect                new versions of the owner catalogues when needed (--owner: one)
   collection new|add|remove|follow|update|status|sync
                          catalogues and selections, with members of any archive
   resolve URI            find and check what a sheaf: URI names, in any archive
@@ -230,7 +230,9 @@ def build_parser():
     who.add_argument("--keeper", action="store_true", help="a key log taken down at its keeper's request")
     td.add_argument("--yes", action="store_true", help="do not ask to confirm")
     td.set_defaults(func=None)
-    sub.add_parser("collect", help="new version of the main catalogue when needed").set_defaults(func=core.collect)
+    c = sub.add_parser("collect", help="new versions of the owner catalogues when needed")
+    c.add_argument("--owner", help="only the catalogue of this owner, an owner the archive hosts")
+    c.set_defaults(func=core.collect)
     i = sub.add_parser("index", help="write opensheaf.json, the indexes and the readable index")
     i.add_argument("--no-html", action="store_true",
                    help="do not write the HTML of the website (opensheaf.json and the indexes only)")
@@ -250,7 +252,7 @@ def build_parser():
     a.add_argument("rest", nargs=argparse.REMAINDER, help="see osheaf arxiv fetch|import --help")
     a.set_defaults(func=None)
 
-    n = sub.add_parser("init", help="create an archive (osheaf.json, storage root, owner, main catalogue)")
+    n = sub.add_parser("init", help="create an archive (osheaf.json, storage root, owner, owner catalogue)")
     n.add_argument("folder", nargs="?", help="where (default: the current folder)")
     n.add_argument("--name", help="the name of the archive, e.g. 'Papers of Jane Doe'")
     n.add_argument("--base-url", help="where the archive is served, e.g. https://example.org/papers/")
@@ -263,7 +265,7 @@ def build_parser():
     n.add_argument("--new-owner", action="store_true", help="make a new owner (see osheaf owner init)")
     owner_init_options(n)
     n.add_argument("--curated", action="store_true",
-                   help="the main catalogue is curated (osheaf collection add|sync)")
+                   help="the owner catalogue is curated (osheaf collection add|sync)")
     n.add_argument("--index", choices=["website", "texmacs"],
                    help="the home page: the website (default, profile website) or a TeXmacs index "
                         "(profile texmacs)")

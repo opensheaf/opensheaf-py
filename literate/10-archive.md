@@ -57,7 +57,7 @@ per process, which is all the command line needs.
 The module starts with its docstring, its imports and its constants, and
 then follows the life of an archive: finding and configuring it, storing
 objects and signing their versions, running TeXmacs, depositing documents,
-adding description-only versions, maintaining the main catalogue, writing
+adding description-only versions, maintaining the owner catalogues, writing
 the discovery document and the index, verifying, creating a new archive,
 and the commands that keep an owner's key log. Each part is a chunk
 explained in its own chapter.
@@ -101,7 +101,7 @@ explained in its own chapter.
     <<description-only versions and the commands that make them>>
 
 
-    <<maintain the main collection of the archive>>
+    <<maintain the owner catalogues of the archive>>
 
 
     <<write the discovery document of the archive>>
@@ -129,7 +129,7 @@ The configuration is not part of the archive as the specification defines
 it (section 3): readers never see it. It holds what the tools need and the
 specification leaves to the archive: the owner on whose behalf the archive
 signs its own collections, who deposits (the `user` of every OCFL version,
-section 4.1), who curates the main catalogue, and how to run TeXmacs. The
+section 4.1), who curates the owner catalogues, and how to run TeXmacs. The
 values that readers do see (the name, the contact, the profiles, the
 storage layout) are copied from it into the discovery document.
 
@@ -151,13 +151,13 @@ too.
 
         {
           "owner": "<owner name>",           the owner of the archive (section 6), who signs
-                                             its documents and its main catalogue
-          "owners": ["<owner name>", ...],   optional: other owners it hosts
+                                             its documents and its owner catalogue
+          "owners": ["<owner name>", ...],   optional: other owners it hosts, each with its own
+                                             owner catalogue (section 8.1)
           "name": "...", "contact": "https://...", "baseUrl": "https://.../",
           "profiles": ["website", "texmacs"],
           "storageLayout": "opensheaf-owner-name-storage-layout",   or
                            "0003-hash-and-id-n-tuple-storage-layout" (section 3.2)
-          "mainCollection": "main",          the label of the main catalogue
           "curator": {"name": "Family, Given", "givenName": "...", "familyName": "...",
                       "affiliation": "..."},
           "depositor": {"name": "Given Family", "address": "https://..."},
@@ -179,7 +179,8 @@ too.
 
     and, next to it, `ocfl/` (the OCFL 1.1 storage root), `opensheaf.json` (the
     discovery document, rewritten whenever an object changes, which also keeps
-    the labels of the lines: `osheaf deposit LABEL`, `osheaf label`), `site/` (HTML versions)
+    the labels of the lines: `osheaf deposit LABEL`, `osheaf label`, and the owner
+    catalogue of each owner, in `owners`), `site/` (HTML versions)
     and `index.tm`, `index.html` (generated). TeXmacs runs headless with a
     private profile in `texmacs_home/` (not committed).
 
@@ -239,6 +240,7 @@ documents, `TM_HOME` the private TeXmacs profile; `ARCHIVE` holds the
 settings that describe the archive, `TEXMACS` and `INDEX` those of the
 TeXmacs profile and of the index. `LAYOUT` is the storage layout,
 `LABELS` maps the labels of the archive's lines to their identifiers,
+`CATALOGUES` the owners it hosts to their owner catalogues (section 8.1),
 `TOMBSTONES` holds the tombstones of the discovery document (section 13.3),
 which nothing else keeps, and `OLD` says that the folder is an archive of specification 0.1, which these
 tools no longer read (below).
@@ -251,6 +253,7 @@ tools no longer read (below).
     INDEX = {}
     LAYOUT = None
     LABELS = {}
+    CATALOGUES = {}
     TOMBSTONES = []
     OLD = False
 
@@ -259,8 +262,9 @@ the two storage layouts of section 3.2, by their names in the discovery
 document, and the plain text file that describes the first; the form of
 labels (section 3.1), which drafts share (section 10.1); the version of
 TeXmacs recorded in the toolchain of typeset documents when the
-configuration does not give one; and the settings without which an archive
-cannot work.
+configuration does not give one; the settings without which an archive
+cannot work; and the label of the owner catalogue of the archive's first
+owner.
 
     # in the constants of the specification and of the profiles:
     SPEC = "0.2"
@@ -272,7 +276,8 @@ cannot work.
                    "OpenSheaf specification 0.2, section 3.2\n")
     LABEL_RE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*\Z")
     TEXMACS_VERSION = "2.1.5"
-    REQUIRED = ("owner", "name", "baseUrl", "mainCollection", "curator", "depositor")
+    REQUIRED = ("owner", "name", "baseUrl", "curator", "depositor")
+    CATALOGUE_LABEL = "main"
     REBUILD = ("this archive is of specification 0.1, which these tools no longer read: rebuild it under "
                "specification 0.2 (section 16.1)")
 
@@ -325,8 +330,12 @@ that is not the TeXmacs profile or the index describes the archive; the
 contact defaults to the base URL, the profiles to none, the layout to the
 owner-name layout that section 3.2 recommends. The configuration may name
 the TeXmacs version the archive uses, which then goes into the toolchain of
-every typeset document. The labels and the tombstones are read from the
-discovery document, which keeps them (sections 3.1 and 13.3).
+every typeset document. The labels, the owner catalogues and the
+tombstones are read from the discovery document, which keeps them (sections
+3.1, 8.1 and 13.3). A discovery document written before #72, with
+`mainCollection` and the owners as bare names, gives its main catalogue to
+the archive's first owner, so that a draft archive made then keeps working
+until it is rebuilt; a configuration's `mainCollection` is ignored.
 
 An archive made under version 0.1 is recognised by its configuration,
 which names an `archiveId`, or by its discovery document. Section 16.1
@@ -347,7 +356,7 @@ other command stops with that message (see the
 
     def configure(root):
         """Load the archive configuration and set the paths."""
-        global ARCHIVE, TEXMACS, INDEX, TEXMACS_VERSION, LABELS, TOMBSTONES, OLD
+        global ARCHIVE, TEXMACS, INDEX, TEXMACS_VERSION, LABELS, CATALOGUES, TOMBSTONES, OLD
         cfg = read_config(root)
         disc_path = Path(root) / "opensheaf.json"
         disc = json.loads(disc_path.read_text(encoding="utf-8")) if disc_path.exists() else {}
@@ -367,13 +376,19 @@ other command stops with that message (see the
         TEXMACS_VERSION = TEXMACS.get("version", TEXMACS_VERSION)
         INDEX = cfg.get("index", {})
         LABELS = {o["label"]: o["id"] for o in disc.get("objects", []) if o.get("label")}
+        CATALOGUES = {e["owner"]: e["catalogue"] for e in disc.get("owners", [])
+                      if isinstance(e, dict) and e.get("owner") and e.get("catalogue")}
+        if disc.get("mainCollection") and ARCHIVE["owner"] not in CATALOGUES:
+            CATALOGUES[ARCHIVE["owner"]] = disc["mainCollection"]
+        ARCHIVE.pop("mainCollection", None)
         TOMBSTONES = list(disc.get("tombstones", []))
         return ROOT
 
 The owners of the archive are the owner of the configuration and the
-others it hosts: the main catalogue lists the documents of their lines
-(section 8.1), and the discovery document names them in `owners`
-(section 3.1).
+others it hosts: each has its owner catalogue, which lists the documents of
+its lines (section 8.1), and the discovery document names them with their
+catalogues in `owners` (section 3.1), in this order, which is the order in
+which the index presents them (appendix A.3).
 
     # in load the configuration and set the paths of the archive:
     def archive_owners():
@@ -453,10 +468,10 @@ down loses its old addresses too ([takedowns](25-takedown.md)). An owner
 object has no page of its own at its label (its page is at
 `owner/<owner>/`), so its label changes nothing else.
 
-The main catalogue is named by its label in the configuration
-(`mainCollection`), and the featured collection of the home page too
-(`index.html.featured`): a new label is written there as well, and
-neither may lose its label. A TeXmacs index is typeset again by `osheaf
+The featured collection of the home page is named by its label in the
+configuration (`index.html.featured`): a new label is written there as
+well, and it may not lose its label. The owner catalogues are named by
+their identifiers in the discovery document, and their labels are free. A TeXmacs index is typeset again by `osheaf
 index`, which the command says.
 
     # in load the configuration and set the paths of the archive:
@@ -494,17 +509,16 @@ index`, which the command says.
             if new == old:
                 print(f"{new}: unchanged")
                 return
-            if new in LABELS or (new == cfg.get("mainCollection") and old != new):
-                sys.exit(f"{new} is the label of another line already: {LABELS.get(new, 'the main catalogue')}")
+            if new in LABELS:
+                sys.exit(f"{new} is the label of another line already: {LABELS[new]}")
             if len(new) > 32:
                 print(f"warning: {new} is longer than 32 characters (it appears in every URL of the website)",
                       file=sys.stderr)
         elif old is None:
             print(f"{obj_id}: has no label")
             return
-        elif old in (cfg.get("mainCollection"), featured):
-            sys.exit(f"{old} names the {'main catalogue' if old == cfg.get('mainCollection') else 'featured collection'}"
-                     f" in {CONFIG_NAME}: give it another label instead")
+        elif old == featured:
+            sys.exit(f"{old} names the featured collection in {CONFIG_NAME}: give it another label instead")
         kind = (read_json(obj_dir(obj_id), load_inventory(obj_dir(obj_id)), OBJ) or {}).get("kind")
         before = page_address(obj_id)
         if old:
@@ -521,8 +535,6 @@ index`, which the command says.
             cfg["formerAddresses"] = dict(sorted(former.items()))
         else:
             cfg.pop("formerAddresses", None)
-        if old and cfg.get("mainCollection") == old:
-            cfg["mainCollection"] = new
         if old and featured == old:
             cfg["index"]["html"]["featured"] = new
         write_config(cfg)

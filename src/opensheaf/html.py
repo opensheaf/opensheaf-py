@@ -383,7 +383,8 @@ def render(members, home=True, featured=None, keeper_fetch=None):
         lead = ('Papers with their sources, every version, fixed by digests and signed by their owners. An '
                 '<a href="https://opensheaf.org">OpenSheaf</a> archive: programs start from '
                 '<a href="opensheaf.json">opensheaf.json</a>.')
-        main_id = P.LABELS.get(P.ARCHIVE["mainCollection"])
+        cats = [P.CATALOGUES[o] for o in P.archive_owners() if o in P.CATALOGUES]
+        main_id = cats[0] if len(cats) == 1 else None
         cline = fline if featured else (LINES.get(main_id) or (held({"name": main_id.split(":")[1],
                                                                      "owner": main_id.split(":")[2]})
                                                                if main_id else None))

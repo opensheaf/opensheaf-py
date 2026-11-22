@@ -322,7 +322,7 @@ def is_curated(label, obj_id):
     if (head or {}).get("kind") != "collection" or head.get("owner") not in P.archive_owners():
         return False
     mem = P.read_json(d, inv, "members.json") or {}
-    return not (label == P.ARCHIVE.get("mainCollection") and mem.get("order") != "manual")
+    return not (obj_id in P.CATALOGUES.values() and mem.get("order") != "manual")
 
 
 def follow_member(r, label, m):

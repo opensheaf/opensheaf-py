@@ -1,7 +1,7 @@
 The discovery document and the index
 ====================================
 
-After deposits and a new version of the [main collection](15-main-collection.md),
+After deposits and new versions of the [owner catalogues](15-owner-catalogues.md),
 `osheaf index` writes what the outside world reads: the *discovery
 document* `opensheaf.json`, the entry point of the archive for programs,
 and an index for people. The index is made in one of two ways. An archive
@@ -17,7 +17,8 @@ The discovery document
 
 The discovery document (section 3.1) says what the archive is and where
 its objects are: its name and contact, the storage root and its layout,
-the main catalogue, the profiles, the owners it hosts, and a list of every
+the profiles, the owners it hosts, each with its owner catalogue (section
+8.1), in the order in which the index presents them, and a list of every
 object of the storage root but drafts, with its kind, its line (`name` and
 `owner`), its head version, the digest of its head inventory, its status
 and, if the archive gives it one, its label. The list is a map, not a
@@ -34,12 +35,17 @@ and head, as unfinished work on which nothing may rely (section 10.1).
 The discovery document is rewritten whole every time, from the storage
 root, so that it cannot drift, by every command that adds or changes an
 object (section 3.1: "rewritten whenever an object is added or changed").
-Two things in it are not in the storage root, and are carried from the
-document it replaces: the labels, which `LABELS` holds, and the tombstones
+Three things in it are not in the storage root, and are carried from the
+document it replaces: the labels, which `LABELS` holds, the owner
+catalogues, which `CATALOGUES` holds, and the tombstones
 of objects taken down (section 13.3), which `TOMBSTONES` holds, never
 removed but when the line returns ([takedowns](25-takedown.md)). Version
 0.1 had `archiveId`, `mirrorOf` and `mirrors`; version 0.2 names no
-archive, and a mirror is listed like any line (section 11). `indexes`
+archive, and a mirror is listed like any line (section 11). The first
+drafts of 0.2 had `mainCollection`, the one catalogue of the archive,
+which `owners`, naming each owner with its catalogue, has replaced (#72);
+an owner whose catalogue is not made yet (between its key log and its
+catalogue, when it is set up) is left out of `owners` until it is. `indexes`
 declares the three indexes, which are written with the discovery document
 (below); `feed` is not written yet.
 
@@ -82,9 +88,8 @@ their genesis record), and in the `object.json` of the heads.
             objs.append(entry)
         doc = {"format": "opensheaf-archive/0.2", "specification": SPEC, "name": ARCHIVE["name"],
                "contact": ARCHIVE["contact"], "storageRoot": "ocfl/", "storageLayout": LAYOUT}
-        if ARCHIVE["mainCollection"] in LABELS:
-            doc["mainCollection"] = LABELS[ARCHIVE["mainCollection"]]
-        doc.update(profiles=ARCHIVE["profiles"], extensions=sorted(used), owners=archive_owners(),
+        hosted = [{"owner": o, "catalogue": CATALOGUES[o]} for o in archive_owners() if o in CATALOGUES]
+        doc.update(profiles=ARCHIVE["profiles"], extensions=sorted(used), owners=hosted,
                    indexes=dict(INDEXES), objects=objs)
         if drafts:
             doc["drafts"] = drafts
@@ -291,7 +296,7 @@ TeXmacs index is a home page, nothing more, and the website profile
 
 `osheaf index` writes the discovery document and the indexes, and then the
 readable index, if one is configured. With a website, it hands the members
-of the main catalogue to the [website](30-website.md); with a TeXmacs
+of the owner catalogues to the [website](30-website.md); with a TeXmacs
 template, it has the website write the landing pages, the owner pages and
 the sitemap without a home page (`home=False`), writes `index.tm` and,
 unless `--no-html`, exports it to `index.html` with TeXmacs (the PDF export,
@@ -309,33 +314,41 @@ converter not to touch the archive's files (appendix A.2).
             return
         print("opensheaf.json and the indexes written (no readable index configured)")
 
-The members presented are those of the latest signed version of the main
-catalogue (appendix A.3), not of its head: nothing relies on a version that
-is not signed (section 7.3). An archive whose main catalogue has no signed
-version (its owner's keys all exposed since) presents nothing, and says so.
+The members presented are those of the owner catalogues, in the order of
+the owners (appendix A.3), each read from the latest signed version of its
+catalogue, not from its head: nothing relies on a version that is not
+signed (section 7.3). An owner catalogue without a signed version (its
+owner's keys all exposed since) presents none of its members, and the
+command says so; an archive none of whose catalogues has a signed version
+presents nothing.
 
     # in write the discovery document and the index:
-    def main_members():
-        """The members of the latest signed version of the main catalogue, or None."""
-        main_id = LABELS.get(ARCHIVE["mainCollection"])
-        d = obj_dir(main_id) if main_id else None
-        inv = load_inventory(d) if d else None
-        if inv is None:
-            return None
-        ver = latest_signed(d, inv)
-        if ver is None:
-            print(f"warning: the main catalogue has no signed version (section 7.3): nothing is presented",
-                  file=sys.stderr)
-            return None
-        return read_json(d, inv, "members.json", ver)["members"]
+    def catalogue_members():
+        """The members of the latest signed version of each owner catalogue, in the order of the
+        owners, or None when no owner catalogue has a signed version."""
+        out, signed = [], False
+        for owner in archive_owners():
+            cid = CATALOGUES.get(owner)
+            d = obj_dir(cid) if cid else None
+            inv = load_inventory(d) if d else None
+            if inv is None:
+                continue
+            ver = latest_signed(d, inv)
+            if ver is None:
+                print(f"warning: the owner catalogue of {names.short(owner)} has no signed version "
+                      "(section 7.3): none of its members is presented", file=sys.stderr)
+                continue
+            signed = True
+            out += read_json(d, inv, "members.json", ver)["members"]
+        return out if signed else None
 
 With `index.html.featured` set to the label of a collection of the
 archive, the home page lists that collection first (a reading list, a
-journal's issues), then the main catalogue; a setting that names something
+journal's issues), then the owner catalogues; a setting that names something
 else stops the command.
 
 Only members held here can be shown in a TeXmacs index: its entries are
-read from the local storage root. A curated main catalogue with members of
+read from the local storage root. A curated owner catalogue with members of
 other archives needs the website, and the members held elsewhere are left
 out of `index.tm`, with a warning.
 
@@ -343,7 +356,7 @@ out of `index.tm`, with a warning.
     def readable_index(args):
         """The website, or the TeXmacs index with the landing pages of the website."""
         from . import html
-        members = main_members()
+        members = catalogue_members()
         if members is None:
             return
         if INDEX.get("html"):
@@ -398,7 +411,7 @@ reported, and `osheaf index` writes the pages again.
             return
         from . import html
         try:
-            members = main_members()
+            members = catalogue_members()
             if members is None:
                 return
             if INDEX.get("html"):

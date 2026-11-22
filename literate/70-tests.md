@@ -136,7 +136,7 @@ Archives built by hand
 
 The fixture `archive` gives each test that asks for it a new archive, made
 by `osheaf init` with a new owner, whose rotation keys go to a folder
-`keys` beside the archive; it is configured, with its main catalogue and its
+`keys` beside the archive; it is configured, with its owner catalogue and its
 discovery document. `CONFIG` names its base URL.
 
     # in test: a fresh archive for each test:
@@ -212,7 +212,7 @@ hold the same files.
     FILES3 = {"main.tex": b"\\documentclass{article}three", "paper.pdf": b"%PDF three"}
 
 `finish` does what the commands do after deposits: a new version of the
-main catalogue, the discovery document and the website, which the archive
+owner catalogue, the discovery document and the website, which the archive
 of `osheaf init` has (the profile website, appendix A.3); then it returns
 the errors of verification. A test that expects none compares them with the
 empty list.
@@ -228,7 +228,7 @@ empty list.
 The tests of this section follow section 4.2 of the specification. The
 first builds the simplest valid archive: two document versions of one
 paper, one of another. It must verify without errors; the current version
-of the first paper is its second object version; and the main catalogue,
+of the first paper is its second object version; and the owner catalogue,
 newest first (`issued-desc`), pins the latest signed version of each,
 naming each member by its line.
 
@@ -402,13 +402,13 @@ it, and verification accepts the result.
         assert P.read_json(d, inv, P.OBJ)["notices"] == [notice]
         assert finish() == []
 
-The main catalogue (section 8.3) says so in its `type`, and each member
+The owner catalogue (section 8.3) says so in its `type`, and each member
 pins the latest signed version of its line, whatever document version it
 holds: here `v3`, a version found later. The version presented is the
 current version as of the pin, `v2`.
 
     # in test: the rules of document versions:
-    def test_main_collection_pins_the_latest_signed_versions(archive):
+    def test_owner_catalogue_pins_the_latest_signed_versions(archive):
         put("paper-a", 1, FILES1)
         put("paper-a", 2, FILES2)
         put("paper-a", 3, FILES3, after=1)
@@ -507,7 +507,7 @@ right versions with another message.
         assert not any("the inventory copy has the head" in e for e in errors)
 
 An object taken down (section 13.2) leaves the storage root and gets a
-tombstone in the discovery document; a pin to it, here that of the main
+tombstone in the discovery document; a pin to it, here that of the owner
 catalogue, is reported as removed, a result, not as a missing object.
 
     # in test: the rules of document versions:
@@ -855,7 +855,7 @@ rotation keys are exported, unencrypted, to a folder beside the archive,
 
 A new archive (section 3) holds its owner's key log, computed from the
 genesis record, at `<owner>/<owner>/` in the owner-name layout, with the
-text file that describes the layout and no `ocfl_layout.json`; its main
+text file that describes the layout and no `ocfl_layout.json`; its owner
 catalogue, a signed line of the owner; and a discovery document of
 version 0.2 listing both, with the label of the catalogue and the owner.
 The current key is kept in the configuration of the test, the rotation keys
@@ -877,10 +877,10 @@ has the lines of the archive files; one that is there already is kept.
         assert len(rk) == 3 and all(keys.read_rotation_key(Path(f)).owner == owner for f in rk)
         assert json.loads(log.versions[0].files["keys.json"])["nextThreshold"] == 2
         disc = json.loads((root / "opensheaf.json").read_text())
-        assert (disc["format"], disc["specification"], disc["owners"]) == ("opensheaf-archive/0.2", "0.2", [owner])
+        assert (disc["format"], disc["specification"]) == ("opensheaf-archive/0.2", "0.2")
+        assert disc["owners"] == [{"owner": owner, "catalogue": P.LABELS["main"]}] and "mainCollection" not in disc
         assert {o["kind"] for o in disc["objects"]} == {"owner", "collection"}
         assert next(o for o in disc["objects"] if o["kind"] == "collection")["label"] == "main"
-        assert disc["mainCollection"] == P.LABELS["main"]
         assert (tmp_path / "config" / "opensheaf" / "keys" / owner).is_dir()
         assert P.verify_errors() == []
         attrs = (root / ".gitattributes").read_text()
@@ -932,7 +932,7 @@ texmacs`: it declares the profile `texmacs`, not `website`, and its
 configuration names the template of the index, here the minimal one, written
 with the name of the archive as its title. No template of the website is
 copied, no home page written; `index.tm` is, and the landing page of the
-main catalogue, with the default style sheet it uses. A template given that
+owner catalogue, with the default style sheet it uses. A template given that
 lacks the paragraph `<paper-index>`, or one without `--index texmacs`, stops
 `init` before anything is made.
 
@@ -1492,7 +1492,7 @@ place it reads it.
         assert "paper-a v2: previous is not the digest of the inventory of v1 (section 4.3)" in finish()
 
 A version without signature files is not a version of its line (sections
-7.3 and 7.5): a warning, since a host cannot repair it; its pin in the main
+7.3 and 7.5): a warning, since a host cannot repair it; its pin in the owner
 catalogue, made when it was signed, is then an error, since a collection
 pins only signed versions (section 8.5). A signature file whose signature
 does not verify is invalid, a warning, and so is the version it alone
@@ -1567,7 +1567,7 @@ and the exit status counts the errors.
             run("--root", str(old), "collect")
 
 The standard output of `verify --json` is JSON alone, whatever the archive:
-a main catalogue left without a signed version (its signature files lost)
+an owner catalogue left without a signed version (its signature files lost)
 makes the presentation check warn that nothing is presented, and that
 warning goes to the standard error.
 
@@ -1582,7 +1582,7 @@ warning goes to the standard error.
             run("--root", str(archive), "verify", "--json")
         out, err = capsys.readouterr()
         assert any(x["place"] == "main v1" for x in json.loads(out))
-        assert "the main catalogue has no signed version" in err
+        assert "the owner catalogue of" in err and "has no signed version" in err
 
 The website
 -----------
@@ -1610,7 +1610,7 @@ layout, `ocfl/<owner>/<name>/`.
         assert f'href="ocfl/{at}/v1/content/article.pdf"' in (archive / "index.html").read_text()
 
 An archive that declares the profile website promises a home page showing
-the pin of every member of its main catalogue, and a landing page giving
+the pin of every member of its owner catalogue, and a landing page giving
 the full `sheaf:` URI of each line held (appendix A.3): a home page made
 by other tools, without the pins, is an error, and so is a missing landing
 page. An archive that does not declare the profile is told the same as a
@@ -1640,7 +1640,7 @@ history, with its notices and its pin, the `sheaf:` URI of the object
 version that holds it with the digest of its inventory. A withdrawal is
 shown on the landing page and the home page (section 13.1). When the
 owner exposes the key that signed the versions (section 6.3), they are
-contested: the owner signs its main catalogue again, and the page of the
+contested: the owner signs its owner catalogue again, and the page of the
 paper, whose versions are still contested, says so, and so does its owner
 block.
 
@@ -1720,7 +1720,7 @@ later document version keeps them too.
 
 A takedown deletes the line from the presentation files (section 13.2): its
 landing page goes, the sitemap and the home page no longer name it, and the
-archive still verifies, its main catalogue pinning a version now removed.
+archive still verifies, its owner catalogue pinning a version now removed.
 
     # in test: the website:
     def test_takedown_removes_the_pages(archive):
@@ -1745,9 +1745,9 @@ the HTML version moves with its images, its file renamed, and its old
 place leads to the new. The next deposit gives the new address in its
 description; the first version keeps the old one. A second change leaves
 both old addresses leading to the latest; going back to an old label
-takes its address back. A label taken, malformed, or of the main catalogue
-removed is refused; the main catalogue relabelled is renamed in
-`osheaf.json`. The owner object gets a label, which changes no page, and
+takes its address back. A label taken or malformed is refused; the owner
+catalogue, named by its identifier in the discovery document, may be
+relabelled or lose its label. The owner object gets a label, which changes no page, and
 loses it. `--unset` moves the page to the line's name. A takedown removes
 the old addresses with the line, and the archive verifies throughout.
 
@@ -1801,11 +1801,13 @@ the old addresses with the line, and the archive verifies throughout.
         assert P.REDIRECT_MARK not in (root / "paper" / "old" / "index.html").read_text()
         assert (root / "site" / "old" / "old.html").read_text() == '<img src="old-1.png">'
         for bad, why in ((["old", "other"], "label of another line"), (["old", "Bad_Label"], "must match"),
-                         (["main", "--unset"], "main catalogue"), (["old"], "give the new label")):
+                         (["old"], "give the new label")):
             with pytest.raises(SystemExit, match=why):
                 run(*r, "label", *bad)
+        catalogue = P.LABELS["main"]
         run(*r, "label", "main", "papers")
-        assert json.loads((root / "osheaf.json").read_text())["mainCollection"] == "papers"
+        disc = json.loads((root / "opensheaf.json").read_text())
+        assert P.LABELS["papers"] == catalogue and disc["owners"][0]["catalogue"] == catalogue
         run(*r, "collect")
         run(*r, "label", "--owner", owner, "jane-doe")
         disc = json.loads((root / "opensheaf.json").read_text())
@@ -1969,7 +1971,7 @@ without, and as a warning when the record cannot be read.
             == ["warning"]
         assert P.verify_errors() == []
         from opensheaf import html
-        html.render(P.main_members(), keeper_fetch=offline)
+        html.render(P.catalogue_members(), keeper_fetch=offline)
         page = (root / "paper" / "p" / "index.html").read_text()
         assert f'keeper <a href="{orcid}">{orcid}</a>' in page and "(confirmed)" not in page
 

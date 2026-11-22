@@ -73,10 +73,10 @@ The home page receives:
   back to the root of the archive (empty here);
 - `{{lead}}`, the lead paragraph, in HTML;
 - `{{papers}}`, the entries of the members of the latest signed version
-  of the main catalogue, as items of a list;
+  of the owner catalogues, in the order of the owners, as items of a list;
 - `{{featured}}`, the featured collection (`index.html.featured`), a
   section with its title and the entries of its members, and
-  `{{papers_heading}}`, a heading for the main catalogue's list when
+  `{{papers_heading}}`, a heading for the owner catalogues' list when
   there is one; both are empty otherwise, and a template written before
   they existed simply does not show the featured collection;
 - `{{count}}`, their number, and `{{updated}}`, the date of the pages.

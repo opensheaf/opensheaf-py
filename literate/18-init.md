@@ -5,7 +5,7 @@ Near the end of `core.py` is `osheaf init`, which creates a new archive.
 It comes late because it uses most of the others: it writes a
 [configuration](10-archive.md), creates the storage root, the owner of the
 archive with its key log (with the [commands of owners](19-owner-commands.md)),
-the empty [main catalogue](15-main-collection.md), the
+its empty [owner catalogue](15-owner-catalogues.md), the
 [discovery document](16-index.md) and the [website](30-website.md), with
 its templates, after which the archive [verifies](17-verify.md) and is
 ready for its first [deposit](13-deposit.md).
@@ -21,8 +21,9 @@ What a new archive is
 
 An archive has an owner (section 6): the keyed identity that signs the
 versions of its lines, here those of the archive's documents and of its
-main catalogue (section 8.1: an archive that makes collections does so as
-an owner). The owner is either made at once, with `--new-owner`, which
+owner catalogue (section 8.1: each owner the archive hosts has its own,
+created when the owner is set up in the archive). Other owners join later,
+with `osheaf owner init`, each with a catalogue of its own. The owner is either made at once, with `--new-owner`, which
 makes the current key of this device and the rotation keys, exports the
 rotation keys to a folder outside the archive, and writes the first version
 of the key log (section 6.2; the options are those of `osheaf owner init`);
@@ -40,7 +41,7 @@ The configuration is built from a few answers: the name, the base URL (to
 which a final `/` is added, since URLs of the archive are made by appending
 to it), the contact, and the curator, written `Family, Given`. The curator
 is also the depositor, by default, with the contact as address; both can be
-changed in the file afterwards. The main catalogue is labelled `main`. An
+changed in the file afterwards. The owner catalogue is labelled `main`. An
 existing configuration is never overwritten. Version 0.1 asked for an
 archive identifier, which version 0.2 has dropped: an archive is named by
 no file (section 3). A new owner whose keys are kept in a GitHub wallet
@@ -50,8 +51,8 @@ configuration as a hint for the owner, `"keys": {"<owner>": {"wallets":
 find its keys there, and says so; `osheaf key wallet` changes the hints
 later.
 
-The main catalogue is sealed and signed at once, empty, kept by `collect`
-(newest first). A curated main collection (`--curated`), whose members of
+The owner catalogue is sealed and signed at once, empty, kept by `collect`
+(newest first). A curated owner catalogue (`--curated`), whose members of
 any archive and order are the curator's, is made empty, of order `manual`,
 and kept with the commands of [collections](21-collections.md). Then the
 discovery document is written, so that the new archive is complete, if
@@ -63,7 +64,7 @@ configuration names the folder of its templates
 (`"index": {"html": {"templates": "templates"}}`), and the default
 templates of the [package](31-templates.md) are copied there, to be edited;
 a template already there is kept. The home page, the landing page of the
-main catalogue, the owner's page and the sitemap are written at once.
+owner catalogue, the owner's page and the sitemap are written at once.
 
 With `--index texmacs` the home page is a [TeXmacs index](16-index.md)
 instead, as in an archive of papers written with TeXmacs: the archive
@@ -110,7 +111,7 @@ The command itself:
     # in create an archive in a folder:
     def init(args):
         """Create an archive in the folder: osheaf.json, the storage root, the owner and its
-        key log (made, or copied), the empty main catalogue, the discovery document, and the
+        key log (made, or copied), its empty owner catalogue, the discovery document, and the
         website with its templates (to edit), or, with --index texmacs, the TeXmacs index
         with its template."""
         root = Path(args.folder or ".").resolve()
@@ -136,7 +137,6 @@ The command itself:
             "baseUrl": args.base_url if args.base_url.endswith("/") else args.base_url + "/",
             "profiles": [kind],
             "storageLayout": layout,
-            "mainCollection": "main",
             "curator": {"name": f"{family}, {given}" if given else family, "givenName": given,
                         "familyName": family, "affiliation": args.affiliation or ""},
             "depositor": {"name": f"{given} {family}".strip(), "address": args.contact or args.base_url},

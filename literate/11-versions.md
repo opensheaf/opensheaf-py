@@ -103,7 +103,7 @@ shows is the history as known at that version.
         return [last[n] for n in sorted(last)]
 
 The history is read from an object version: by default the head; the
-[main catalogue](15-main-collection.md) and the discovery document read it
+[owner catalogues](15-owner-catalogues.md) and the discovery document read it
 from the latest signed version of the line, as section 4.2 says, which is
 the head whenever the archive's own tools made the line. Earlier object
 versions keep the history as it was known when they were made, and `at`
@@ -118,7 +118,7 @@ reads it from one of them instead.
 The *current version* is the one readers are sent to: the last entry of the
 history. Landing pages, the index and citations use it rather than the
 head, since the head may hold an earlier document version (one found
-later, or one just described). The main collection pins the head of each
+later, or one just described). An owner catalogue pins the head of each
 document (section 8.2) and shows its current version, read from the
 history of the pinned version, which is what `at` is for.
 

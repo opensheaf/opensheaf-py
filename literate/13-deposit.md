@@ -597,6 +597,8 @@ version like any other, whose change note (`--changes`) should say so.
 The new version is in the storage root, and the discovery document lists
 it at once, with its label, since it is "rewritten whenever an object is
 added or changed" (section 3.1) and keeps the labels. The
-[main catalogue](15-main-collection.md) and the readable index are updated
-by their own commands, `osheaf collect` and `osheaf index`, so that several
-deposits can be made before the catalogue gets a new version.
+[owner catalogue](15-owner-catalogues.md) of the depositing owner and the
+readable index are updated by their own commands, `osheaf collect` and
+`osheaf index`, so that several deposits can be made before the catalogue
+gets a new version; a deposit by one owner changes no other owner's
+catalogue.

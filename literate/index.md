@@ -78,7 +78,7 @@ The archive
 10. [Description-only versions and completions](14-description.md):
    notices, withdrawals, relations, licences, corrections of the
    description; sources found later.
-11. [The main collection](15-main-collection.md).
+11. [The owner catalogues](15-owner-catalogues.md).
 12. [The discovery document and the index](16-index.md).
 13. [Verifying an archive](17-verify.md).
 14. [Creating an archive](18-init.md).

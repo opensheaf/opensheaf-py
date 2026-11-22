@@ -218,7 +218,7 @@ def test_notices_are_kept(archive):
     assert finish() == []
 
 
-def test_main_collection_pins_the_latest_signed_versions(archive):
+def test_owner_catalogue_pins_the_latest_signed_versions(archive):
     put("paper-a", 1, FILES1)
     put("paper-a", 2, FILES2)
     put("paper-a", 3, FILES3, after=1)
@@ -551,10 +551,10 @@ def test_init_with_a_new_owner(tmp_path):
     assert len(rk) == 3 and all(keys.read_rotation_key(Path(f)).owner == owner for f in rk)
     assert json.loads(log.versions[0].files["keys.json"])["nextThreshold"] == 2
     disc = json.loads((root / "opensheaf.json").read_text())
-    assert (disc["format"], disc["specification"], disc["owners"]) == ("opensheaf-archive/0.2", "0.2", [owner])
+    assert (disc["format"], disc["specification"]) == ("opensheaf-archive/0.2", "0.2")
+    assert disc["owners"] == [{"owner": owner, "catalogue": P.LABELS["main"]}] and "mainCollection" not in disc
     assert {o["kind"] for o in disc["objects"]} == {"owner", "collection"}
     assert next(o for o in disc["objects"] if o["kind"] == "collection")["label"] == "main"
-    assert disc["mainCollection"] == P.LABELS["main"]
     assert (tmp_path / "config" / "opensheaf" / "keys" / owner).is_dir()
     assert P.verify_errors() == []
     attrs = (root / ".gitattributes").read_text()
@@ -1087,7 +1087,7 @@ def test_verify_json_is_json_alone(archive, capsys):
         run("--root", str(archive), "verify", "--json")
     out, err = capsys.readouterr()
     assert any(x["place"] == "main v1" for x in json.loads(out))
-    assert "the main catalogue has no signed version" in err
+    assert "the owner catalogue of" in err and "has no signed version" in err
 
 
 def test_pdf_found_from_renditions(archive):
@@ -1253,11 +1253,13 @@ def test_relabel(tmp_path, capsys):
     assert P.REDIRECT_MARK not in (root / "paper" / "old" / "index.html").read_text()
     assert (root / "site" / "old" / "old.html").read_text() == '<img src="old-1.png">'
     for bad, why in ((["old", "other"], "label of another line"), (["old", "Bad_Label"], "must match"),
-                     (["main", "--unset"], "main catalogue"), (["old"], "give the new label")):
+                     (["old"], "give the new label")):
         with pytest.raises(SystemExit, match=why):
             run(*r, "label", *bad)
+    catalogue = P.LABELS["main"]
     run(*r, "label", "main", "papers")
-    assert json.loads((root / "osheaf.json").read_text())["mainCollection"] == "papers"
+    disc = json.loads((root / "opensheaf.json").read_text())
+    assert P.LABELS["papers"] == catalogue and disc["owners"][0]["catalogue"] == catalogue
     run(*r, "collect")
     run(*r, "label", "--owner", owner, "jane-doe")
     disc = json.loads((root / "opensheaf.json").read_text())
@@ -1384,7 +1386,7 @@ def test_keeper_of_the_owner(tmp_path, monkeypatch, capsys):
         == ["warning"]
     assert P.verify_errors() == []
     from opensheaf import html
-    html.render(P.main_members(), keeper_fetch=offline)
+    html.render(P.catalogue_members(), keeper_fetch=offline)
     page = (root / "paper" / "p" / "index.html").read_text()
     assert f'keeper <a href="{orcid}">{orcid}</a>' in page and "(confirmed)" not in page
 
