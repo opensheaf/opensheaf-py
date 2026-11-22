@@ -290,7 +290,9 @@ copied when they cannot be named (over HTTP), which is not removing them
         new = stage / "object"
         try:
             remote.fetch_object(source.src or remote.Source(source.where), obj_id, new, upto=target,
-                                witness_names=remote.line_witness_names(log))
+                                witness_names=remote.line_witness_names(log),
+                                warn=lambda m: print(f"Warning: {m}; the mirror gets a checksum file "
+                                                     "that states it", file=sys.stderr))
         except remote.Unavailable as e:
             sys.exit(str(e))
         if not held:

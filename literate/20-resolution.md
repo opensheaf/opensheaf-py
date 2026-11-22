@@ -291,8 +291,12 @@ OCFL folder wherever it is. `fetch_object` copies an object's versions up
 to `upto` (by default its head), and is also what [mirrors](22-mirrors.md)
 use to copy a line into the storage root, from either kind of source:
 
-1. the inventory of every version, from its version folder (section 4.1),
-   with its checksum file, which must state its digest;
+1. the inventory of every version, from its version folder (section 4.1).
+   Its bytes are what a pin fixes; its checksum file only repeats their
+   digest, so a checksum file missing, or not stating that digest, does
+   not make the copy fail (section 12.3): it is reported through `warn`,
+   and the copy gets a checksum file that states the digest, as every
+   archive must hold (section 4.1);
 2. every file the inventory of the last version copied records, each
    checked against its digest: a file that does not match makes the copy
    unavailable, never a copy with a wrong file;
@@ -316,10 +320,27 @@ one copy brings `MAX_FETCH_FILES` files and `MAX_FETCH_BYTES` bytes at most
         return owners.safe_relative(rel)
 
 
-    def fetch_object(src, obj_id, dest, *, upto=None, witness_names=None):
+    def checksum_warning(where, obj_id, n):
+        return (f"{where}: {obj_id} v{n}: the checksum file of its inventory is missing, or does not "
+                "state its digest (section 12.3)")
+
+
+    def checksum_problems(where, obj_id, d, inv):
+        """The warnings for the checksum files missing or wrong in the copy in D, read in place."""
+        out = []
+        for n in range(1, int(inv["head"][1:]) + 1):
+            data, sc = d / f"v{n}" / "inventory.json", d / f"v{n}" / "inventory.json.sha512"
+            if data.is_file() and (not sc.is_file() or
+                                   owners.sidecar_digest(sc.read_bytes()) != names.sha512_hex(data.read_bytes())):
+                out.append(checksum_warning(where, obj_id, n))
+        return out
+
+
+    def fetch_object(src, obj_id, dest, *, upto=None, witness_names=None, warn=None):
         """Copy the object OBJ_ID of the archive SRC, v1 to UPTO (default: its head), into the new
         folder DEST, checking every file; WITNESS_NAMES(n, dest) names the witness files of vN
-        to fetch over HTTP. Returns the number of the last version copied."""
+        to fetch over HTTP; WARN(message) hears of checksum files missing or wrong. Returns the
+        number of the last version copied."""
         base = src.object_path(obj_id)
         root = src.get(f"{base}/inventory.json")
         if root is None:
@@ -345,9 +366,13 @@ one copy brings `MAX_FETCH_FILES` files and `MAX_FETCH_BYTES` bytes at most
 
         for n in range(1, upto + 1):
             data = get(f"{base}/v{n}/inventory.json")
+            if data is None:
+                raise Unavailable(f"{src}: {obj_id} v{n} has no inventory (section 4.1)")
             sc = get(f"{base}/v{n}/inventory.json.sha512")
-            if data is None or sc is None or owners.sidecar_digest(sc) != names.sha512_hex(data):
-                raise Unavailable(f"{src}: {obj_id} v{n} has no inventory with its checksum file (section 4.1)")
+            if sc is None or owners.sidecar_digest(sc) != names.sha512_hex(data):
+                if warn:
+                    warn(checksum_warning(src, obj_id, n))
+                sc = owners.sidecar(data)
             try:
                 inv_n = json.loads(data)
                 bad = [cp for ps in inv_n["manifest"].values() for cp in ps if not owners.content_path(cp, inv_n, n)]
@@ -573,7 +598,8 @@ a copy fetched over HTTP, once per run.
         if key not in self.fetched:
             dest = self.cache / str(len(self.fetched))
             try:
-                fetch_object(src, obj_id, dest, upto=upto, witness_names=witness_names)
+                fetch_object(src, obj_id, dest, upto=upto, witness_names=witness_names,
+                             warn=lambda m: self.note("warning", m))
                 self.fetched[key] = dest
             except Unavailable as e:
                 if "no object" not in str(e):
@@ -687,7 +713,9 @@ resolver's own; for each archive that holds one, the key log beside it is
 met first, so that over HTTP the signature files of every key it lists can
 be named and fetched. Each copy is then checked as section 12.3 says: the
 name is a name of its genesis record, and every version's `object.json`
-records the line; a copy that fails is noted and left out. Its versions
+records the line; a copy that fails is noted and left out. A checksum file
+missing or wrong in a copy read in place is noted, as one in a copy
+fetched is (section 12.3); this archive's own are its verification's. Its versions
 are judged against the key log met so far, which, once every copy is
 read, is met again with all of them: a later copy may bring a longer key
 log, or a fork. A tombstone met in an archive read stops nothing: a
@@ -714,6 +742,9 @@ the copies it finds and the tombstone (section 12.3).
             if problem:
                 self.note("warning", f"{w}: {obj_id}: not a copy of the line: {problem}")
                 continue
+            if w != "here" and self.sources[w].folder is not None:
+                for message in checksum_problems(w, obj_id, d, inv):
+                    self.note("warning", message)
             found.append((w, d, inv))
         log = self.key_log(owner)
         out = []
@@ -756,6 +787,11 @@ the status of section 8.5:
   the line (section 13.3);
 - **unavailable** otherwise.
 
+A copy that holds the version with another digest is noted with its
+location, whether another copy matches or not: the status comes from the
+copies that match, and a copy that does not is damage or tampering where
+it is (section 12.3).
+
 A version of a key log is looked up in the key log met, where it is held
 or carried by a fork record (section 6.3); it counts as signed when it is
 a version of the key log.
@@ -773,8 +809,12 @@ found, and the notes.
                 return Found("verified", version=version, digest=digest, log=log)
             return Found("unavailable" if log is None else "mismatch", version=version, digest=digest, log=log)
         copies = self.copies(nm, owner, where)
+        n = int(version[1:])
         for c in copies:
-            n = int(version[1:])
+            if c.digest(n) not in (None, digest):
+                self.note("warning", f"{c.where}: {names.object_id(nm, owner)} {version} does not match "
+                          "the pin (section 12.3)")
+        for c in copies:
             if c.digest(n) == digest:
                 return Found(MEMBER_STATUS.get(c.status(n), "not a version"), c, version, digest, copies)
         if copies:

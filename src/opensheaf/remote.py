@@ -165,10 +165,27 @@ def safe_path(rel):
     return owners.safe_relative(rel)
 
 
-def fetch_object(src, obj_id, dest, *, upto=None, witness_names=None):
+def checksum_warning(where, obj_id, n):
+    return (f"{where}: {obj_id} v{n}: the checksum file of its inventory is missing, or does not "
+            "state its digest (section 12.3)")
+
+
+def checksum_problems(where, obj_id, d, inv):
+    """The warnings for the checksum files missing or wrong in the copy in D, read in place."""
+    out = []
+    for n in range(1, int(inv["head"][1:]) + 1):
+        data, sc = d / f"v{n}" / "inventory.json", d / f"v{n}" / "inventory.json.sha512"
+        if data.is_file() and (not sc.is_file() or
+                               owners.sidecar_digest(sc.read_bytes()) != names.sha512_hex(data.read_bytes())):
+            out.append(checksum_warning(where, obj_id, n))
+    return out
+
+
+def fetch_object(src, obj_id, dest, *, upto=None, witness_names=None, warn=None):
     """Copy the object OBJ_ID of the archive SRC, v1 to UPTO (default: its head), into the new
     folder DEST, checking every file; WITNESS_NAMES(n, dest) names the witness files of vN
-    to fetch over HTTP. Returns the number of the last version copied."""
+    to fetch over HTTP; WARN(message) hears of checksum files missing or wrong. Returns the
+    number of the last version copied."""
     base = src.object_path(obj_id)
     root = src.get(f"{base}/inventory.json")
     if root is None:
@@ -194,9 +211,13 @@ def fetch_object(src, obj_id, dest, *, upto=None, witness_names=None):
 
     for n in range(1, upto + 1):
         data = get(f"{base}/v{n}/inventory.json")
+        if data is None:
+            raise Unavailable(f"{src}: {obj_id} v{n} has no inventory (section 4.1)")
         sc = get(f"{base}/v{n}/inventory.json.sha512")
-        if data is None or sc is None or owners.sidecar_digest(sc) != names.sha512_hex(data):
-            raise Unavailable(f"{src}: {obj_id} v{n} has no inventory with its checksum file (section 4.1)")
+        if sc is None or owners.sidecar_digest(sc) != names.sha512_hex(data):
+            if warn:
+                warn(checksum_warning(src, obj_id, n))
+            sc = owners.sidecar(data)
         try:
             inv_n = json.loads(data)
             bad = [cp for ps in inv_n["manifest"].values() for cp in ps if not owners.content_path(cp, inv_n, n)]
@@ -379,7 +400,8 @@ class Resolver:
         if key not in self.fetched:
             dest = self.cache / str(len(self.fetched))
             try:
-                fetch_object(src, obj_id, dest, upto=upto, witness_names=witness_names)
+                fetch_object(src, obj_id, dest, upto=upto, witness_names=witness_names,
+                             warn=lambda m: self.note("warning", m))
                 self.fetched[key] = dest
             except Unavailable as e:
                 if "no object" not in str(e):
@@ -478,6 +500,9 @@ class Resolver:
             if problem:
                 self.note("warning", f"{w}: {obj_id}: not a copy of the line: {problem}")
                 continue
+            if w != "here" and self.sources[w].folder is not None:
+                for message in checksum_problems(w, obj_id, d, inv):
+                    self.note("warning", message)
             found.append((w, d, inv))
         log = self.key_log(owner)
         out = []
@@ -511,8 +536,12 @@ class Resolver:
                 return Found("verified", version=version, digest=digest, log=log)
             return Found("unavailable" if log is None else "mismatch", version=version, digest=digest, log=log)
         copies = self.copies(nm, owner, where)
+        n = int(version[1:])
         for c in copies:
-            n = int(version[1:])
+            if c.digest(n) not in (None, digest):
+                self.note("warning", f"{c.where}: {names.object_id(nm, owner)} {version} does not match "
+                          "the pin (section 12.3)")
+        for c in copies:
             if c.digest(n) == digest:
                 return Found(MEMBER_STATUS.get(c.status(n), "not a version"), c, version, digest, copies)
         if copies:

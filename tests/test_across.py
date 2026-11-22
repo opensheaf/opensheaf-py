@@ -287,6 +287,36 @@ def test_member_statuses(tmp_path):
         assert {s for _, _, s in collections.statuses(members(c, "list"), r)} == {"unavailable"}
 
 
+def test_copies_that_disagree_with_a_pin(tmp_path):
+    a = make(tmp_path, "a")
+    deposit(a, "paper", "one", new=True)
+    obj_id = line(a, "paper")
+    _, nm, owner = obj_id.split(":")
+    dig = head_digest(a, "paper", "v1")
+    path = remote.Source(str(a)).object_path(obj_id)
+    nocheck, tampered = tmp_path / "nocheck", tmp_path / "tampered"
+    shutil.copytree(a, nocheck)
+    (nocheck / path / "v1" / "inventory.json.sha512").unlink()
+    shutil.copytree(a, tampered)
+    inv = tampered / path / "v1" / "inventory.json"
+    inv.write_bytes(inv.read_bytes() + b" ")
+    (tampered / path / "v1" / "inventory.json.sha512").write_bytes(owners.sidecar(inv.read_bytes()))
+    P.configure(a)
+    with remote.Resolver(here=False) as r:
+        assert r.pin(nm, owner, "v1", dig, [str(nocheck)]).status == "verified"
+        assert remote.checksum_warning(str(nocheck), obj_id, 1) in [m for _, m in r.notes]
+    with remote.Resolver(here=False) as r:
+        assert r.pin(nm, owner, "v1", dig, [str(tampered), str(a)]).status == "verified"
+        assert f"{tampered}: {obj_id} v1 does not match the pin (section 12.3)" in [m for _, m in r.notes]
+    with remote.Resolver(here=False) as r:
+        assert r.pin(nm, owner, "v1", dig, [str(tampered)]).status == "mismatch"
+    warned, copy = [], tmp_path / "copy"
+    remote.fetch_object(remote.Source(str(nocheck)), obj_id, copy, warn=warned.append)
+    assert len(warned) == 1 and "checksum file" in warned[0]
+    assert (copy / "v1" / "inventory.json.sha512").read_bytes() == \
+        owners.sidecar((copy / "v1" / "inventory.json").read_bytes())
+
+
 def test_selection_pins_revisions(tmp_path, capsys):
     a = make(tmp_path, "papers")
     for k in (1, 2, 3):
