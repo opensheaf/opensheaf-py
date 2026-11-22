@@ -80,6 +80,12 @@ def mirror_line(nm, owner, where, *, licence_checked=False, label=None):
                  "is not mirrored (section 11)")
     with remote.Resolver(places=where) as r:
         copies = [c for c in r.copies(nm, owner, where) if c.where != "here"]
+        for w in r.where(where):
+            t = r.source(w).tombstone(obj_id) if r.source(w) else None
+            if t:
+                print(f"Warning: {obj_id} was taken down at {w} on {t.get('date')} ({t.get('reason')}); "
+                      "this archive decides whether to keep its mirror, and answers for what it serves "
+                      "(section 13.3)", file=sys.stderr)
         if not copies:
             sys.exit(f"no copy of {obj_id} found at {', '.join(where) or 'the places given'}")
         log = record_key_log(r, owner)
@@ -179,7 +185,10 @@ def main(args):
         for obj_id, where in sorted((P.ARCHIVE.get("mirrors") or {}).items()):
             _, nm, owner = obj_id.split(":")
             if (P.obj_dir(obj_id) / "inventory.json").exists():
-                mirror_line(nm, owner, where, licence_checked=args.licence_checked)
+                try:
+                    mirror_line(nm, owner, where, licence_checked=args.licence_checked)
+                except SystemExit as e:
+                    print(f"{obj_id}: {e}", file=sys.stderr)
         return
     if not args.uri:
         sys.exit("osheaf mirror URI, or --all")

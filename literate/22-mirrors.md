@@ -199,6 +199,10 @@ log the archive will hold (rule 1); then the copy with the latest signed
 version among those that agree is chosen, as a reader would (section
 7.4), and its versions are judged again against the key log now held.
 
+A tombstone of the line at a place copied from is reported first: a
+takedown there does not reach the mirror, which this archive keeps or
+takes down itself, answering for what it serves (section 13.3).
+
     # in mirrors: mirroring a line:
     def mirror_line(nm, owner, where, *, licence_checked=False, label=None):
         """Make or update the mirror of the line (NM, OWNER) from the copies at WHERE (section 11.1)."""
@@ -208,6 +212,12 @@ version among those that agree is chosen, as a reader would (section
                      "is not mirrored (section 11)")
         with remote.Resolver(places=where) as r:
             copies = [c for c in r.copies(nm, owner, where) if c.where != "here"]
+            for w in r.where(where):
+                t = r.source(w).tombstone(obj_id) if r.source(w) else None
+                if t:
+                    print(f"Warning: {obj_id} was taken down at {w} on {t.get('date')} ({t.get('reason')}); "
+                          "this archive decides whether to keep its mirror, and answers for what it serves "
+                          "(section 13.3)", file=sys.stderr)
             if not copies:
                 sys.exit(f"no copy of {obj_id} found at {', '.join(where) or 'the places given'}")
             log = record_key_log(r, owner)
@@ -346,7 +356,9 @@ The commands
 `at` and the places given with `--at` (base URLs or folders); a label
 gives it a readable name here. Without an owner part, the URI names the
 originator's line, which the resolver finds. `osheaf mirror --all` brings
-every mirror up to date from the places remembered.
+every mirror up to date from the places remembered; a mirror that cannot
+be brought up to date (no copy found, a fork) is reported, and the others
+go on.
 
     # in mirrors: the commands:
     def main(args):
@@ -354,7 +366,10 @@ every mirror up to date from the places remembered.
             for obj_id, where in sorted((P.ARCHIVE.get("mirrors") or {}).items()):
                 _, nm, owner = obj_id.split(":")
                 if (P.obj_dir(obj_id) / "inventory.json").exists():
-                    mirror_line(nm, owner, where, licence_checked=args.licence_checked)
+                    try:
+                        mirror_line(nm, owner, where, licence_checked=args.licence_checked)
+                    except SystemExit as e:
+                        print(f"{obj_id}: {e}", file=sys.stderr)
             return
         if not args.uri:
             sys.exit("osheaf mirror URI, or --all")

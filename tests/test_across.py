@@ -792,7 +792,7 @@ def test_draft_and_seal(tmp_path):
     assert errors(a) == []
 
 
-def test_takedown_and_return(tmp_path):
+def test_takedown_and_return(tmp_path, capsys):
     a, lib = make(tmp_path, "a"), make(tmp_path, "lib")
     deposit(a, "paper", "one", new=True)
     deposit(a, "other", "two", new=True)
@@ -813,7 +813,11 @@ def test_takedown_and_return(tmp_path):
     assert any(x["message"].startswith(f"removed: {obj_id}") for x in found)
     with pytest.raises(SystemExit, match="by law or at its keeper's request"):
         run("--root", str(a), "takedown", f"sheaf:{owner}:{owner}", "--reason", "x", "--yes")
+    capsys.readouterr()
+    run("--root", str(lib), "mirror", "--all")
+    assert f"{obj_id} was taken down at" in capsys.readouterr().err
     P.configure(lib)
+    assert P.obj_dir(obj_id).exists()
     pin = P.digest(P.obj_dir(obj_id) / "v1" / "inventory.json")
     run("--root", str(lib), "takedown", obj_id, "--reason", "Stopped keeping it.", "--yes")
     assert json.loads((lib / "opensheaf.json").read_text())["tombstones"][0]["inventorySha512"] == pin

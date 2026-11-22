@@ -1037,12 +1037,14 @@ tombstone with the fields of section 13.3, which the schema of the
 discovery document accepts; the indexes keep the line's entries with the
 status `removed`, and `owners/` drops its name. The key log of the owner
 stays, since the archive's other lines need it, and taking it down is
-refused but by law or at the keeper's request. A line taken down returns
+refused but by law or at the keeper's request. The library's mirror is
+not reached: brought up to date, it reports the tombstone, and stays
+(section 13.3). A line taken down returns
 to a library from a copy holding the version its tombstone pins, and its
 tombstone is dropped (section 13.2).
 
     # in across: takedowns and indexes:
-    def test_takedown_and_return(tmp_path):
+    def test_takedown_and_return(tmp_path, capsys):
         a, lib = make(tmp_path, "a"), make(tmp_path, "lib")
         deposit(a, "paper", "one", new=True)
         deposit(a, "other", "two", new=True)
@@ -1063,7 +1065,11 @@ tombstone is dropped (section 13.2).
         assert any(x["message"].startswith(f"removed: {obj_id}") for x in found)
         with pytest.raises(SystemExit, match="by law or at its keeper's request"):
             run("--root", str(a), "takedown", f"sheaf:{owner}:{owner}", "--reason", "x", "--yes")
+        capsys.readouterr()
+        run("--root", str(lib), "mirror", "--all")
+        assert f"{obj_id} was taken down at" in capsys.readouterr().err
         P.configure(lib)
+        assert P.obj_dir(obj_id).exists()
         pin = P.digest(P.obj_dir(obj_id) / "v1" / "inventory.json")
         run("--root", str(lib), "takedown", obj_id, "--reason", "Stopped keeping it.", "--yes")
         assert json.loads((lib / "opensheaf.json").read_text())["tombstones"][0]["inventorySha512"] == pin
