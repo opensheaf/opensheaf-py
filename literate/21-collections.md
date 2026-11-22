@@ -56,7 +56,8 @@ Collections are of two types (section 8.1):
       "owner": "56wo6cdpjsxk7ddgnqfp2quipfghukhtmvjuahvwzko7m4tkz3pa",
       "at": [ "https://mgubi.org/papers/" ],
       "version": "v2", "inventorySha512": "e3e1…", "follow": "latest",
-      "cite": { "title": "…", "creators": [ "P. Duch", "M. Gubinelli" ], "year": 2026 } }
+      "cite": { "title": "…", "creators": [ "P. Duch", "M. Gubinelli" ], "year": 2026,
+                "available": "2026-03-02" } }
   ]
 }
 ```
@@ -195,6 +196,8 @@ the current version read from the history of the version pinned).
             out["year"] = dc["publicationYear"]
         if P.date_of(dc, "Issued"):
             out["issued"] = P.date_of(dc, "Issued")
+        if P.date_of(dc, "Available", "Created"):
+            out["available"] = P.date_of(dc, "Available", "Created")
         return out
 
 

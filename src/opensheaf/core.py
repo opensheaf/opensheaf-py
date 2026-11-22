@@ -1632,12 +1632,10 @@ def collect_owner(owner, args):
         m = {"kind": "document", "name": obj["name"], "owner": obj["owner"], "at": [ARCHIVE["baseUrl"]],
              "version": signed, "inventorySha512": digest(d / signed / "inventory.json"),
              "follow": "latest", "cite": cite}
-        # the Available date only orders, it is not part of the cached citation
-        m["cite"]["available"] = date_of(dc, "Available", "Created")
+        if date_of(dc, "Available", "Created"):
+            m["cite"]["available"] = date_of(dc, "Available", "Created")
         members.append(m)
     members = [] if curated else member_order(members)
-    for m in members:
-        m["cite"].pop("available", None)
     version, issued = 1, TODAY
     if cinv:
         old = read_json(coll_dir, cinv, "members.json")

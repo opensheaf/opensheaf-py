@@ -44,6 +44,8 @@ def cite(d, inv, k):
         out["year"] = dc["publicationYear"]
     if P.date_of(dc, "Issued"):
         out["issued"] = P.date_of(dc, "Issued")
+    if P.date_of(dc, "Available", "Created"):
+        out["available"] = P.date_of(dc, "Available", "Created")
     return out
 
 

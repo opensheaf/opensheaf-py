@@ -468,6 +468,22 @@ current version as of the pin, `v2`.
         assert m["follow"] == "latest"
         assert P.presented_version(m, d, inv) == "v2"
 
+The cached citation of each member keeps its `Available` date beside its
+`Issued` date (section 8.2), so that sorting the written member list again
+gives the order the catalogue has: here three papers with one `Issued`
+date, ordered by their `Available` dates, newest first.
+
+    # in test: the rules of document versions:
+    def test_owner_catalogue_order_is_reproducible(archive):
+        put("paper-a", 1, FILES1, available="2026-01-03")
+        put("paper-b", 1, FILES2, available="2026-01-05")
+        put("paper-c", 1, FILES3, available="2026-01-04")
+        assert finish() == []
+        cdir, cinv = head_of("main")
+        members = P.read_json(cdir, cinv, "members.json")["members"]
+        assert [m["cite"]["available"] for m in members] == ["2026-01-05", "2026-01-04", "2026-01-03"]
+        assert P.member_order([dict(m) for m in reversed(members)]) == members
+
 A selection's members pin revisions and nothing else (section 8.4), and
 verification checks it (section 14.5). This collection, written by hand as
 a line of the archive's owner, has one member with both a pin and a

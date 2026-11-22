@@ -270,6 +270,17 @@ def test_owner_catalogue_pins_the_latest_signed_versions(archive):
     assert P.presented_version(m, d, inv) == "v2"
 
 
+def test_owner_catalogue_order_is_reproducible(archive):
+    put("paper-a", 1, FILES1, available="2026-01-03")
+    put("paper-b", 1, FILES2, available="2026-01-05")
+    put("paper-c", 1, FILES3, available="2026-01-04")
+    assert finish() == []
+    cdir, cinv = head_of("main")
+    members = P.read_json(cdir, cinv, "members.json")["members"]
+    assert [m["cite"]["available"] for m in members] == ["2026-01-05", "2026-01-04", "2026-01-03"]
+    assert P.member_order([dict(m) for m in reversed(members)]) == members
+
+
 def put_collection(label, members, kind):
     genesis, obj_id = P.seal("collection", P.ARCHIVE["owner"])
     P.LABELS[label] = obj_id

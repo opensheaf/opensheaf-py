@@ -227,12 +227,13 @@ whole object up to it. A member names its line by `name` and `owner`,
 never by a label or a location, and lists in `at` where copies may be
 found: the archive's base URL (section 8.2). The citation is that of the
 current version, which is what presentations show. Each member carries a
-cached citation (`cite`: title, authors, year, `Issued` date), so that the
-collection stays readable, and can be ordered, without resolving its
-members, also if one becomes unavailable (section 8.2). The `Available`
-date (or `Created`, for a version not public at the time) is needed only to
-order the members, and is removed afterwards: it describes a version, not
-the work, and would make the citation change at every new version.
+cached citation (`cite`: title, authors, year, `Issued` date and
+`Available` date), so that the collection stays readable, and can be
+ordered, without resolving its members, also if one becomes unavailable
+(section 8.2). The `Available` date (or `Created`, for a version not
+public at the time) is that of the current version: it changes with a new
+version of the member, which moves its pin anyway, and keeping it lets any
+later sort of the written list give the same order.
 
     # in pin the current version of every document of the owner:
     members = []
@@ -245,12 +246,10 @@ the work, and would make the citation change at every new version.
         m = {"kind": "document", "name": obj["name"], "owner": obj["owner"], "at": [ARCHIVE["baseUrl"]],
              "version": signed, "inventorySha512": digest(d / signed / "inventory.json"),
              "follow": "latest", "cite": cite}
-        # the Available date only orders, it is not part of the cached citation
-        m["cite"]["available"] = date_of(dc, "Available", "Created")
+        if date_of(dc, "Available", "Created"):
+            m["cite"]["available"] = date_of(dc, "Available", "Created")
         members.append(m)
     members = [] if curated else member_order(members)
-    for m in members:
-        m["cite"].pop("available", None)
 
 The collection changes only when its members do: a new document, a new
 signed version of one (which changes the pin), a different order. Running
