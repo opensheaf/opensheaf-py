@@ -2069,6 +2069,7 @@ def document_version_errors(obj_id, d, inv):
     files), the history, and notices kept unchanged."""
     errors = []
     seen, files_of, missing_of, highest, first = {}, {}, {}, 0, 1
+    fields_of, external_of = {}, {}
     had_history, notices, prev_ver = False, [], None
 
     def current_before(at):
@@ -2080,7 +2081,7 @@ def document_version_errors(obj_id, d, inv):
 
     for ver, vinfo in inv["versions"].items():
         obj = read_json(d, inv, OBJ, ver)
-        if obj is None or obj.get("kind") != "document":
+        if obj is None or obj.get("kind") not in ("document", "collection"):
             return errors
         n = obj["documentVersion"]
         own, change = own_files(obj, {p: dig for dig, ps in vinfo["state"].items() for p in ps})
@@ -2104,6 +2105,20 @@ def document_version_errors(obj_id, d, inv):
                               f"as the current version {m}: it is no new document version (section 4.2)")
             highest = max(highest, n)
             seen[n], files_of[n], missing_of[n] = change, own, bool(obj.get("sourcesMissing"))
+        fields = {k: obj.get(k) for k in DOCUMENT_VERSION_FIELDS}
+        external = obj.get("external", [])
+        if n in fields_of:
+            before = fields_of[n]
+            if before["sourcesMissing"]:
+                if any(r not in (fields["renditions"] or []) for r in before["renditions"] or []):
+                    errors.append(f"{ver} removes a rendition of document version {n} (section 4.2)")
+            else:
+                for k in DOCUMENT_VERSION_FIELDS:
+                    if fields[k] != before[k]:
+                        errors.append(f"{ver} changes {k} of document version {n}, which belongs to it (section 4.2)")
+            if any(e not in external for e in external_of[n]):
+                errors.append(f"{ver} drops or changes an external record of document version {n} (section 4.2)")
+        fields_of[n], external_of[n] = fields, external
         hist = obj.get("history")
         if had_history and hist is None:
             errors.append(f"{ver} lacks the history of earlier versions")
@@ -2163,6 +2178,9 @@ def description_errors(d, inv, ver):
     elif obj.get("kind") == "collection" and "members.json" not in logical:
         out.append("collection without members.json")
     return out
+
+
+DOCUMENT_VERSION_FIELDS = ("mainSource", "sourceFormat", "sourcesMissing", "renditions", "toolchain")
 
 
 def check_storage(f, schema, disc):
@@ -2414,7 +2432,7 @@ def check_lines(f, found, logs, schema, disc, resolver=None):
         for ver in inv["versions"]:
             for message in description_errors(d, inv, ver):
                 f.error(f"{place} {ver}", message)
-        if head.get("kind") == "document":
+        if head.get("kind") in ("document", "collection"):
             for message in document_version_errors(obj_id, d, inv):
                 f.error(place, message)
         log = logs.get(owner)

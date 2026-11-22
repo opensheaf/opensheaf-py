@@ -573,17 +573,18 @@ section 9.3 says (below).
 ### Records
 
 The rules of sections 4.2 to 4.4 in every version, and between versions for
-documents (below): the descriptions agree on the document version, a
+documents and collections, a collection being a document whose source is
+`members.json` (below): the descriptions agree on the document version, a
 withdrawal has its date in both, `datacite.json` has the properties
 section 4.4 requires, the notes find their files, a document version holds
-its main source and renditions. A collection version holds its member list,
+its main source, and a document or collection version its renditions. A collection version holds its member list,
 checked with its members after every line has its statuses.
 
     # in check the records of a line:
     for ver in inv["versions"]:
         for message in description_errors(d, inv, ver):
             f.error(f"{place} {ver}", message)
-    if head.get("kind") == "document":
+    if head.get("kind") in ("document", "collection"):
         for message in document_version_errors(obj_id, d, inv):
             f.error(place, message)
 
@@ -621,11 +622,11 @@ by URL, so that archives record the same licence the same way
                 out.append("main source not in the version")
             if obj.get("sourcesMissing") and obj.get("mainSource"):
                 out.append("sourcesMissing together with a main source")
-            for r in obj.get("renditions", []):
-                if r["path"] not in logical:
-                    out.append(f"rendition {r['path']} not in the version")
         elif obj.get("kind") == "collection" and "members.json" not in logical:
             out.append("collection without members.json")
+        for r in obj.get("renditions", []):
+            if r["path"] not in logical:
+                out.append(f"rendition {r['path']} not in the version")
         return out
 
 ### Signatures
@@ -689,6 +690,7 @@ were missing.
         files), the history, and notices kept unchanged."""
         errors = []
         seen, files_of, missing_of, highest, first = {}, {}, {}, 0, 1
+        fields_of, external_of = {}, {}
         had_history, notices, prev_ver = False, [], None
 
         def current_before(at):
@@ -701,6 +703,7 @@ were missing.
         for ver, vinfo in inv["versions"].items():
             <<the files of an object version that belong to its document version>>
             <<check the number and the files of a document version>>
+            <<check the fields that belong to a document version>>
             <<check the history recorded in an object version>>
             <<check that an object version keeps the earlier notices>>
             prev_ver = ver
@@ -719,7 +722,7 @@ belongs to the document version, since it was written and deposited with it
 
     # in the files of an object version that belong to its document version:
     obj = read_json(d, inv, OBJ, ver)
-    if obj is None or obj.get("kind") != "document":
+    if obj is None or obj.get("kind") not in ("document", "collection"):
         return errors
     n = obj["documentVersion"]
     own, change = own_files(obj, {p: dig for dig, ps in vinfo["state"].items() for p in ps})
@@ -755,6 +758,37 @@ version.
                           f"as the current version {m}: it is no new document version (section 4.2)")
         highest = max(highest, n)
         seen[n], files_of[n], missing_of[n] = change, own, bool(obj.get("sourcesMissing"))
+
+The fields that say what the files of a document version are belong to it,
+like its change note: every object version holding the document version
+has the same `mainSource`, `sourceFormat`, `sourcesMissing`, `renditions`
+and `toolchain`, except while its sources are missing, when a completion
+names them and may add renditions but drop none. The records at external
+services of a document version are only added to: each one stays,
+unchanged, in every later object version holding it (section 4.2). A
+collection is a document whose source is `members.json`, and is checked
+the same way.
+
+    # in check the fields that belong to a document version:
+    fields = {k: obj.get(k) for k in DOCUMENT_VERSION_FIELDS}
+    external = obj.get("external", [])
+    if n in fields_of:
+        before = fields_of[n]
+        if before["sourcesMissing"]:
+            if any(r not in (fields["renditions"] or []) for r in before["renditions"] or []):
+                errors.append(f"{ver} removes a rendition of document version {n} (section 4.2)")
+        else:
+            for k in DOCUMENT_VERSION_FIELDS:
+                if fields[k] != before[k]:
+                    errors.append(f"{ver} changes {k} of document version {n}, which belongs to it (section 4.2)")
+        if any(e not in external for e in external_of[n]):
+            errors.append(f"{ver} drops or changes an external record of document version {n} (section 4.2)")
+    fields_of[n], external_of[n] = fields, external
+
+The fields, in the order they are reported:
+
+    # in check the descriptions of an object version:
+    DOCUMENT_VERSION_FIELDS = ("mainSource", "sourceFormat", "sourcesMissing", "renditions", "toolchain")
 
 The history, once present, must stay present; it may name only object
 versions that exist at that point; it must list each document version

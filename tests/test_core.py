@@ -133,6 +133,57 @@ def test_new_number_with_the_same_files_is_an_error(archive):
                       " as the current version 2: it is no new document version (section 4.2)"]
 
 
+def test_description_only_version_keeps_the_fields_of_its_document_version(archive):
+    zenodo = {"role": "deposit", "service": "Zenodo", "record": "https://zenodo.org/records/1"}
+    arxiv = {"role": "source", "service": "arXiv", "record": "https://arxiv.org/abs/2601.00001v1"}
+    put("paper-a", 1, FILES1)
+    put("paper-a", 1, FILES1, description_only=True,
+        extra_obj={"renditions": [{"path": "paper.pdf", "mediaType": "application/octet-stream"}]})
+    put("paper-b", 1, FILES1, extra_obj={"external": [arxiv]})
+    put("paper-b", 1, FILES1, description_only=True, extra_obj={"external": [arxiv, zenodo]})
+    put("paper-c", 1, FILES1, extra_obj={"external": [arxiv]})
+    put("paper-c", 1, FILES1, description_only=True)
+    put("paper-d", 1, FILES1)
+    put("paper-d", 1, FILES1, description_only=True,
+        extra_obj={"toolchain": [{"name": "TeX Live", "version": "2026"}]})
+    assert sorted(finish()) == [
+        "paper-a: v2 changes renditions of document version 1, which belongs to it (section 4.2)",
+        "paper-c: v2 drops or changes an external record of document version 1 (section 4.2)",
+        "paper-d: v2 changes toolchain of document version 1, which belongs to it (section 4.2)"]
+
+
+def test_collections_follow_the_rules_of_documents(archive):
+    put("paper-a", 1, FILES1)
+    put("paper-b", 1, FILES3)
+    members = []
+    for label in ("paper-a", "paper-b"):
+        d, inv = head_of(label)
+        _, nm, owner = P.LABELS[label].split(":")
+        members.append({"kind": "document", "name": nm, "owner": owner, "at": [CONFIG["baseUrl"]],
+                        "version": "v1", "inventorySha512": P.digest(d / "v1" / "inventory.json")})
+    put_collection("list", members[:1], "catalogue")
+    obj_id = P.LABELS["list"]
+
+    def again(n, mem):
+        d = P.obj_dir(obj_id)
+        inv = P.load_inventory(d)
+        obj = dict(P.read_json(d, inv, P.OBJ), documentVersion=n)
+        dc = dict(P.read_json(d, inv, "datacite.json"), version=str(n))
+        files = {"members.json": P.json_bytes({"format": "opensheaf-collection/0.2", "type": "catalogue",
+                                               "members": mem}),
+                 "datacite.json": P.json_bytes(dc), P.GENESIS: P.read_logical(d, inv, P.GENESIS).read_bytes()}
+        P.carry_forward(P.read_json(d, inv, P.OBJ), obj, inv, P.next_object_version(inv))
+        return P.add_version(obj_id, files, obj, "a collection", acknowledged=True)
+
+    again(2, members)          # a new member list: document version 2
+    again(1, members[:1])      # a description-only version of document version 1
+    d, inv = head_of("list")
+    assert P.current_version(d, inv) == "v2"
+    assert [e for e in finish() if e.startswith("list:")] == []
+    again(2, members[1:])      # another member list under the number 2
+    assert "list: v4 has other files than document version 2" in finish()
+
+
 def test_version_found_later_keeps_the_current_version(archive):
     put("paper-a", 1, FILES1)
     put("paper-a", 2, FILES2)
