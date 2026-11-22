@@ -161,6 +161,11 @@ def version_block(line, ver, shown, notices, root, vetted=None):
     n = obj["documentVersion"]
     labels = [f"{e['service']} {e['label']}" for e in obj.get("external", [])
               if e.get("role") == "source" and e.get("label")]
+    vs = list(line.inv["versions"])
+    first = next(v for v in vs if line.json(P.OBJ, v).get("documentVersion") == n)
+    par = line.json(P.OBJ, first).get("parent")
+    if par and (vs.index(first) == 0 or line.json(P.OBJ, vs[vs.index(first) - 1]).get("parent") != par):
+        labels.insert(0, f"the parent's version {par.get('documentVersion')}")
     head = f"Version {n}" + (f" ({esc(', '.join(labels))})" if labels else "")
     if obj.get("stage"):
         head += f' <span class="stage">{esc(obj["stage"]["value"])}</span>'

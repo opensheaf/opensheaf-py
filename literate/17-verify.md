@@ -753,8 +753,6 @@ belongs to the document version, since it was written and deposited with it
     n = obj["documentVersion"]
     new_doc = n not in seen
     own, change = own_files(obj, {p: dig for dig, ps in vinfo["state"].items() for p in ps})
-    if not seen and obj.get("parent"):
-        highest, first = n - 1, n    # a branch numbers on from its branch point (section 9.4)
 
 A document version seen before must have the same own files and change
 note, except while its sources are missing: then files may be added (a
@@ -833,9 +831,8 @@ version reinstates it (section 13.1).
 
 The history, once present, must stay present; it may name only object
 versions that exist at that point; it must list each document version
-known so far exactly once, from the first, which for a branch is the
-document version of its branch point (section 9.4: a branch holds none of
-the parent's earlier versions, and numbers on from there); and each entry must be the last object version
+known so far exactly once, from 1 (a branch numbers its own document
+versions from 1, section 9.4); and each entry must be the last object version
 holding its document version, as known when the history was written.
 
     # in check the history recorded in an object version:
@@ -1104,7 +1101,7 @@ algorithm numbers are free here for the owner) is a warning (section 5.3).
                 continue
             if prev_obj is not None and p == prev_obj.get("parent"):
                 if ev != prev_ev:
-                    f.error(at, "the identity files change without moving the branch point (section 9.4)")
+                    f.error(at, "the identity files change without a new branch point (section 9.4)")
             else:
                 v, problems = branch.verdict(branch.level_of_version(d, inv, ver), obj, genesis, logs.get)
                 verdicts.append(v)
@@ -1134,17 +1131,18 @@ algorithm numbers are free here for the owner) is a warning (section 5.3).
         if owner == rec.get("originator"):
             f.error(place, "an originator never owns a branch of its own work (section 5.3)")
 
-Moving forward and continuously (section 9.4).
+A new branch point is later, in the same parent line, and continues the
+previous one (section 9.4).
 
     # in check that a branch point moves forward and continuously:
     old = prev_obj["parent"]
     pinv_old = json.loads(read_logical(d, inv, "parent/inventory.json", f"v{int(ver[1:]) - 1}").read_bytes())
     pinv_new = json.loads(read_logical(d, inv, "parent/inventory.json", ver).read_bytes())
     if (p.get("owner"), p.get("name")) != (old.get("owner"), old.get("name")):
-        f.error(at, "a branch point moves only to a version of the same parent line (section 9.4)")
+        f.error(at, "a new branch point is a version of the same parent line (section 9.4)")
     elif int(p["objectVersion"][1:]) <= int(old["objectVersion"][1:]) or \
             p.get("documentVersion") == old.get("documentVersion"):
-        f.error(at, "a branch point moves only to a higher object version, holding another document "
+        f.error(at, "a new branch point is a higher object version, holding another document "
                 "version (section 9.4)")
     if pinv_old.get("id") != pinv_new.get("id") or any(
             pinv_new.get("versions", {}).get(v) != e for v, e in pinv_old.get("versions", {}).items()) or any(

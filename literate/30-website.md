@@ -690,9 +690,25 @@ date, when the version became public; a version written but never public at
 the time (an old manuscript deposited later) shows its `Created` date and
 says so.
 
+A branch numbers its own document versions from 1, and a version that
+holds a branch point (the first, and each new branch point) also shows the
+number of the parent version, which `parent.documentVersion` keeps:
+"Version 1 (the parent's version 3)" (section 9.4).
+
+    # in the number in the parent line of a version of a branch:
+    vs = list(line.inv["versions"])
+    first = next(v for v in vs if line.json(P.OBJ, v).get("documentVersion") == n)
+    par = line.json(P.OBJ, first).get("parent")
+    if par and (vs.index(first) == 0 or line.json(P.OBJ, vs[vs.index(first) - 1]).get("parent") != par):
+        labels.insert(0, f"the parent's version {par.get('documentVersion')}")
+
+The heading then gives the number, the labels, the stage, and the status
+of the version.
+
     # in the heading and date of a version:
     labels = [f"{e['service']} {e['label']}" for e in obj.get("external", [])
               if e.get("role") == "source" and e.get("label")]
+    <<the number in the parent line of a version of a branch>>
     head = f"Version {n}" + (f" ({esc(', '.join(labels))})" if labels else "")
     if obj.get("stage"):
         head += f' <span class="stage">{esc(obj["stage"]["value"])}</span>'

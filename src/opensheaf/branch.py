@@ -81,7 +81,7 @@ def verdict(level, obj, genesis, logs, depth=0):
     if pstate.get(P.OBJ) != level.digests.get("parent/object.json"):
         problems.append("parent/object.json is not the object.json the parent inventory records")
     if depth == 0:
-        own = {"datacite.json", P.OBJ}
+        own = {"datacite.json", P.OBJ} | {n["path"] for n in obj.get("notices", []) if n.get("path")}
         for path, dig in pstate.items():
             if path in own or P.is_evidence(path):
                 continue
@@ -204,7 +204,7 @@ def make_branch(uri, where, *, owner=None, label=None, message=None):
         rec = names.read_genesis(genesis)
         if owner in (parent["owner"], rec.get("originator")):
             sys.exit("the owner of a branch is neither the parent's owner nor the originator (sections 5.3 "
-                     "and 9.1): the originator's own lines take in another line's work otherwise (#57)")
+                     "and 9.1): the originator takes in another line's work by depositing it (section 9.5)")
         url = (P.ARCHIVE["baseUrl"] + "ocfl/" + P.path_of(c.id) + f"/v{k}/" if c.where == "here"
                else c.src.object_url(c.id, f"v{k}") if c.src else None)
         parent_at = [P.ARCHIVE["baseUrl"]] if c.where == "here" else [c.src.at] if c.src and c.src.at else []
@@ -220,16 +220,23 @@ def make_branch(uri, where, *, owner=None, label=None, message=None):
         pobj = json.loads(files["parent/object.json"])
         pdc = c.read("datacite.json", k) or {}
         keep = ("mainSource", "sourceFormat", "sourcesMissing", "renditions", "toolchain", "changes", "stage",
-                "notices", "licence", "agreement")
+                "licence", "agreement")
         obj = {"format": P.OBJ_FORMAT, "specification": P.SPEC, "kind": pobj["kind"], "name": nm, "owner": owner,
-               "parent": parent, "documentVersion": parent["documentVersion"],
+               "parent": parent, "documentVersion": 1,
                **{f: pobj[f] for f in keep if f in pobj}, "status": "active"}
         if move:
             d = P.obj_dir(obj_id)
             binv = P.load_inventory(d)
             obj["documentVersion"] = max(P.doc_version_of(d, binv, x) for x in binv["versions"]) + 1
-            notes = {n["path"] for n in obj.pop("notices", []) if n.get("path")}
-            files = {path: b for path, b in files.items() if path not in notes}
+            own_notices = P.read_json(d, binv, P.OBJ).get("notices", [])
+            if own_notices:
+                obj["notices"] = own_notices
+            for n in own_notices:
+                if n.get("path"):
+                    if n["path"] in files:
+                        sys.exit(f"{n['path']}: a notice of the branch has the path of a file of the new parent "
+                                 "version (section 9.4)")
+                    files[n["path"]] = P.read_logical(d, binv, n["path"]).read_bytes()
         dc = {key: v for key, v in pdc.items() if key not in ("doi", "url")}
         dc["publisher"] = {"name": P.ARCHIVE["name"]}
         dc["version"] = str(obj["documentVersion"])
@@ -250,13 +257,13 @@ def make_branch(uri, where, *, owner=None, label=None, message=None):
         if v != CONFIRMED:
             sys.exit(f"{obj_id}: the branch point would be {v}: " + "; ".join(problems))
         inv = P.add_version(obj_id, content, obj, message or (
-            f"Branch point moved to {parent['objectVersion']} of {line}" if move else
+            f"New branch point {parent['objectVersion']} of {line}" if move else
             f"Branch of {line} at {parent['objectVersion']} (document version {parent['documentVersion']})"))
     if label and not move:
         P.LABELS[label] = obj_id
     P.write_discovery()
     print(f"{label or P.label_of(obj_id) or obj_id}: {inv['head']} "
-          + ("moves the branch point to " if move else "branch of ")
+          + ("takes the new branch point " if move else "branch of ")
           + f"{line} {parent['objectVersion']} (document version {parent['documentVersion']})")
     return obj_id, inv["head"], inv, parent_at
 

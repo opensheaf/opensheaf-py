@@ -512,7 +512,7 @@ def test_accept_vetted_versions(tmp_path):
     obj = P.read_json(d, inv, P.OBJ)
     assert obj["parent"]["owner"] == a_owner and obj["parent"]["objectVersion"] == "v2"
     assert obj["parent"]["url"] == f"https://example.org/authors/ocfl/{a_owner}/{nm}/v2/"
-    assert obj["documentVersion"] == 2 and "previous" not in obj
+    assert obj["documentVersion"] == 1 and obj["parent"]["documentVersion"] == 2 and "previous" not in obj
     held = {p for ps in inv["versions"]["v1"]["state"].values() for p in ps}
     assert {"genesis.json", "paper.pdf", "parent/inventory.json", "parent/object.json"} <= held
     assert any(p.startswith("parent/signatures/signature-") for p in held)
@@ -522,19 +522,25 @@ def test_accept_vetted_versions(tmp_path):
     assert P.key_log(a_owner) is not None
     mem = members(j, "issue-1")["members"]
     assert [(m["owner"], [r["documentVersion"] for r in m["revisions"]]) for m in mem] == \
-        [(j_owner, [2]), (a_owner, [2])]
+        [(j_owner, [1]), (a_owner, [2])]
     found = findings(j)
     assert [x for x in found if x["severity"] == "error"] == []
     assert any(x["message"].endswith(": confirmed (section 9.3)") for x in found)
     deposit(a, "paper", "three")
     P.configure(j)
     assert list(P.load_inventory(P.obj_dir(branch_id))["versions"]) == ["v1"]
+    remark = tmp_path / "remark.md"
+    remark.write_text("Accepted with a remark.")
+    run("--root", str(j), "notice", "paper", "--about", "1", "--text", "A remark.", "--file", str(remark))
     run("--root", str(j), "accept", uri(a, "paper", 3), "--selection", "issue-1")
     P.configure(j)
     inv = P.load_inventory(P.obj_dir(branch_id))
     obj = P.read_json(P.obj_dir(branch_id), inv, P.OBJ)
-    assert inv["head"] == "v2" and obj["documentVersion"] == 3 and obj["parent"]["objectVersion"] == "v3"
-    assert [r["documentVersion"] for r in members(j, "issue-1")["members"][0]["revisions"]] == [2, 3]
+    assert inv["head"] == "v3" and obj["documentVersion"] == 2 and obj["parent"]["objectVersion"] == "v3"
+    assert obj["parent"]["documentVersion"] == 3 and obj["notices"][0]["text"] == "A remark."
+    assert P.read_logical(P.obj_dir(branch_id), inv, obj["notices"][0]["path"]).read_text() == \
+        "Accepted with a remark."
+    assert [r["documentVersion"] for r in members(j, "issue-1")["members"][0]["revisions"]] == [1, 2]
     assert errors(j) == []
     with pytest.raises(SystemExit, match="the branch point of the branch already"):
         run("--root", str(j), "accept", uri(a, "paper", 3), "--selection", "issue-1")
@@ -597,11 +603,11 @@ def test_the_history_of_a_branch(tmp_path):
     deposit(a, "paper", "two")
     run("--root", str(j), "branch", uri(a, "paper", 2), "--label", "continued")
     deposit(j, "continued", "three")
-    deposit(j, "continued", "earlier", "--after", "2")
+    deposit(j, "continued", "earlier", "--after", "1")
     d = P.obj_dir(line(j, "continued"))
     inv = P.load_inventory(d)
     hist = P.read_json(d, inv, P.OBJ)["history"]
-    assert [P.doc_version_of(d, inv, v) for v in hist] == [2, 4, 3]
+    assert [P.doc_version_of(d, inv, v) for v in hist] == [1, 3, 2]
     assert P.document_version_errors(line(j, "continued"), d, inv) == []
     assert errors(j) == []
 

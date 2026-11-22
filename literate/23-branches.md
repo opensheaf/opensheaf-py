@@ -166,7 +166,9 @@ level below (the branch's own at the first level):
 - **the files**, at the first level only (a parent version may be a later
   version of its own branch): every file of the parent version but its
   descriptions and evidence is present with the same digest, and nothing
-  else is present but the branch's descriptions and evidence;
+  else is present but the branch's descriptions and evidence, and the
+  files of the branch's own notices, which its `object.json` names
+  (section 9.4);
 - **the parent**: `parent` agrees with `parent/object.json`; the branch's
   owner is neither the parent's owner nor the originator; and the parent
   is the originator's line without a parent, or a branch with one;
@@ -233,7 +235,7 @@ The files, at the first level.
 
     # in branches: the files of a branch point:
     if depth == 0:
-        own = {"datacite.json", P.OBJ}
+        own = {"datacite.json", P.OBJ} | {n["path"] for n in obj.get("notices", []) if n.get("path")}
         for path, dig in pstate.items():
             if path in own or P.is_evidence(path):
                 continue
@@ -410,7 +412,7 @@ copy likewise in the catalogue of the selection's owner.
             rec = names.read_genesis(genesis)
             if owner in (parent["owner"], rec.get("originator")):
                 sys.exit("the owner of a branch is neither the parent's owner nor the originator (sections 5.3 "
-                         "and 9.1): the originator's own lines take in another line's work otherwise (#57)")
+                         "and 9.1): the originator takes in another line's work by depositing it (section 9.5)")
             url = (P.ARCHIVE["baseUrl"] + "ocfl/" + P.path_of(c.id) + f"/v{k}/" if c.where == "here"
                    else c.src.object_url(c.id, f"v{k}") if c.src else None)
             parent_at = [P.ARCHIVE["baseUrl"]] if c.where == "here" else [c.src.at] if c.src and c.src.at else []
@@ -429,13 +431,13 @@ copy likewise in the catalogue of the selection's owner.
             if v != CONFIRMED:
                 sys.exit(f"{obj_id}: the branch point would be {v}: " + "; ".join(problems))
             inv = P.add_version(obj_id, content, obj, message or (
-                f"Branch point moved to {parent['objectVersion']} of {line}" if move else
+                f"New branch point {parent['objectVersion']} of {line}" if move else
                 f"Branch of {line} at {parent['objectVersion']} (document version {parent['documentVersion']})"))
         if label and not move:
             P.LABELS[label] = obj_id
         P.write_discovery()
         print(f"{label or P.label_of(obj_id) or obj_id}: {inv['head']} "
-              + ("moves the branch point to " if move else "branch of ")
+              + ("takes the new branch point " if move else "branch of ")
               + f"{line} {parent['objectVersion']} (document version {parent['documentVersion']})")
         return obj_id, inv["head"], inv, parent_at
 
@@ -465,9 +467,16 @@ version makes a new branch, renamed (section 5.3).
 
 The records of the branch. `object.json` keeps the parent's description of
 the document's files (main source, renditions, toolchain, change note,
-stage, notices, licence note, agreement), and records the branch's own
-line and its branch point; it drops what belongs to the parent's line
-alone (its history, its external records, its withdrawal). `datacite.json`
+stage, licence note, agreement), and records the branch's own line and its
+branch point; it drops what belongs to the parent's line alone (its
+history, its external records, its withdrawal, and its notices, which are
+about the parent's document versions and stay in `parent/object.json`,
+their files among the parent's). The branch numbers its own document
+versions from 1 (section 9.4): its first version is its document version
+1, `parent.documentVersion` keeping the parent's number. A version that
+takes a new branch point is the branch's next document version, and keeps
+the branch's own notices with their files, which must not have the path of
+a file of the new parent version (section 9.4). `datacite.json`
 is the parent's, with the branch's owner as publisher (here the archive,
 section 9.7), the branch's own address, no DOI of the parent's, and an
 `IsIdenticalTo` relation to the parent version: its DOI, or else
@@ -477,16 +486,23 @@ section 9.7), the branch's own address, no DOI of the parent's, and an
     pobj = json.loads(files["parent/object.json"])
     pdc = c.read("datacite.json", k) or {}
     keep = ("mainSource", "sourceFormat", "sourcesMissing", "renditions", "toolchain", "changes", "stage",
-            "notices", "licence", "agreement")
+            "licence", "agreement")
     obj = {"format": P.OBJ_FORMAT, "specification": P.SPEC, "kind": pobj["kind"], "name": nm, "owner": owner,
-           "parent": parent, "documentVersion": parent["documentVersion"],
+           "parent": parent, "documentVersion": 1,
            **{f: pobj[f] for f in keep if f in pobj}, "status": "active"}
     if move:
         d = P.obj_dir(obj_id)
         binv = P.load_inventory(d)
         obj["documentVersion"] = max(P.doc_version_of(d, binv, x) for x in binv["versions"]) + 1
-        notes = {n["path"] for n in obj.pop("notices", []) if n.get("path")}
-        files = {path: b for path, b in files.items() if path not in notes}
+        own_notices = P.read_json(d, binv, P.OBJ).get("notices", [])
+        if own_notices:
+            obj["notices"] = own_notices
+        for n in own_notices:
+            if n.get("path"):
+                if n["path"] in files:
+                    sys.exit(f"{n['path']}: a notice of the branch has the path of a file of the new parent "
+                             "version (section 9.4)")
+                files[n["path"]] = P.read_logical(d, binv, n["path"]).read_bytes()
     dc = {key: v for key, v in pdc.items() if key not in ("doi", "url")}
     dc["publisher"] = {"name": P.ARCHIVE["name"]}
     dc["version"] = str(obj["documentVersion"])

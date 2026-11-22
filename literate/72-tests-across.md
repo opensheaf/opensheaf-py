@@ -669,11 +669,13 @@ accepted copy is a branch under the journal's owner, named by the paper's
 genesis name, holding the files of the authors' version 2, its genesis
 record and the evidence of the branch point, and listed by the issue, a
 selection, with the revision it holds and, with `--with-original`, the
-authors' revision set. The authors' key log is kept beside it. The
-authors' version 3 changes nothing in it; accepting version 3 moves the
-branch point (section 9.4), the next document version of the branch, and
-adds the revision. The verifier confirms the branch point at both
-versions.
+authors' revision set. The accepted copy is the journal's document
+version 1, `parent.documentVersion` keeping the authors' 2 (section 9.4).
+The authors' version 3 changes nothing in it; the journal adds a notice to
+its copy, with a file; accepting version 3 takes a new branch point
+(section 9.4), the next document version of the branch, 2, which keeps the
+journal's notice and its file, and adds the revision. The verifier
+confirms the branch point at both versions.
 
     # in across: branches and accepted copies:
     def test_accept_vetted_versions(tmp_path):
@@ -692,7 +694,7 @@ versions.
         obj = P.read_json(d, inv, P.OBJ)
         assert obj["parent"]["owner"] == a_owner and obj["parent"]["objectVersion"] == "v2"
         assert obj["parent"]["url"] == f"https://example.org/authors/ocfl/{a_owner}/{nm}/v2/"
-        assert obj["documentVersion"] == 2 and "previous" not in obj
+        assert obj["documentVersion"] == 1 and obj["parent"]["documentVersion"] == 2 and "previous" not in obj
         held = {p for ps in inv["versions"]["v1"]["state"].values() for p in ps}
         assert {"genesis.json", "paper.pdf", "parent/inventory.json", "parent/object.json"} <= held
         assert any(p.startswith("parent/signatures/signature-") for p in held)
@@ -702,19 +704,25 @@ versions.
         assert P.key_log(a_owner) is not None
         mem = members(j, "issue-1")["members"]
         assert [(m["owner"], [r["documentVersion"] for r in m["revisions"]]) for m in mem] == \
-            [(j_owner, [2]), (a_owner, [2])]
+            [(j_owner, [1]), (a_owner, [2])]
         found = findings(j)
         assert [x for x in found if x["severity"] == "error"] == []
         assert any(x["message"].endswith(": confirmed (section 9.3)") for x in found)
         deposit(a, "paper", "three")
         P.configure(j)
         assert list(P.load_inventory(P.obj_dir(branch_id))["versions"]) == ["v1"]
+        remark = tmp_path / "remark.md"
+        remark.write_text("Accepted with a remark.")
+        run("--root", str(j), "notice", "paper", "--about", "1", "--text", "A remark.", "--file", str(remark))
         run("--root", str(j), "accept", uri(a, "paper", 3), "--selection", "issue-1")
         P.configure(j)
         inv = P.load_inventory(P.obj_dir(branch_id))
         obj = P.read_json(P.obj_dir(branch_id), inv, P.OBJ)
-        assert inv["head"] == "v2" and obj["documentVersion"] == 3 and obj["parent"]["objectVersion"] == "v3"
-        assert [r["documentVersion"] for r in members(j, "issue-1")["members"][0]["revisions"]] == [2, 3]
+        assert inv["head"] == "v3" and obj["documentVersion"] == 2 and obj["parent"]["objectVersion"] == "v3"
+        assert obj["parent"]["documentVersion"] == 3 and obj["notices"][0]["text"] == "A remark."
+        assert P.read_logical(P.obj_dir(branch_id), inv, obj["notices"][0]["path"]).read_text() == \
+            "Accepted with a remark."
+        assert [r["documentVersion"] for r in members(j, "issue-1")["members"][0]["revisions"]] == [1, 2]
         assert errors(j) == []
         with pytest.raises(SystemExit, match="the branch point of the branch already"):
             run("--root", str(j), "accept", uri(a, "paper", 3), "--selection", "issue-1")
@@ -890,11 +898,11 @@ A branch point whose evidence is tampered with is inconsistent, an error.
         assert v == branch.INCONSISTENT and any(p.startswith("paper.pdf") for p in problems)
         assert branch.verdict(level, obj, genesis, lambda o: None)[0] == branch.UNCHECKED
 
-A branch numbers on from its branch point (section 9.4), and holds none
-of the parent's earlier versions: its history, once written, lists its
-document versions from that of the branch point. Here a branch of version
-2 gets version 3, then a version found later placed after 2, which writes
-the history; the archive verifies.
+A branch numbers its own document versions from 1 (section 9.4), and
+holds none of the parent's earlier versions: its history, once written,
+lists its document versions from 1. Here a branch of the authors' version
+2 is the branch's version 1; it gets version 2, then a version found later
+placed after 1, which writes the history; the archive verifies.
 
     # in across: branches and accepted copies:
     def test_the_history_of_a_branch(tmp_path):
@@ -903,11 +911,11 @@ the history; the archive verifies.
         deposit(a, "paper", "two")
         run("--root", str(j), "branch", uri(a, "paper", 2), "--label", "continued")
         deposit(j, "continued", "three")
-        deposit(j, "continued", "earlier", "--after", "2")
+        deposit(j, "continued", "earlier", "--after", "1")
         d = P.obj_dir(line(j, "continued"))
         inv = P.load_inventory(d)
         hist = P.read_json(d, inv, P.OBJ)["history"]
-        assert [P.doc_version_of(d, inv, v) for v in hist] == [2, 4, 3]
+        assert [P.doc_version_of(d, inv, v) for v in hist] == [1, 3, 2]
         assert P.document_version_errors(line(j, "continued"), d, inv) == []
         assert errors(j) == []
 
