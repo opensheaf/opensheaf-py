@@ -1137,9 +1137,7 @@ def deposit(args):
                   "withdrawn (section 13.1)", file=sys.stderr)
         doc_version = max(doc_version_of(d, inv, v) for v in inv["versions"]) + 1
         owner = prev_obj.get("owner")
-    if args.created and args.available:
-        sys.exit("give --created (a version not public at the time) or --available, not both")
-    available = None if args.created else (args.available or TODAY)
+    available = args.available or TODAY
     issued = args.issued or (date_of(prev_dc, "Issued") if prev_dc else None) or available
 
     tmp = Path(tempfile.mkdtemp())
@@ -1195,7 +1193,7 @@ def deposit(args):
         "titles": [{"title": args.title}],
         "creators": [creator(a) for a in args.author],
         "publisher": {"name": ARCHIVE["name"]},
-        "publicationYear": int((issued or args.created)[:4]),
+        "publicationYear": int(issued[:4]),
         "types": {"resourceTypeGeneral": args.type},
         "version": str(doc_version),
         "url": landing_url(label),
@@ -1210,9 +1208,8 @@ def deposit(args):
         datacite["subjects"] = prev_dc["subjects"]
     if issued:
         set_date(datacite, "Issued", issued)
-    if available:
-        set_date(datacite, "Available", available, args.date_info)
-    else:
+    set_date(datacite, "Available", available, None if args.created else args.date_info)
+    if args.created:
         set_date(datacite, "Created", args.created, args.date_info)
     if abstract_text:
         datacite["descriptions"] = [{"description": abstract_text, "descriptionType": "Abstract"}]
@@ -1243,7 +1240,7 @@ def deposit(args):
         obj["changes"] = {"text": args.changes}
     if getattr(args, "agreement", None):
         obj["agreement"] = {"by": [c["name"] for c in datacite["creators"]],
-                            "date": available or args.created or TODAY, "method": args.agreement}
+                            "date": available, "method": args.agreement}
     if args.stage:
         obj["stage"] = {"scheme": "NISO-JAV", "value": args.stage}
     if getattr(args, "licence_file", None):

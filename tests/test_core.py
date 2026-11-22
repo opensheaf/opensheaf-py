@@ -700,7 +700,7 @@ def test_init_deposit(tmp_path):
         run(*r, "deposit", "first-paper", *paper, "--new")
     run(*r, "deposit", "first-paper", *paper, "--changes", "Typos.", "--available", "2025-02-03")
     run(*r, "deposit", "old-notes", "--pdf", str(pdf), "--no-source", "lost",
-        "--title", "Old notes", "--author", "Doe, Jane", "--available", "2019-05-01", "--new")
+        "--title", "Old notes", "--author", "Doe, Jane", "--created", "2019-05-01", "--new")
     run(*r, "collect")
     run(*r, "index")
     assert P.verify_errors() == []
@@ -719,6 +719,9 @@ def test_init_deposit(tmp_path):
     assert v2["changes"] == {"text": "Typos."}
     disc = json.loads((root / "opensheaf.json").read_text())
     assert {o.get("label") for o in disc["objects"]} == {"main", "first-paper", "old-notes", None}
+    notes = P.obj_dir(P.resolve("old-notes"))
+    dcn = P.read_json(notes, P.load_inventory(notes), "datacite.json", "v1")
+    assert (P.date_of(dcn, "Available"), P.date_of(dcn, "Created")) == (P.TODAY, "2019-05-01")
 
 
 def test_deposit_needs_pdf_or_texmacs(tmp_path):

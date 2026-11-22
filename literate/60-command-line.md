@@ -273,19 +273,19 @@ lists.
                    help='"Family, Given|Affiliation", as printed in the document')
 
 The dates follow section 4.4 of the specification. `--available` (also
-spelt `--date`) is when this version first became public, by default the
-day of the deposit; `--created` is for a version that was not public at the
-time; `--issued` is the first public appearance of the work. The stage is
+spelt `--date`) is when this version was first made available, by default
+the day of the deposit, public or not; `--created` is when a version
+deposited long after was written; `--issued` is the first public appearance of the work. The stage is
 one of the NISO Journal Article Versions (section 4.3). `--after N` places a
 version found later after document version N in the history (section 4.2)
 instead of making it the current version.
 
     # in the dates and the place of a deposited version:
     d.add_argument("--available", "--date", dest="available",
-                   help="when this version first became public (default: today, the deposit)")
-    d.add_argument("--created", help="when this version was written, for a version not public at the time")
+                   help="when this version was first made available (default: today, the deposit)")
+    d.add_argument("--created", help="when this version was written, for a version deposited long after")
     d.add_argument("--issued", help="first public appearance of the work (default: as before, or --available)")
-    d.add_argument("--date-info", help="how the date is known, e.g. 'from the file's modification time'")
+    d.add_argument("--date-info", help="how the date is known (of --created if given), e.g. 'from the file's modification time'")
     d.add_argument("--stage", choices=["AO", "SMUR", "AM", "P", "VoR", "CVoR", "EVoR"],
                    help="NISO-JAV stage of this version")
     d.add_argument("--changes", help="change note of this version")

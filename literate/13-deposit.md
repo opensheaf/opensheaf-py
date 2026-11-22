@@ -362,17 +362,17 @@ evidence of its branch point) are kept unchanged, byte for byte, and its
 
 ### Dates
 
-A version is either public (`Available`, by default the day of the
-deposit, which is what section 4.4 asks for a version first made public by
-the archive) or was not public at the time (`Created`: a manuscript
-deposited years later); never both. The `Issued` date, the first public
-appearance of the work, is the same in every version: given, or kept from
-the previous version, or else the date of this one.
+Every version has an `Available` date: when it was first made available,
+by default the day of the deposit, whether the archive is public or not
+(section 4.4); an earlier date is given for a version that appeared
+elsewhere first. A version deposited long after it was written (a
+manuscript found years later) also has a `Created` date, when it was
+written. The `Issued` date, the first public appearance of the work, is the
+same in every version: given, or kept from the previous version, or else
+the date of this one.
 
     # in the dates of a deposited version:
-    if args.created and args.available:
-        sys.exit("give --created (a version not public at the time) or --available, not both")
-    available = None if args.created else (args.available or TODAY)
+    available = args.available or TODAY
     issued = args.issued or (date_of(prev_dc, "Issued") if prev_dc else None) or available
 
 ### The files
@@ -463,7 +463,7 @@ the document version, as a string; the publication year is that of the
         "titles": [{"title": args.title}],
         "creators": [creator(a) for a in args.author],
         "publisher": {"name": ARCHIVE["name"]},
-        "publicationYear": int((issued or args.created)[:4]),
+        "publicationYear": int(issued[:4]),
         "types": {"resourceTypeGeneral": args.type},
         "version": str(doc_version),
         "url": landing_url(label),
@@ -478,9 +478,8 @@ the document version, as a string; the publication year is that of the
         datacite["subjects"] = prev_dc["subjects"]
     if issued:
         set_date(datacite, "Issued", issued)
-    if available:
-        set_date(datacite, "Available", available, args.date_info)
-    else:
+    set_date(datacite, "Available", available, None if args.created else args.date_info)
+    if args.created:
         set_date(datacite, "Created", args.created, args.date_info)
     if abstract_text:
         datacite["descriptions"] = [{"description": abstract_text, "descriptionType": "Abstract"}]
@@ -528,7 +527,7 @@ package.
         obj["changes"] = {"text": args.changes}
     if getattr(args, "agreement", None):
         obj["agreement"] = {"by": [c["name"] for c in datacite["creators"]],
-                            "date": available or args.created or TODAY, "method": args.agreement}
+                            "date": available, "method": args.agreement}
     if args.stage:
         obj["stage"] = {"scheme": "NISO-JAV", "value": args.stage}
     if getattr(args, "licence_file", None):

@@ -284,8 +284,10 @@ Dates
 DataCite records dates as a list of `{date, dateType}`, at most one per
 type for our purposes. The types used by OpenSheaf (section 4.4) each have one
 meaning: `Issued` the first public appearance of the work, the same in every
-version; `Available` when this document version became public; `Created`
-when a version not public at the time was written; `Updated` the latest
+version; `Available` when this document version was first made available,
+its deposit unless it appeared elsewhere first, whether the archive is public
+or not; `Created` when a version deposited long after was written (older
+versions may have it without `Available`); `Updated` the latest
 description-only version; `Withdrawn` the date of a withdrawal. Dates are
 information for readers: they never order versions.
 

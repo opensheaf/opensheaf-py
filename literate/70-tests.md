@@ -1054,7 +1054,9 @@ too; then a paper of which only the PDF remains. An unknown label without
 `--new` is refused, as is `--new` with a label in use. After `collect` the
 archive must verify. The second version must have kept the abstract and
 the licence of the first, since a new version inherits them unless they are
-given, and the discovery document lists the lines with their labels.
+given, and the discovery document lists the lines with their labels. Notes
+written long before their deposit are `Available` from the deposit, and
+also have the `Created` date given (section 4.4).
 
     # in test: deposits through osheaf:
     def test_init_deposit(tmp_path):
@@ -1073,7 +1075,7 @@ given, and the discovery document lists the lines with their labels.
             run(*r, "deposit", "first-paper", *paper, "--new")
         run(*r, "deposit", "first-paper", *paper, "--changes", "Typos.", "--available", "2025-02-03")
         run(*r, "deposit", "old-notes", "--pdf", str(pdf), "--no-source", "lost",
-            "--title", "Old notes", "--author", "Doe, Jane", "--available", "2019-05-01", "--new")
+            "--title", "Old notes", "--author", "Doe, Jane", "--created", "2019-05-01", "--new")
         run(*r, "collect")
         run(*r, "index")
         assert P.verify_errors() == []
@@ -1092,6 +1094,9 @@ given, and the discovery document lists the lines with their labels.
         assert v2["changes"] == {"text": "Typos."}
         disc = json.loads((root / "opensheaf.json").read_text())
         assert {o.get("label") for o in disc["objects"]} == {"main", "first-paper", "old-notes", None}
+        notes = P.obj_dir(P.resolve("old-notes"))
+        dcn = P.read_json(notes, P.load_inventory(notes), "datacite.json", "v1")
+        assert (P.date_of(dcn, "Available"), P.date_of(dcn, "Created")) == (P.TODAY, "2019-05-01")
 
 The archive typesets only TeXmacs sources. Any other source must come
 with its PDF; a deposit of a LaTeX source alone is refused.
