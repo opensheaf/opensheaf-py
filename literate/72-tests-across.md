@@ -533,6 +533,44 @@ index`.
         with pytest.raises(SystemExit, match="not a collection"):
             run("--root", str(a), "index")
 
+### Only http and https addresses become links
+
+A file of members that adds a `javascript:` URL, or a plain `http` one, to
+the `at` of a member already in a collection does not get it recorded: it
+is left out with a note, as `collection add` leaves it out. On the
+website, the addresses read from a member's other archive, or from its
+cached `at`, become links only if they are `http` or `https` URLs;
+anything else is shown as text.
+
+    # in across: collections:
+    def test_only_http_links(tmp_path, monkeypatch, capsys):
+        from opensheaf import html
+        p, a = make(tmp_path, "papers"), make(tmp_path, "author")
+        deposit(p, "one", "one", new=True)
+        spec = tmp_path / "list.yaml"
+        spec.write_text(f"title: A list\nmembers:\n  - '{uri(p, 'one')}'\n")
+        run("--root", str(a), "collection", "sync", "list", "--from", str(spec))
+        at = members(a, "list")["members"][0]["at"]
+        spec.write_text(f"title: A list\nmembers:\n  - uri: '{uri(p, 'one')}'\n"
+                        "    at: ['javascript:alert(1)//', 'http://example.com/']\n")
+        capsys.readouterr()
+        run("--root", str(a), "collection", "sync", "list", "--from", str(spec))
+        assert members(a, "list")["members"][0]["at"] == at
+        assert capsys.readouterr().out.count("not recorded") == 2
+        assert html.safe_url("javascript:alert(1)") == "" and html.safe_url(" https://x/") == ""
+        assert html.safe_url("HTTP://x/") == "HTTP://x/"
+        assert html.link("javascript:alert(1)", "x") == "x"
+        assert html.link("data:text/html,x", "x", "paper-title") == '<span class="paper-title">x</span>'
+        assert html.link("https://x/?a=1&b", "x") == '<a href="https://x/?a=1&amp;b">x</a>'
+        m = dict(members(a, "list")["members"][0], at=["javascript:alert(1)"])
+        monkeypatch.setattr(html, "remote_view", lambda m: None)
+        assert "href" not in html.remote_entry(m)
+        monkeypatch.setattr(html, "remote_view", lambda m: {
+            "archive": "Elsewhere", "at": "javascript:alert(2)", "pdf": "data:text/html,x",
+            "dc": {"titles": [{"title": "T"}], "creators": [], "url": "javascript:alert(3)"}})
+        out = html.remote_entry(m)
+        assert "href" not in out and "Elsewhere" in out and ">T<" in out
+
 Mirrors and key logs
 --------------------
 

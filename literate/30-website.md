@@ -213,6 +213,30 @@ the empty string.
     def esc(s):
         return html.escape(s or "", quote=True)
 
+Escaping is not enough for an address. A URL read from the files, ours or
+another archive's (the `url` of a member's DataCite record, its `at`, the
+`record` of an external entry, a `rightsUri`, a keeper), becomes a link
+only if it is an `http` or `https` URL: a `javascript:` or `data:` URL,
+escaped, is still a script that runs when the reader clicks it. Plain
+`http` is let through because the licences of arXiv are named by `http`
+URIs (`http://creativecommons.org/licenses/by/4.0/`); the bases in `at`,
+which are fetched, are held to `https` where they are recorded. Any other
+value is shown as text, without a link.
+
+    # in escaping text for HTML:
+    def safe_url(u):
+        """U if it is an http or https URL, which a page may link to; else ""."""
+        return u if isinstance(u, str) and u.lower().startswith(("https://", "http://")) else ""
+
+
+    def link(u, label, cls=""):
+        """LABEL (HTML, escaped already) linked to the URL U if it is safe_url, else LABEL alone."""
+        u = safe_url(u)
+        attr = f' class="{cls}"' if cls else ""
+        if u:
+            return f'<a{attr} href="{esc(u)}">{label}</a>'
+        return f'<span{attr}>{label}</span>' if cls else label
+
 Mathematics in titles and abstracts is written in LaTeX between dollar
 signs (section 4.4) and is left as it is: MathJax, loaded by the
 templates, typesets it in the reader's browser, without running scripts
@@ -606,7 +630,7 @@ the citation.
     rights = (dc.get("rightsList") or [{}])[0]
     licence = esc(rights.get("rights", ""))
     if rights.get("rightsUri"):
-        licence = f'<a href="{esc(rights["rightsUri"])}">{licence}</a>'
+        licence = link(rights["rightsUri"], licence)
     cite_url = f"https://doi.org/{dc['doi']}" if dc.get("doi") else f"{base}paper/{line.slug}/"
     cite = esc(f"{authors(dc)}. {dc['titles'][0]['title']}. {P.ARCHIVE['name']}, "
                f"{(issued or '')[:4]}, version {obj['documentVersion']}.") \
@@ -757,7 +781,7 @@ deposit with Zenodo (appendix A.1) is shown by its record.
     for e in obj.get("external", []):
         if e.get("record"):
             label = f"arXiv:{arxiv}" if e.get("service") == "arXiv" and arxiv else e["service"]
-            files.append(f'<a href="{esc(e["record"])}">{esc(label)}</a>')
+            files.append(link(e["record"], esc(label)))
     if arxiv and not any(e.get("service") == "arXiv" for e in obj.get("external", [])):
         files.append(f'<a href="https://arxiv.org/abs/{esc(arxiv)}">arXiv:{esc(arxiv)}</a>')
     if dc.get("doi"):
@@ -774,10 +798,10 @@ to it, as stored in that version.
     for k, x in enumerate(notices, 1):
         if x["documentVersion"] == n and k not in replaced:
             src = line.signed or line.inv["head"]
-            link = f' {file_link(root, line, src, x["path"], "statement")}' if x.get("path") else ""
+            statement = f' {file_link(root, line, src, x["path"], "statement")}' if x.get("path") else ""
             repl = f', replacing notice {x["replaces"]}' if x.get("replaces") else ""
             out.append(f'<div class="notice"><strong>Notice {k} ({esc(fmt_date(x["date"]))}{repl}):</strong> '
-                       f'{esc(x.get("text", ""))}{link}</div>')
+                       f'{esc(x.get("text", ""))}{statement}</div>')
 
 ### Tags for search engines
 
@@ -835,7 +859,7 @@ the page.
              ' type="application/vnd.datacite.datacite+json">']
     if pdf:
         tags.append(f'<link rel="item" href="{esc(pdf)}" type="application/pdf">')
-    if rights.get("rightsUri"):
+    if safe_url(rights.get("rightsUri")):
         tags.append(f'<link rel="license" href="{esc(rights["rightsUri"])}">')
 
 The schema.org `ScholarlyArticle` record, in JSON-LD, says the same for
@@ -854,7 +878,7 @@ as the same string.
         ld["encoding"] = {"@type": "MediaObject", "contentUrl": pdf, "encodingFormat": "application/pdf"}
     if abstract:
         ld["abstract"] = abstract
-    if rights.get("rightsUri"):
+    if safe_url(rights.get("rightsUri")):
         ld["license"] = rights["rightsUri"]
     tags.append('<script type="application/ld+json">'
                 + json.dumps(ld, ensure_ascii=False).replace("</", "<\\/") + "</script>")
@@ -1130,10 +1154,10 @@ whose archives do not answer shows the cached citation, and says so.
             dc = view["dc"]
             title, by, abstract = dc["titles"][0]["title"], authors(dc), abstract_html(dc)
             if view.get("pdf"):
-                links.append(f'<a href="{esc(view["pdf"])}">PDF</a>')
-            landing = dc.get("url", "")
+                links.append(link(view["pdf"], "PDF"))
+            landing = safe_url(dc.get("url"))
             if landing:
-                links.insert(0, f'<a href="{esc(landing)}">landing page</a>')
+                links.insert(0, link(landing, "landing page"))
             withdrawn = withdrawal_html(view.get("state", {}), " by its owner")
         <<the entry of a member of another archive>>
 
@@ -1152,7 +1176,7 @@ the withdrawal (section 8.3), said to come from its owner (section 8.4).
         f'<div class="paper-authors">{esc(by)}</div>',
         f'<div class="paper-meta">{esc(str(year))}'
         + (f' · {owner_tag(m["owner"], root)}' if show_owner else "")
-        + f' · in <a href="{esc(at)}">{esc(archive_name)}</a>'
+        + f' · in {link(at, esc(archive_name))}'
         + (f' · {versions_line(m, {})}' if m.get("revisions") else "")
         + (" · " + " · ".join(links) if links else "")
         + f' · <span class="pin" title="{pin}">pin {pin[:32]}…</span></div>',
@@ -1280,7 +1304,7 @@ reads, so that the tests write the same pages from the same files.
         if not keeper:
             return ""
         mark = " (confirmed)" if keeper_link(log).status == owners.CONFIRMED else ""
-        return f'<a href="{esc(keeper)}">{esc(keeper)}</a>{mark}'
+        return f'{link(keeper, esc(keeper))}{mark}'
 
 
     def owner_html(owner, root):

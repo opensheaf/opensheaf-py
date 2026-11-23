@@ -173,9 +173,14 @@ def target(r, text, where):
     return nm, owner, u, places
 
 
+def https_bases(places):
+    """The https base URLs among PLACES, the only ones a member records in at (section 8.2)."""
+    return [w for w in places if isinstance(w, str) and w.startswith("https://") and w.endswith("/")]
+
+
 def recorded_at(found, places):
     """The base URLs a member records in at (section 8.2)."""
-    out = [w for w in places if isinstance(w, str) and w.startswith("https://") and w.endswith("/")]
+    out = https_bases(places)
     c = found.copy
     if c is not None and c.where == "here":
         out.append(P.ARCHIVE["baseUrl"])
@@ -442,8 +447,12 @@ def sync_member(r, entry, kind, old_members):
     old = next((m for m in old_members if (m["name"], m["owner"]) == (nm, owner)), None)
     if old is not None and not (u is not None and u.sha512):
         m = json.loads(json.dumps(old))
-        if at:
-            m["at"] = list(dict.fromkeys(at + m["at"]))
+        added = https_bases(at)
+        for w in at:
+            if w not in added:
+                print(f"{text}: at {w}: not an https base URL ending in /: not recorded")
+        if added:
+            m["at"] = list(dict.fromkeys(added + m["at"]))
         if kind == "catalogue":
             m.pop("follow", None)
             if follow:

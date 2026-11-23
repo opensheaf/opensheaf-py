@@ -400,6 +400,35 @@ def test_featured_collection_on_the_home_page(tmp_path):
         run("--root", str(a), "index")
 
 
+def test_only_http_links(tmp_path, monkeypatch, capsys):
+    from opensheaf import html
+    p, a = make(tmp_path, "papers"), make(tmp_path, "author")
+    deposit(p, "one", "one", new=True)
+    spec = tmp_path / "list.yaml"
+    spec.write_text(f"title: A list\nmembers:\n  - '{uri(p, 'one')}'\n")
+    run("--root", str(a), "collection", "sync", "list", "--from", str(spec))
+    at = members(a, "list")["members"][0]["at"]
+    spec.write_text(f"title: A list\nmembers:\n  - uri: '{uri(p, 'one')}'\n"
+                    "    at: ['javascript:alert(1)//', 'http://example.com/']\n")
+    capsys.readouterr()
+    run("--root", str(a), "collection", "sync", "list", "--from", str(spec))
+    assert members(a, "list")["members"][0]["at"] == at
+    assert capsys.readouterr().out.count("not recorded") == 2
+    assert html.safe_url("javascript:alert(1)") == "" and html.safe_url(" https://x/") == ""
+    assert html.safe_url("HTTP://x/") == "HTTP://x/"
+    assert html.link("javascript:alert(1)", "x") == "x"
+    assert html.link("data:text/html,x", "x", "paper-title") == '<span class="paper-title">x</span>'
+    assert html.link("https://x/?a=1&b", "x") == '<a href="https://x/?a=1&amp;b">x</a>'
+    m = dict(members(a, "list")["members"][0], at=["javascript:alert(1)"])
+    monkeypatch.setattr(html, "remote_view", lambda m: None)
+    assert "href" not in html.remote_entry(m)
+    monkeypatch.setattr(html, "remote_view", lambda m: {
+        "archive": "Elsewhere", "at": "javascript:alert(2)", "pdf": "data:text/html,x",
+        "dc": {"titles": [{"title": "T"}], "creators": [], "url": "javascript:alert(3)"}})
+    out = html.remote_entry(m)
+    assert "href" not in out and "Elsewhere" in out and ">T<" in out
+
+
 def test_mirror(tmp_path, capsys):
     a, lib = make(tmp_path, "authors"), make(tmp_path, "library")
     deposit(a, "open", "one", new=True)

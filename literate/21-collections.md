@@ -362,9 +362,14 @@ pins only signed versions, and a contested one is never a verified member
         return nm, owner, u, places
 
 
+    def https_bases(places):
+        """The https base URLs among PLACES, the only ones a member records in at (section 8.2)."""
+        return [w for w in places if isinstance(w, str) and w.startswith("https://") and w.endswith("/")]
+
+
     def recorded_at(found, places):
         """The base URLs a member records in at (section 8.2)."""
-        out = [w for w in places if isinstance(w, str) and w.startswith("https://") and w.endswith("/")]
+        out = https_bases(places)
         c = found.copy
         if c is not None and c.where == "here":
             out.append(P.ARCHIVE["baseUrl"])
@@ -658,7 +663,11 @@ An entry of the file: a URI or a label as a string, or a mapping with
 `uri` or `label`, and optionally `at`, `follow` and `revisions`. A member
 already in the collection keeps its pin, its `at` and its citation unless
 the entry says otherwise; a pin, revisions not yet vetted, or a new
-member are resolved.
+member are resolved. The locations an entry adds to the `at` of a member
+already there are held to the same rule as those of a new one: only
+`https` base URLs are recorded, the others are left out with a note, so
+that a file of members cannot put another kind of address into a
+collection, and from there into the links of a website.
 
     # in collections: the commands:
     def sync_member(r, entry, kind, old_members):
@@ -677,8 +686,12 @@ member are resolved.
         old = next((m for m in old_members if (m["name"], m["owner"]) == (nm, owner)), None)
         if old is not None and not (u is not None and u.sha512):
             m = json.loads(json.dumps(old))
-            if at:
-                m["at"] = list(dict.fromkeys(at + m["at"]))
+            added = https_bases(at)
+            for w in at:
+                if w not in added:
+                    print(f"{text}: at {w}: not an https base URL ending in /: not recorded")
+            if added:
+                m["at"] = list(dict.fromkeys(added + m["at"]))
             if kind == "catalogue":
                 m.pop("follow", None)
                 if follow:
