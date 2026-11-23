@@ -794,10 +794,14 @@ under the owner name, and prints its `did:key`, which a new version of the
 key log adds to the current keys (`osheaf owner rotate --add`), with the
 rotation keys kept apart. Until then it signs nothing. With
 `OPENSHEAF_KEY_STORE=none`, which keeps no key on the device, it refuses.
+`--owner` must be an owner name, as for `osheaf key import`: it names the
+store the key goes to.
 
     # in a new current key for this device:
     def key_new(args):
         owner = getattr(args, "owner", None) or ARCHIVE["owner"]
+        if not isinstance(owner, str) or not names.OWNER_NAME.match(owner):
+            stop(f"--owner: an owner name, not {owner!r}")
         if not keys.kept_on_device():
             stop(NOT_KEPT)
         key = keys.new_key()

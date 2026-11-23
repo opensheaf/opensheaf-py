@@ -3827,6 +3827,8 @@ def owner_show(args):
 
 def key_new(args):
     owner = getattr(args, "owner", None) or ARCHIVE["owner"]
+    if not isinstance(owner, str) or not names.OWNER_NAME.match(owner):
+        stop(f"--owner: an owner name, not {owner!r}")
     if not keys.kept_on_device():
         stop(NOT_KEPT)
     key = keys.new_key()

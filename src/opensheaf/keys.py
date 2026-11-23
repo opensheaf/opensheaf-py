@@ -113,14 +113,20 @@ def kept_on_device():
     return os.environ.get(KEY_STORE) != NONE
 
 
+def _owner(owner):
+    if not isinstance(owner, str) or not names.OWNER_NAME.match(owner):
+        raise KeyStoreError(f"not an owner name: {owner!r}")
+    return owner
+
+
 def _account(owner, kid):
-    return f"{owner}:{kid}"
+    return f"{_owner(owner)}:{kid}"
 
 
 def key_folder(owner):
     """The folder of the key files of OWNER in the user's configuration."""
     base = os.environ.get("XDG_CONFIG_HOME") or str(Path.home() / ".config")
-    return Path(base) / "opensheaf" / "keys" / owner
+    return Path(base) / "opensheaf" / "keys" / _owner(owner)
 
 
 _SEEN = {}

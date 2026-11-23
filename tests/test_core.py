@@ -1113,6 +1113,21 @@ def test_rotation_keys_are_checked(tmp_path, monkeypatch):
     assert P.key_log(P.ARCHIVE["owner"]).ended
 
 
+def test_key_new_takes_an_owner_name_only(tmp_path):
+    root = tmp_path / "a"
+    make_archive(root)
+    r = ["--root", str(root)]
+    for bad in ("../..", "../../escaped", "a b", "-w", P.ARCHIVE["owner"].upper()):
+        with pytest.raises(SystemExit, match="an owner name"):
+            run(*r, "key", "new", f"--owner={bad}")
+        with pytest.raises(keys.KeyStoreError, match="not an owner name"):
+            keys.store_current_key(bad, keys.Key(bytes(32)))
+        with pytest.raises(keys.KeyStoreError, match="not an owner name"):
+            keys.current_keys(bad, [keys.Key(bytes(32)).did])
+    assert not (tmp_path / "escaped").exists()
+    assert sorted(p.name for p in (tmp_path / "config" / "opensheaf" / "keys").iterdir()) == [P.ARCHIVE["owner"]]
+
+
 def test_single_rotation_key_and_confirmation(tmp_path, monkeypatch, capsys):
     root = tmp_path / "s"
     make_archive(root, "S", "--single-rotation-key")

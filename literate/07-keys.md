@@ -206,6 +206,12 @@ order, as for the tokens of Zenodo:
 The variable `OPENSHEAF_KEY_STORE` restricts the stores to one, for a user
 who wants to know where the key is, and for the tests.
 
+The owner is part of the name a key is kept under, in every store, and of
+the folder of its key files: it must be an owner name (section 5.2), 52
+characters of base32, so that `../..` cannot leave the folder of keys, nor
+a space or an option reach the `security` command. Any other value is
+refused before a store is read or written.
+
 `OPENSHEAF_KEY_STORE=none` keeps no current key on the computer at all:
 a key lives in the memory of the command that needs it, and nowhere else.
 When a command signs, it opens the current key from the owner's key wallet
@@ -240,14 +246,20 @@ it, refuse.
         return os.environ.get(KEY_STORE) != NONE
 
 
+    def _owner(owner):
+        if not isinstance(owner, str) or not names.OWNER_NAME.match(owner):
+            raise KeyStoreError(f"not an owner name: {owner!r}")
+        return owner
+
+
     def _account(owner, kid):
-        return f"{owner}:{kid}"
+        return f"{_owner(owner)}:{kid}"
 
 
     def key_folder(owner):
         """The folder of the key files of OWNER in the user's configuration."""
         base = os.environ.get("XDG_CONFIG_HOME") or str(Path.home() / ".config")
-        return Path(base) / "opensheaf" / "keys" / owner
+        return Path(base) / "opensheaf" / "keys" / _owner(owner)
 
 Reading a seed from a store is a lookup by owner and key name: the caller
 knows which keys it may use, the `keys` of the latest version of the key

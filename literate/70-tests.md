@@ -1598,6 +1598,26 @@ is made fast for the test.
         run(*r, "owner", "end", "--rotation-key", rk2[0], "--rotation-key", rk2[1])
         assert P.key_log(P.ARCHIVE["owner"]).ended
 
+`key new --owner` takes an owner name only, as `key import` does: the
+owner names the store a key goes to, and `../..` or a value with a space
+would leave the folder of keys or reach the `security` command. The key
+stores refuse such a value too, whoever asks.
+
+    # in test: owners and keys through osheaf:
+    def test_key_new_takes_an_owner_name_only(tmp_path):
+        root = tmp_path / "a"
+        make_archive(root)
+        r = ["--root", str(root)]
+        for bad in ("../..", "../../escaped", "a b", "-w", P.ARCHIVE["owner"].upper()):
+            with pytest.raises(SystemExit, match="an owner name"):
+                run(*r, "key", "new", f"--owner={bad}")
+            with pytest.raises(keys.KeyStoreError, match="not an owner name"):
+                keys.store_current_key(bad, keys.Key(bytes(32)))
+            with pytest.raises(keys.KeyStoreError, match="not an owner name"):
+                keys.current_keys(bad, [keys.Key(bytes(32)).did])
+        assert not (tmp_path / "escaped").exists()
+        assert sorted(p.name for p in (tmp_path / "config" / "opensheaf" / "keys").iterdir()) == [P.ARCHIVE["owner"]]
+
 The minimal setup, one rotation key with a `nextThreshold` of 1, is made on
 request only, and its risk is stated (section 6.2). The export is
 confirmed by typing back the check of each key: a wrong check writes
