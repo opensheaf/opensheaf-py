@@ -574,6 +574,22 @@ one that is not a version (rule 6), or None when the reader cannot reach it.
                 return c
         return None
 
+A judgement needs the version found even when it is not a version, to say
+why a signature is invalid; a pin does not. Whatever stands on a version
+of the key log for itself (a pin `sheaf:<owner>/vN?sha512=...` that
+resolves, a tombstone that lets a key log return) asks `verified`, which
+gives only a version that passed the checks below: a version of the key
+log held, the valid fork record among them, or one that record carries. A
+version held with the right number and digest but forged, unsigned or
+following a broken one is not enough.
+
+    # in owners: what a key log says:
+    def verified(self, number, digest):
+        """The version NUMBER whose inventory has DIGEST if it is a version of the key log
+        (section 14.3), held or carried by the valid fork record; else None."""
+        v = self.lookup(number, digest)
+        return v if v is not None and v.is_version else None
+
 ### Checking a key log
 
 The checks follow section 14.3, version by version from the first, since

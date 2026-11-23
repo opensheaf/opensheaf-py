@@ -1015,7 +1015,10 @@ The fields of a member, by the type of its collection.
         elif len({r["documentVersion"] for r in revs}) != len(revs):
             f.error(who, "a document version is vetted twice")
 
-The pins of a member held in the archive.
+The pins of a member held in the archive. A key log has no statuses of
+signed versions: a member that pins one of its versions is checked
+against the key log held, whose version must have passed its checks
+(section 14.3), not merely be there with the digest pinned.
 
     # in check the pins of a member held in the archive:
     md, minv = found[mid]
@@ -1038,6 +1041,10 @@ The pins of a member held in the archive.
             f.error(f"{who} {pv}", "not a version: a collection pins only signed versions (section 8.5)")
         elif s in (sign.UNCHECKED, sign.CONTESTED):
             f.warning(f"{who} {pv}", f"{s} (section 8.5)")
+        log = logs.get(m.get("owner")) if m.get("name") == m.get("owner") else None
+        if log is not None and log.verified(int(pv[1:]), pin) is None:
+            f.error(f"{who} {pv}", "not a version of the key log: a collection pins only versions (sections 6.1 "
+                    "and 8.5)")
         <<report a member pinning a withdrawn document version>>
     if kind == "selection" and sts:
         signed = sign.latest_signed(sts)

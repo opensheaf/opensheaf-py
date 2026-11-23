@@ -537,6 +537,31 @@ def test_owner_pull_and_a_fork_of_the_key_log(tmp_path, capsys):
     assert P.key_log(owner).fork_point == 3
 
 
+def test_a_pin_to_a_key_log_version_that_is_not_one(tmp_path):
+    from opensheaf import collections
+    a = make(tmp_path, "a")
+    owner = P.ARCHIVE["owner"]
+    rk = rotation_files(tmp_path / "a-keys")
+    run("--root", str(a), "owner", "rotate", "--rotation-key", rk[0], "--rotation-key", rk[1],
+        "--export", str(tmp_path / "k2"), "--no-passphrase", "--yes")
+    P.configure(a)
+    kd = P.obj_dir(names.object_id(owner, owner))
+    dig = P.digest(kd / "v2" / "inventory.json")
+    member = {"kind": "owner", "name": owner, "owner": owner, "at": ["https://example.org/a/"],
+              "version": "v2", "inventorySha512": dig}
+    collections.write(None, {"format": collections.FORMAT, "type": "catalogue", "order": "manual",
+                             "members": [member]}, message="test", title="Keys", owner=owner, label="keys")
+    with remote.Resolver(here=False) as r:
+        assert r.pin(owner, owner, "v2", dig, [str(a)]).status == "verified"
+    assert not [e for e in errors(a) if "not a version of the key log" in e]
+    shutil.rmtree(kd / sign.WITNESSES / "v2")
+    P.configure(a)
+    assert P.key_log(owner).lookup(2, dig) is not None and P.key_log(owner).verified(2, dig) is None
+    with remote.Resolver(here=False) as r:
+        assert r.pin(owner, owner, "v2", dig, [str(a)]).status == "not a version"
+    assert any("not a version of the key log" in e for e in errors(a))
+
+
 def test_sign_again(tmp_path):
     a = make(tmp_path, "a")
     first = P.key_log(P.ARCHIVE["owner"]).latest().keys["keys"][0]

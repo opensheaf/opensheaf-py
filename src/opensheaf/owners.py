@@ -379,6 +379,12 @@ class KeyLog:
                 return c
         return None
 
+    def verified(self, number, digest):
+        """The version NUMBER whose inventory has DIGEST if it is a version of the key log
+        (section 14.3), held or carried by the valid fork record; else None."""
+        v = self.lookup(number, digest)
+        return v if v is not None and v.is_version else None
+
     def check(self):
         """The errors and warnings of the key log (section 14.3), as two lists of strings."""
         if self._checked is not None:

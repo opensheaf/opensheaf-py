@@ -164,7 +164,7 @@ tombstone is then dropped.
             w, first = others[0]
             first.check()
             from . import takedown
-            if not takedown.may_return(oid, lambda n, d: first.lookup(n, d) is not None):
+            if not takedown.may_return(oid, lambda n, d: first.verified(n, d) is not None):
                 print(f"warning: the key log of {owner} was taken down here, and the copy at {w} does not "
                       "hold the version its tombstone pins (section 13.2): not copied", file=sys.stderr)
                 return None

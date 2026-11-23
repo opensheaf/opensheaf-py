@@ -711,6 +711,38 @@ indexes list the version it carries.
         P.configure(a)
         assert P.key_log(owner).fork_point == 3
 
+A pin of a key-log version resolves only to a version of the key log. Once
+the signatures of v2 are gone, v2 is still held with the number and digest
+pinned, but it is no longer a version of the key log: the pin is "not a
+version", never verified. A collection held here that pins it (by hand:
+the tools pin only documents and collections, and the schema says so) is
+reported by the verifier.
+
+    # in across: mirrors and key logs:
+    def test_a_pin_to_a_key_log_version_that_is_not_one(tmp_path):
+        from opensheaf import collections
+        a = make(tmp_path, "a")
+        owner = P.ARCHIVE["owner"]
+        rk = rotation_files(tmp_path / "a-keys")
+        run("--root", str(a), "owner", "rotate", "--rotation-key", rk[0], "--rotation-key", rk[1],
+            "--export", str(tmp_path / "k2"), "--no-passphrase", "--yes")
+        P.configure(a)
+        kd = P.obj_dir(names.object_id(owner, owner))
+        dig = P.digest(kd / "v2" / "inventory.json")
+        member = {"kind": "owner", "name": owner, "owner": owner, "at": ["https://example.org/a/"],
+                  "version": "v2", "inventorySha512": dig}
+        collections.write(None, {"format": collections.FORMAT, "type": "catalogue", "order": "manual",
+                                 "members": [member]}, message="test", title="Keys", owner=owner, label="keys")
+        with remote.Resolver(here=False) as r:
+            assert r.pin(owner, owner, "v2", dig, [str(a)]).status == "verified"
+        assert not [e for e in errors(a) if "not a version of the key log" in e]
+        shutil.rmtree(kd / sign.WITNESSES / "v2")
+        P.configure(a)
+        assert P.key_log(owner).lookup(2, dig) is not None and P.key_log(owner).verified(2, dig) is None
+        with remote.Resolver(here=False) as r:
+            assert r.pin(owner, owner, "v2", dig, [str(a)]).status == "not a version"
+        assert any("not a version of the key log" in e for e in errors(a))
+
 Signing again
 -------------
 

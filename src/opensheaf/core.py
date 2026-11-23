@@ -2812,6 +2812,10 @@ def check_members(f, found, logs, statuses, tombstoned, schema, obj_id, d, inv, 
                         f.error(f"{who} {pv}", "not a version: a collection pins only signed versions (section 8.5)")
                     elif s in (sign.UNCHECKED, sign.CONTESTED):
                         f.warning(f"{who} {pv}", f"{s} (section 8.5)")
+                    log = logs.get(m.get("owner")) if m.get("name") == m.get("owner") else None
+                    if log is not None and log.verified(int(pv[1:]), pin) is None:
+                        f.error(f"{who} {pv}", "not a version of the key log: a collection pins only versions (sections 6.1 "
+                                "and 8.5)")
                     signed = sign.latest_signed(sts) if sts else None
                     if ver == inv["head"] and signed:
                         withdrawn = withdrawn_versions(md, minv, f"v{signed}")

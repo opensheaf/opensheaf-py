@@ -802,7 +802,8 @@ it is (section 12.3).
 
 A version of a key log is looked up in the key log met, where it is held
 or carried by a fork record (section 6.3); it counts as signed when it is
-a version of the key log.
+a version of the key log: a version held with that number and digest
+that fails the checks of the key log (section 14.3) is not a version.
 
 The answer is a `Found`: the status, the copy and version where it was
 found, and the notes.
@@ -813,9 +814,10 @@ found, and the notes.
         if nm == owner:
             log = self.key_log(owner, self.where(where))
             v = log.lookup(int(version[1:]), digest) if log else None
-            if v is not None:
+            if v is not None and log.verified(int(version[1:]), digest) is not None:
                 return Found("verified", version=version, digest=digest, log=log)
-            return Found("unavailable" if log is None else "mismatch", version=version, digest=digest, log=log)
+            status = "unavailable" if log is None else "mismatch" if v is None else "not a version"
+            return Found(status, version=version, digest=digest, log=log)
         copies = self.copies(nm, owner, where)
         n = int(version[1:])
         for c in copies:

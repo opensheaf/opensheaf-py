@@ -537,9 +537,10 @@ class Resolver:
         if nm == owner:
             log = self.key_log(owner, self.where(where))
             v = log.lookup(int(version[1:]), digest) if log else None
-            if v is not None:
+            if v is not None and log.verified(int(version[1:]), digest) is not None:
                 return Found("verified", version=version, digest=digest, log=log)
-            return Found("unavailable" if log is None else "mismatch", version=version, digest=digest, log=log)
+            status = "unavailable" if log is None else "mismatch" if v is None else "not a version"
+            return Found(status, version=version, digest=digest, log=log)
         copies = self.copies(nm, owner, where)
         n = int(version[1:])
         for c in copies:
