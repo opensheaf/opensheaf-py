@@ -424,9 +424,58 @@ def test_only_http_links(tmp_path, monkeypatch, capsys):
     assert "href" not in html.remote_entry(m)
     monkeypatch.setattr(html, "remote_view", lambda m: {
         "archive": "Elsewhere", "at": "javascript:alert(2)", "pdf": "data:text/html,x",
-        "dc": {"titles": [{"title": "T"}], "creators": [], "url": "javascript:alert(3)"}})
+        "title": "T", "by": "", "abstract": "", "landing": "javascript:alert(3)", "withdrawn": ""})
     out = html.remote_entry(m)
     assert "href" not in out and "Elsewhere" in out and ">T<" in out
+
+
+def forge(d, ver, logical, data):
+    """Put DATA in place of LOGICAL in vVER of the object in D, its inventory rewritten to match."""
+    p = d / ver / "inventory.json"
+    inv = json.loads(p.read_text())
+    old = next(dg for dg, ps in inv["versions"][ver]["state"].items() if logical in ps)
+    cp = inv["manifest"].pop(old)[0]
+    (d / cp).write_bytes(data)
+    new = names.sha512_hex(data)
+    inv["manifest"][new] = [cp]
+    inv["versions"][ver]["state"][new] = inv["versions"][ver]["state"].pop(old)
+    raw = json.dumps(inv).encode()
+    p.write_bytes(raw)
+    (d / "inventory.json").write_bytes(raw)
+    return names.sha512_hex(raw)
+
+
+def test_a_member_elsewhere_whose_files_are_not_those_pinned(tmp_path):
+    from opensheaf import collections
+    p, a = make(tmp_path, "papers"), make(tmp_path, "author")
+    deposit(p, "one", "one", new=True)
+    spec = tmp_path / "list.yaml"
+    spec.write_text(f"title: A list\ntype: catalogue\nmembers:\n  - '{uri(p, 'one')}'\n")
+    run("--root", str(a), "collection", "sync", "list", "--from", str(spec))
+    cfg = json.loads((a / "osheaf.json").read_text())
+    cfg["index"] = {"html": {"featured": "list"}}
+    (a / "osheaf.json").write_text(json.dumps(cfg))
+    run("--root", str(a), "index")
+    home = (a / "index.html").read_text()
+    assert ">One</a>" in home and "cached citation" not in home
+    d = P.obj_dir(line(p, "one"))
+    inv = P.load_inventory(d)
+    dc_path = d / P.content_path(inv, "v1", "datacite.json")
+    saved = dc_path.read_bytes()
+    dc_path.write_bytes(saved.replace(b'"One"', b'"Forged"'))
+    run("--root", str(a), "index")
+    home = (a / "index.html").read_text()
+    assert "Forged" not in home and "archive unavailable: cached citation" in home
+    dc = json.loads(saved)
+    dc["titles"] = []
+    pin = forge(d, "v1", "datacite.json", json.dumps(dc).encode())
+    P.configure(a)
+    m = members(a, "list")["members"][0]
+    collections.write(line(a, "list"), dict(members(a, "list"), members=[dict(m, inventorySha512=pin)]),
+                      message="a pin by hand")
+    run("--root", str(a), "index")
+    home = (a / "index.html").read_text()
+    assert "archive unavailable: cached citation" in home and ">One<" in home
 
 
 def test_mirror(tmp_path, capsys):

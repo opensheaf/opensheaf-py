@@ -525,18 +525,15 @@ def remote_entry(m, root="", show_owner=False):
                      'pin</span>')
     else:
         archive_name, at = view["archive"], view["at"]
-        dc = view["dc"]
-        title, by, abstract = dc["titles"][0]["title"], authors(dc), abstract_html(dc)
+        title, by, abstract, withdrawn = view["title"], view["by"], view["abstract"], view["withdrawn"]
         if view.get("pdf"):
             links.append(link(view["pdf"], "PDF"))
-        landing = safe_url(dc.get("url"))
+        landing = view["landing"]
         if landing:
             links.insert(0, link(landing, "landing page"))
-        withdrawn = withdrawal_html(view.get("state", {}), " by its owner")
     return "\n".join([
         f'<li class="paper member{" withdrawn" if withdrawn else ""}">',
-        (f'<a class="paper-title" href="{esc(landing)}">{esc(title)}</a>' if landing
-         else f'<span class="paper-title">{esc(title)}</span>'),
+        link(landing, esc(title), "paper-title"),
         f'<div class="paper-authors">{esc(by)}</div>',
         f'<div class="paper-meta">{esc(str(year))}'
         + (f' · {owner_tag(m["owner"], root)}' if show_owner else "")
@@ -550,9 +547,9 @@ def remote_entry(m, root="", show_owner=False):
 
 
 def remote_view(m):
-    """{archive, at, dc, pdf, state} of member M, read at the first of its at that answers
-    and whose copy matches the pin; {archive, at, mismatch} for a copy that does not
-    match; None if none answers."""
+    """{archive, at, dc, pdf, state, title, by, abstract, landing, withdrawn} of member M,
+    read at the first of its at that answers and whose copy matches the pin; {archive, at,
+    mismatch} for a copy that does not match; None if none answers."""
     obj_id = names.object_id(m["name"], m["owner"])
     pin_ver, pin = P.member_pins(m)[-1][:2]
     for at in m.get("at", []):
@@ -563,14 +560,18 @@ def remote_view(m):
             data = src.get(f"{path}/{pin_ver}/inventory.json")
             if data is None:
                 continue
-            view = {"archive": disc.get("name") or at, "at": src.at or at}
+            name = disc.get("name")
+            view = {"archive": name if isinstance(name, str) and name else at, "at": src.at or at}
             if names.sha512_hex(data) != pin:
                 return dict(view, mismatch=True)
             inv = json.loads(data)
 
             def read(ver, logical, inv=inv):
-                cp = P.content_path(inv, ver, logical)
+                dig = next((dg for dg, ps in inv["versions"][ver]["state"].items() if logical in ps), None)
+                cp = inv["manifest"][dig][0] if dig else None
                 raw = src.get(f"{path}/{cp}") if cp and remote.safe_path(cp) else None
+                if raw is not None and names.sha512_hex(raw) != dig:
+                    raise ValueError(f"{cp}: not the file its inventory names")
                 return json.loads(raw) if raw else None
             if m.get("revisions"):
                 shown = pin_ver
@@ -597,8 +598,14 @@ def remote_view(m):
                 view["state"] = state if state and state.get("status") == "withdrawn" else {"status": "withdrawn"}
             if not view["dc"]:
                 continue
+            dc = view["dc"]
+            view.update(title=dc["titles"][0]["title"], by=authors(dc), abstract=abstract_html(dc),
+                        landing=safe_url(dc.get("url")),
+                        withdrawn=withdrawal_html(view.get("state", {}), " by its owner"))
+            if not isinstance(view["title"], str) or not isinstance(view["by"], str):
+                continue
             return view
-        except (remote.Unavailable, ValueError, KeyError, TypeError, AttributeError):
+        except (remote.Unavailable, ValueError, KeyError, IndexError, TypeError, AttributeError):
             continue
     return None
 

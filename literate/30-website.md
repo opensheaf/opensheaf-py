@@ -1151,14 +1151,12 @@ whose archives do not answer shows the cached citation, and says so.
                          'pin</span>')
         else:
             archive_name, at = view["archive"], view["at"]
-            dc = view["dc"]
-            title, by, abstract = dc["titles"][0]["title"], authors(dc), abstract_html(dc)
+            title, by, abstract, withdrawn = view["title"], view["by"], view["abstract"], view["withdrawn"]
             if view.get("pdf"):
                 links.append(link(view["pdf"], "PDF"))
-            landing = safe_url(dc.get("url"))
+            landing = view["landing"]
             if landing:
                 links.insert(0, link(landing, "landing page"))
-            withdrawn = withdrawal_html(view.get("state", {}), " by its owner")
         <<the entry of a member of another archive>>
 
 The entry has the same form as that of a line held here, with the archive
@@ -1171,8 +1169,7 @@ the withdrawal (section 8.3), said to come from its owner (section 8.4).
     # in the entry of a member of another archive:
     return "\n".join([
         f'<li class="paper member{" withdrawn" if withdrawn else ""}">',
-        (f'<a class="paper-title" href="{esc(landing)}">{esc(title)}</a>' if landing
-         else f'<span class="paper-title">{esc(title)}</span>'),
+        link(landing, esc(title), "paper-title"),
         f'<div class="paper-authors">{esc(by)}</div>',
         f'<div class="paper-meta">{esc(str(year))}'
         + (f' · {owner_tag(m["owner"], root)}' if show_owner else "")
@@ -1192,15 +1189,25 @@ followed. The version presented is that of section 8.3: the last revision,
 for a selection; for a catalogue, the current version as of the version
 pinned, the last of its `history` or, without one, the last object version
 holding the highest document version up to the pin (section 4.2), which
-needs the `object.json` of each of those versions, small files (below). Anything
-that fails, from the network to a file that is not JSON, makes the
-archive count as not answering, and the next one in `at` is tried.
+needs the `object.json` of each of those versions, small files (below).
+Every file read is compared with the digest that the inventory pinned (or,
+for the status, the head inventory) states for it, as a resolver checks
+a copy (section 12.3): the pin fixes the inventory, and the inventory
+fixes the files, so a `datacite.json` or an `object.json` served in place
+of the one pinned is not shown. What is shown is computed here too, from
+the description read (title, authors, abstract, landing page, withdrawal),
+so that a description that is not of the form expected (no title, a
+description that is not a string) fails here. Anything that fails, from
+the network to a file that is not JSON or not the one its inventory
+names, makes the archive count as not answering, and the next one in `at`
+is tried; when none answers, the entry shows the cached citation, and the
+rest of the website is written.
 
     # in a member of another archive on the home page:
     def remote_view(m):
-        """{archive, at, dc, pdf, state} of member M, read at the first of its at that answers
-        and whose copy matches the pin; {archive, at, mismatch} for a copy that does not
-        match; None if none answers."""
+        """{archive, at, dc, pdf, state, title, by, abstract, landing, withdrawn} of member M,
+        read at the first of its at that answers and whose copy matches the pin; {archive, at,
+        mismatch} for a copy that does not match; None if none answers."""
         obj_id = names.object_id(m["name"], m["owner"])
         pin_ver, pin = P.member_pins(m)[-1][:2]
         for at in m.get("at", []):
@@ -1211,14 +1218,18 @@ archive count as not answering, and the next one in `at` is tried.
                 data = src.get(f"{path}/{pin_ver}/inventory.json")
                 if data is None:
                     continue
-                view = {"archive": disc.get("name") or at, "at": src.at or at}
+                name = disc.get("name")
+                view = {"archive": name if isinstance(name, str) and name else at, "at": src.at or at}
                 if names.sha512_hex(data) != pin:
                     return dict(view, mismatch=True)
                 inv = json.loads(data)
 
                 def read(ver, logical, inv=inv):
-                    cp = P.content_path(inv, ver, logical)
+                    dig = next((dg for dg, ps in inv["versions"][ver]["state"].items() if logical in ps), None)
+                    cp = inv["manifest"][dig][0] if dig else None
                     raw = src.get(f"{path}/{cp}") if cp and remote.safe_path(cp) else None
+                    if raw is not None and names.sha512_hex(raw) != dig:
+                        raise ValueError(f"{cp}: not the file its inventory names")
                     return json.loads(raw) if raw else None
                 <<the version of a member elsewhere that is presented>>
                 view["dc"] = read(shown, "datacite.json")
@@ -1229,8 +1240,14 @@ archive count as not answering, and the next one in `at` is tried.
                 <<the status of a member elsewhere>>
                 if not view["dc"]:
                     continue
+                dc = view["dc"]
+                view.update(title=dc["titles"][0]["title"], by=authors(dc), abstract=abstract_html(dc),
+                            landing=safe_url(dc.get("url")),
+                            withdrawn=withdrawal_html(view.get("state", {}), " by its owner"))
+                if not isinstance(view["title"], str) or not isinstance(view["by"], str):
+                    continue
                 return view
-            except (remote.Unavailable, ValueError, KeyError, TypeError, AttributeError):
+            except (remote.Unavailable, ValueError, KeyError, IndexError, TypeError, AttributeError):
                 continue
         return None
 
