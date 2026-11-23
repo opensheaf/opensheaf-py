@@ -847,42 +847,166 @@ record below.
 [FAIR Signposting](https://signposting.org/FAIR/) links tell a program,
 from the landing page alone, how to cite the document (`cite-as`: the
 DOI, or the page), where its metadata are (`describedby`: the
-`datacite.json` of the version), where the content is (`item`) and
-under what licence. `canonical` gives search engines the one address of
-the page.
+`datacite.json` of the version), where the content is (`item`: each
+rendition and the main source, with its media type), under what licences
+(`license`, one per licence with a URL), what kind of work it is (`type`,
+the schema.org type of the record below) and who wrote it (`author`, the
+ORCID iD of each creator that has one). Appendix A.3 requires them (#77).
+They are written as `<link>` elements: the archive is plain files on a
+static host, which cannot send `Link` headers of its own, and A.3 asks for
+headers only where the host allows. `canonical` gives search engines the
+one address of the page.
 
     # in the Signposting links of a landing page:
-    rights = (dc.get("rightsList") or [{}])[0]
+    def rel(r, href, media=None):
+        return f'<link rel="{r}" href="{esc(href)}"' + (f' type="{esc(media)}"' if media else "") + ">"
     cite = f"https://doi.org/{dc['doi']}" if dc.get("doi") else landing
-    tags += [f'<link rel="canonical" href="{esc(landing)}">',
-             f'<link rel="cite-as" href="{esc(cite)}">',
-             f'<link rel="describedby" href="{esc(file_url(base, line, cur, "datacite.json"))}"'
-             ' type="application/vnd.datacite.datacite+json">']
-    if pdf:
-        tags.append(f'<link rel="item" href="{esc(pdf)}" type="application/pdf">')
-    if safe_url(rights.get("rightsUri")):
-        tags.append(f'<link rel="license" href="{esc(rights["rightsUri"])}">')
+    kind = schema_type(obj, dc)
+    tags += [rel("canonical", landing), rel("cite-as", cite),
+             rel("describedby", file_url(base, line, cur, "datacite.json"), "application/vnd.datacite.datacite+json")]
+    for path, media in content_items(obj):
+        u = file_url(base, line, cur, path)
+        if u:
+            tags.append(rel("item", u, media))
+    tags += [rel("license", u) for u in licence_urls(dc)]
+    tags.append(rel("type", f"https://schema.org/{kind}"))
+    tags += [rel("author", o) for o in (orcid_of(c) for c in dc["creators"]) if o]
 
-The schema.org `ScholarlyArticle` record, in JSON-LD, says the same for
-general search engines, with the `sheaf:` URI of the line among its
-identifiers. It is written into a `<script>` element, where the sequence
-`</` would end the element early: it is escaped as `<\/`, which JSON reads
-as the same string.
+The items are the renditions, then the main source; a collection has no
+main source, and its member list is the source it is made of. The
+licences are the entries of `rightsList` with a URL (section 4.4), only http and https ones becoming links, as everywhere on the website; an SPDX
+identifier without one is given the address of its SPDX page.
+
+    # in the tags for search engines:
+    def content_items(obj):
+        """(logical path, media type) of the renditions and the main source of OBJ."""
+        out = [(r["path"], r.get("mediaType")) for r in obj.get("renditions", [])]
+        if obj.get("mainSource"):
+            out.append((obj["mainSource"], obj.get("sourceFormat")))
+        elif obj.get("kind") == "collection":
+            out.append(("members.json", "application/json"))
+        return list(dict.fromkeys(out))
+
+
+    def licence_urls(dc):
+        """The URLs of the licences of DC's rightsList (section 4.4)."""
+        out = []
+        for r in dc.get("rightsList", []):
+            if safe_url(r.get("rightsUri")):
+                out.append(r["rightsUri"])
+            elif r.get("rightsIdentifier"):
+                out.append(f"https://spdx.org/licenses/{r['rightsIdentifier']}.html")
+        return out
+
+
+    def orcid_of(creator):
+        """The ORCID iD of CREATOR as https://orcid.org/..., if datacite.json gives one."""
+        for x in creator.get("nameIdentifiers", []):
+            if (x.get("nameIdentifierScheme") or "").upper() == "ORCID" and x.get("nameIdentifier"):
+                iD = x["nameIdentifier"].rsplit("/", 1)[-1]
+                return f"https://orcid.org/{iD}"
+        return None
+
+The schema.org record, in JSON-LD, says the same for general search
+engines and harvesters, with the contents appendix A.3 lists: the type
+matching `resourceTypeGeneral`; each author, with the ORCID iD as `@id`;
+the licences, and the text of a rights statement; every rendition as an
+`encoding`; as `identifier`, the `sheaf:` URI of the line in canonical
+form, the DOI of the version and the concept DOI (the `IsVersionOf` DOI,
+section 4.4); as `sameAs`, the same work elsewhere (`IsIdenticalTo`); the
+abstract and keywords; for a collection, `hasPart`, the landing pages of
+the members held here and the DOIs of the others that have one; and for a
+withdrawn line, `creativeWorkStatus` `Withdrawn`. It follows DataCite's
+correspondence with schema.org. It is written into a `<script>` element,
+where the sequence `</` would end the element early: it is escaped as
+`<\/`, which JSON reads as the same string.
 
     # in the schema.org record of a landing page:
-    ld = {"@context": "https://schema.org", "@type": "ScholarlyArticle",
+    ld = {"@context": "https://schema.org", "@type": kind,
           "name": dc["titles"][0]["title"], "url": landing,
-          "author": [{"@type": "Person", "name": P.display_name(c)} for c in dc["creators"]],
+          "author": [person_ld(c) for c in dc["creators"]],
           "datePublished": date, "version": dc["version"],
-          "identifier": ([f"https://doi.org/{dc['doi']}"] if dc.get("doi") else []) + [full_uri(line)]}
-    if pdf:
-        ld["encoding"] = {"@type": "MediaObject", "contentUrl": pdf, "encodingFormat": "application/pdf"}
+          "identifier": [full_uri(line)] + [f"https://doi.org/{d}" for d in
+                                            [dc.get("doi"), concept_doi(dc)] if d]}
+    encodings = [{"@type": "MediaObject", "contentUrl": u, "encodingFormat": media}
+                 for u, media in ((file_url(base, line, cur, r["path"]), r.get("mediaType"))
+                                  for r in obj.get("renditions", [])) if u]
+    if encodings:
+        ld["encoding"] = encodings
+    licences = licence_urls(dc) + [r["rights"] for r in dc.get("rightsList", [])
+                                   if r.get("rights") and not (r.get("rightsUri") or r.get("rightsIdentifier"))]
+    if licences:
+        ld["license"] = licences[0] if len(licences) == 1 else licences
+    same = same_as(dc)
+    if same:
+        ld["sameAs"] = same
     if abstract:
         ld["abstract"] = abstract
-    if safe_url(rights.get("rightsUri")):
-        ld["license"] = rights["rightsUri"]
+    keywords = [x["subject"] for x in dc.get("subjects", []) if x.get("subject")]
+    if keywords:
+        ld["keywords"] = keywords
+    if obj.get("kind") == "collection":
+        ld["hasPart"] = collection_parts(line, cur)
+    if obj.get("status") == "withdrawn":
+        ld["creativeWorkStatus"] = "Withdrawn"
     tags.append('<script type="application/ld+json">'
                 + json.dumps(ld, ensure_ascii=False).replace("</", "<\\/") + "</script>")
+
+The type follows DataCite's correspondence for the common types, and is
+`CreativeWork` otherwise.
+
+    # in the tags for search engines:
+    SCHEMA_TYPES = {"Collection": "Collection", "Dataset": "Dataset", "Software": "SoftwareSourceCode",
+                    "Book": "Book", "BookChapter": "Chapter", "Audiovisual": "MediaObject",
+                    "Image": "ImageObject", "Text": "ScholarlyArticle", "Preprint": "ScholarlyArticle",
+                    "JournalArticle": "ScholarlyArticle", "ConferencePaper": "ScholarlyArticle",
+                    "Report": "Report", "Dissertation": "Thesis", "Presentation": "PresentationDigitalDocument"}
+
+
+    def schema_type(obj, dc):
+        if obj.get("kind") == "collection":
+            return "Collection"
+        return SCHEMA_TYPES.get(dc.get("types", {}).get("resourceTypeGeneral"), "CreativeWork")
+
+
+    def person_ld(c):
+        p = {"@type": "Person" if c.get("nameType", "Personal") == "Personal" else "Organization",
+             "name": P.display_name(c)}
+        if orcid_of(c):
+            p["@id"] = orcid_of(c)
+        return p
+
+
+    def concept_doi(dc):
+        return next((r["relatedIdentifier"] for r in dc.get("relatedIdentifiers", [])
+                     if r.get("relationType") == "IsVersionOf" and r.get("relatedIdentifierType") == "DOI"), None)
+
+
+    def same_as(dc):
+        """The URLs of the same work elsewhere: the IsIdenticalTo relations of DC."""
+        out = []
+        for r in dc.get("relatedIdentifiers", []):
+            if r.get("relationType") != "IsIdenticalTo":
+                continue
+            ident, kind = r.get("relatedIdentifier", ""), r.get("relatedIdentifierType")
+            url = {"DOI": f"https://doi.org/{ident}", "arXiv": f"https://arxiv.org/abs/{ident.removeprefix('arXiv:')}",
+                   "URL": ident}.get(kind)
+            if safe_url(url):
+                out.append(url)
+        return out
+
+
+    def collection_parts(line, ver):
+        """The members of the collection LINE in VER: their landing pages here, or else their DOIs."""
+        base = P.ARCHIVE["baseUrl"]
+        out = []
+        for m in (line.json("members.json", ver) or {}).get("members", []):
+            h = held(m)
+            if h:
+                out.append({"@id": f"{base}paper/{h.slug}/"})
+            elif m.get("doi"):
+                out.append({"@id": f"https://doi.org/{m['doi']}"})
+        return out
 
 ### The home page
 

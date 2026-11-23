@@ -41,7 +41,9 @@ def archive(tmp_path):
 
 
 def put(label, n, files, *, after=None, available="2026-01-01", message="test", extra_obj=None,
-        description_only=False):
+        description_only=False, rights=({"rights": "Creative Commons Attribution 4.0 International",
+                                         "rightsIdentifier": "cc-by-4.0", "rightsIdentifierScheme": "SPDX",
+                                         "rightsUri": "https://creativecommons.org/licenses/by/4.0/"},)):
     """Add an object version of LABEL holding document version N with FILES ({name: bytes})."""
     owner = P.ARCHIVE["owner"]
     if label in P.LABELS:
@@ -66,7 +68,10 @@ def put(label, n, files, *, after=None, available="2026-01-01", message="test", 
           "publisher": {"name": "Test"}, "publicationYear": 2026,
           "types": {"resourceTypeGeneral": "Preprint"}, "version": str(n),
           "dates": [{"date": "2026-01-01", "dateType": "Issued"},
-                    {"date": available, "dateType": "Available"}]}
+                    {"date": available, "dateType": "Available"}],
+          "rightsList": list(rights)}
+    if not rights:
+        del dc["rightsList"]
     content = dict(files, **{"datacite.json": P.json_bytes(dc), P.GENESIS: genesis})
     content.update({p: f for p, f in P.carried_files(obj_id, inv).items() if p not in content})
     return P.add_version(obj_id, content, obj, message, acknowledged=True)
@@ -102,6 +107,31 @@ def test_simple_archive_verifies(archive):
     name = {lb: P.LABELS[lb].split(":")[1] for lb in ("paper-a", "paper-b")}
     assert {m["name"]: m["version"] for m in members["members"]} == {name["paper-a"]: "v2", name["paper-b"]: "v1"}
     assert all(m["owner"] == P.ARCHIVE["owner"] and m["at"] == [CONFIG["baseUrl"]] for m in members["members"])
+
+
+def test_missing_rights_is_an_error(archive):
+    put("paper-a", 1, FILES1, rights=())
+    put("paper-b", 1, FILES3, rights=({"rights": "All rights reserved"},))
+    errors = finish()
+    assert [e for e in errors if "rightsList" in e] == \
+        ["paper-a v1: datacite.json has no licence or rights statement in rightsList (section 4.4)"]
+
+
+def test_landing_page_describes_itself(archive):
+    import re
+    put("paper-a", 1, FILES1)
+    assert finish() == []
+    obj_id = P.LABELS["paper-a"]
+    page = P.ROOT / "paper" / P.name_address(obj_id) / "index.html"
+    text = page.read_text()
+    for r in ("cite-as", "describedby", "item", "license", "type"):
+        assert f'<link rel="{r}"' in text
+    ld = json.loads(re.search(r'<script type="application/ld\+json">(.*?)</script>', text, re.S)[1])
+    assert ld["@type"] == "ScholarlyArticle" and ld["license"] == "https://creativecommons.org/licenses/by/4.0/"
+    assert f"sheaf:{obj_id.split(':')[1]}" in ld["identifier"]
+    assert any(e["encodingFormat"] == "application/pdf" for e in ld["encoding"])
+    page.write_text(re.sub(r'<script type="application/ld\+json">.*?</script>', "", text, flags=re.S))
+    assert any("lacks a schema.org record" in e for e in P.verify_errors())
 
 
 def test_gap_in_numbering_is_an_error(archive):
@@ -288,7 +318,8 @@ def put_collection(label, members, kind):
            "name": obj_id.split(":")[1], "owner": P.ARCHIVE["owner"], "documentVersion": 1, "status": "active"}
     dc = {"titles": [{"title": label}], "creators": [{"name": "Doe, Jane", "nameType": "Personal"}],
           "publisher": {"name": "Test"}, "publicationYear": 2026,
-          "types": {"resourceTypeGeneral": "Collection"}, "version": "1"}
+          "types": {"resourceTypeGeneral": "Collection"}, "version": "1",
+          "rightsList": [dict(P.RIGHTS["cc0-1.0"])]}
     files = {"members.json": P.json_bytes({"format": "opensheaf-collection/0.2", "type": kind,
                                            "members": members}),
              "datacite.json": P.json_bytes(dc), P.GENESIS: genesis}

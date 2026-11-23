@@ -637,7 +637,9 @@ checked with its members after every line has its statuses.
             f.warning(place, message)
 
 The descriptions are checked against each other and against sections 4.3
-and 4.4. An entry of `rightsList` with `rightsIdentifier` or `rightsUri`
+and 4.4. `rightsList` must hold at least one entry (#79): a version always
+says on what terms its files may be used, if only that the rights are not
+known. An entry of `rightsList` with `rightsIdentifier` or `rightsUri`
 is a licence, one with neither a rights statement (section 4.4): the kind
 is read from the file, never guessed from the name. An identifier is an
 SPDX identifier, in lower case, so that archives record the same licence
@@ -660,6 +662,8 @@ keeping a copy answers for it (section 11.2).
         for k in ("titles", "creators", "publicationYear", "types", "version", "publisher"):
             if k not in dc:
                 out.append(f"datacite.json lacks {k}")
+        if not dc.get("rightsList"):
+            out.append("datacite.json has no licence or rights statement in rightsList (section 4.4)")
         for r in dc.get("rightsList", []):
             ident = r.get("rightsIdentifier")
             if ident is not None and r.get("rightsIdentifierScheme") != "SPDX":
@@ -1455,6 +1459,9 @@ the takedown removed it from the pages (section 13.2).
                 if not landing_names(text, m["name"], m["owner"], obj_id):
                     report(landing.relative_to(ROOT).as_posix(), f"no landing page giving the sheaf: URI of "
                            f"{where(obj_id)} (appendix A.3)" + note)
+                elif missing := landing_description_gaps(text):
+                    report(landing.relative_to(ROOT).as_posix(), "the landing page of " + where(obj_id)
+                           + " lacks " + ", ".join(missing) + " (appendix A.3)" + note)
 
 The canonical form of the originator's line is `sheaf:<name>`, which is
 a prefix of every other line of the work: it is found in the page only
@@ -1472,6 +1479,27 @@ name).
         if originator == owner:
             return re.search(rf"sheaf:{nm}(?![a-z0-9:/])", text) is not None
         return f"sheaf:{nm}:{owner}" in text
+
+A landing page also carries a description for programs (appendix A.3,
+#77): FAIR Signposting links, of which those every page has are checked
+(`cite-as`, `describedby`, `type`, and `item` when the version has a
+rendition or a source), and a schema.org record in JSON-LD, which must
+parse and have a type and identifiers. What the links and the record say
+is not compared with the files: they are presentation, made from them.
+
+    # in check the presentation files of the profile website:
+    def landing_description_gaps(text):
+        """What the landing page TEXT lacks of the description for programs of appendix A.3."""
+        rels = set(re.findall(r'<link rel="([a-z-]+)"', text))
+        missing = [f"the Signposting link {r}" for r in ("cite-as", "describedby", "type") if r not in rels]
+        records = re.findall(r'<script type="application/ld\+json">(.*?)</script>', text, re.S)
+        try:
+            ld = json.loads(records[0]) if records else None
+        except ValueError:
+            ld = None
+        if not isinstance(ld, dict) or not ld.get("@type") or not ld.get("identifier"):
+            missing.append("a schema.org record in JSON-LD with a type and identifiers")
+        return missing
 
 Keys left in the archive
 ------------------------

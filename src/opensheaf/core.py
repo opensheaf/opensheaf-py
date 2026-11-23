@@ -2354,6 +2354,8 @@ def description_errors(d, inv, ver):
     for k in ("titles", "creators", "publicationYear", "types", "version", "publisher"):
         if k not in dc:
             out.append(f"datacite.json lacks {k}")
+    if not dc.get("rightsList"):
+        out.append("datacite.json has no licence or rights statement in rightsList (section 4.4)")
     for r in dc.get("rightsList", []):
         ident = r.get("rightsIdentifier")
         if ident is not None and r.get("rightsIdentifierScheme") != "SPDX":
@@ -3061,6 +3063,9 @@ def check_presentation(f, disc):
             if not landing_names(text, m["name"], m["owner"], obj_id):
                 report(landing.relative_to(ROOT).as_posix(), f"no landing page giving the sheaf: URI of "
                        f"{where(obj_id)} (appendix A.3)" + note)
+            elif missing := landing_description_gaps(text):
+                report(landing.relative_to(ROOT).as_posix(), "the landing page of " + where(obj_id)
+                       + " lacks " + ", ".join(missing) + " (appendix A.3)" + note)
 
 
 def landing_names(text, nm, owner, obj_id):
@@ -3073,6 +3078,20 @@ def landing_names(text, nm, owner, obj_id):
     if originator == owner:
         return re.search(rf"sheaf:{nm}(?![a-z0-9:/])", text) is not None
     return f"sheaf:{nm}:{owner}" in text
+
+
+def landing_description_gaps(text):
+    """What the landing page TEXT lacks of the description for programs of appendix A.3."""
+    rels = set(re.findall(r'<link rel="([a-z-]+)"', text))
+    missing = [f"the Signposting link {r}" for r in ("cite-as", "describedby", "type") if r not in rels]
+    records = re.findall(r'<script type="application/ld\+json">(.*?)</script>', text, re.S)
+    try:
+        ld = json.loads(records[0]) if records else None
+    except ValueError:
+        ld = None
+    if not isinstance(ld, dict) or not ld.get("@type") or not ld.get("identifier"):
+        missing.append("a schema.org record in JSON-LD with a type and identifiers")
+    return missing
 
 
 def look_for_keys(f):
