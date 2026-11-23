@@ -607,6 +607,19 @@ def read_logical(obj_dir, inv, logical, version=None):
     return (obj_dir / cp) if cp else None
 
 
+def previous_digest(obj_id, d, head):
+    """The digest of the inventory of HEAD of the object OBJ_ID in D, which the next version
+    records as previous: the one its checksum file states, which must be that of its bytes."""
+    p = d / head / "inventory.json"
+    sc = p.with_name("inventory.json.sha512")
+    stated = owners.sidecar_digest(sc.read_bytes()) if sc.is_file() else None
+    if not p.is_file() or stated is None or stated != names.sha512_hex(p.read_bytes()):
+        sys.exit(f"{label_of(obj_id) or obj_id} {head}: the checksum file of its inventory is missing, "
+                 "or does not state the digest of the inventory (section 4.1): no version is added "
+                 "until it is repaired")
+    return stated
+
+
 def add_version(obj_id, files, obj, message, *, acknowledged=False, stage_in=None):
     """Add an object version of the line OBJ_ID whose state is FILES ({logical path:
     file or bytes}) and OBJ as object.json, signed by the owner of the line; unchanged
@@ -627,7 +640,7 @@ def add_version(obj_id, files, obj, message, *, acknowledged=False, stage_in=Non
                "head": "v0", "manifest": {}, "versions": {}, "fixity": {"md5": {}, "sha256": {}}}
     elif not draft:
         check_before_extending(obj_id, d, inv, acknowledged)
-        obj["previous"] = owners.sidecar_digest((d / inv["head"] / "inventory.json.sha512").read_bytes())
+        obj["previous"] = previous_digest(obj_id, d, inv["head"])
     ver = f"v{int(inv['head'][1:]) + 1}"
     if stage_in is not None:
         stage = Path(stage_in)

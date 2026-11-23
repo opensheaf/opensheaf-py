@@ -631,6 +631,30 @@ right versions with another message.
         assert "paper-a v2: the inventory copy disagrees with the inventory about the versions it records" in errors
         assert not any("the inventory copy has the head" in e for e in errors)
 
+A new version records as `previous` the digest of the inventory of the
+head (section 4.3). With the checksum file of that inventory missing,
+malformed, or stating another digest, no version is added, rather than one
+without `previous` or with a `previous` that names other bytes.
+
+    # in test: the rules of document versions:
+    def test_no_version_on_a_head_whose_checksum_file_is_wrong(archive):
+        put("paper-a", 1, FILES1)
+        d, _ = head_of("paper-a")
+        sc = d / "v1" / "inventory.json.sha512"
+        good = sc.read_bytes()
+        for bad in (None, b"not a checksum file", owners.sidecar(b"other bytes")):
+            if bad is None:
+                sc.unlink()
+            else:
+                sc.write_bytes(bad)
+            with pytest.raises(SystemExit, match="the checksum file of its inventory is missing"):
+                put("paper-a", 2, FILES2)
+            assert head_of("paper-a")[1]["head"] == "v1" and not (d / "v2").exists()
+        sc.write_bytes(good)
+        put("paper-a", 2, FILES2)
+        d, inv = head_of("paper-a")
+        assert P.read_json(d, inv, P.OBJ)["previous"] == names.sha512_hex((d / "v1" / "inventory.json").read_bytes())
+
 An object taken down (section 13.2) leaves the storage root and gets a
 tombstone in the discovery document; a pin to it, here that of the owner
 catalogue, is reported as removed, a result, not as a missing object.
@@ -1645,18 +1669,16 @@ purpose, after the fact.
 
 A version whose `previous` is not the digest of the inventory before it
 breaks the inventory chain (section 4.3), an error. It is made by having
-`add_version` read a wrong digest in the checksum file of `v1`, the only
-place it reads it.
+`add_version` take a wrong digest from `previous_digest`, which otherwise
+refuses one.
 
     # in test: verifying broken archives:
     def test_wrong_previous_is_an_error(archive, monkeypatch):
         put("paper-a", 1, FILES1)
-        d, _ = head_of("paper-a")
-        target = (d / "v1" / "inventory.json.sha512").read_bytes()
-        real = owners.sidecar_digest
-        monkeypatch.setattr(owners, "sidecar_digest", lambda data: "0" * 128 if data == target else real(data))
+        real = P.previous_digest
+        monkeypatch.setattr(P, "previous_digest", lambda obj_id, d, head: "0" * 128)
         put("paper-a", 2, FILES2)
-        monkeypatch.setattr(owners, "sidecar_digest", real)
+        monkeypatch.setattr(P, "previous_digest", real)
         assert "paper-a v2: previous is not the digest of the inventory of v1 (section 4.3)" in finish()
 
 A version without signature files is not a version of its line (sections

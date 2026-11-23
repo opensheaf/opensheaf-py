@@ -962,7 +962,12 @@ and a message. The function
    file of the version before, as its checksum file states it, in every
    version of a line after the first, and never in a first version
    (section 4.3), so that signing the new version fixes the bytes of every
-   earlier inventory;
+   earlier inventory. The digest is also computed from the bytes of that
+   inventory file, and a checksum file missing, malformed or stating
+   another digest stops the deposit: `previous` would be missing, or name
+   bytes that are not those of the inventory, and the version would break
+   the chain it is meant to extend (sections 4 and 14.2). The archive is
+   repaired first (`osheaf verify` reports the checksum file);
 4. stores each file whose digest is new to the object, in the version
    folder, and lists the others only in the state; records when the
    version was made, by whom (the depositor of the configuration,
@@ -1002,6 +1007,19 @@ other version of the line is added until `osheaf zenodo` completes it, as
 appendix A.1 requires.
 
     # in add a version to an OCFL object:
+    def previous_digest(obj_id, d, head):
+        """The digest of the inventory of HEAD of the object OBJ_ID in D, which the next version
+        records as previous: the one its checksum file states, which must be that of its bytes."""
+        p = d / head / "inventory.json"
+        sc = p.with_name("inventory.json.sha512")
+        stated = owners.sidecar_digest(sc.read_bytes()) if sc.is_file() else None
+        if not p.is_file() or stated is None or stated != names.sha512_hex(p.read_bytes()):
+            sys.exit(f"{label_of(obj_id) or obj_id} {head}: the checksum file of its inventory is missing, "
+                     "or does not state the digest of the inventory (section 4.1): no version is added "
+                     "until it is repaired")
+        return stated
+
+
     def add_version(obj_id, files, obj, message, *, acknowledged=False, stage_in=None):
         """Add an object version of the line OBJ_ID whose state is FILES ({logical path:
         file or bytes}) and OBJ as object.json, signed by the owner of the line; unchanged
@@ -1022,7 +1040,7 @@ appendix A.1 requires.
                    "head": "v0", "manifest": {}, "versions": {}, "fixity": {"md5": {}, "sha256": {}}}
         elif not draft:
             check_before_extending(obj_id, d, inv, acknowledged)
-            obj["previous"] = owners.sidecar_digest((d / inv["head"] / "inventory.json.sha512").read_bytes())
+            obj["previous"] = previous_digest(obj_id, d, inv["head"])
         ver = f"v{int(inv['head'][1:]) + 1}"
         if stage_in is not None:
             stage = Path(stage_in)

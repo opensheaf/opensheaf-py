@@ -394,6 +394,25 @@ def test_inventory_copies_record_the_versions_up_to_theirs(archive):
     assert not any("the inventory copy has the head" in e for e in errors)
 
 
+def test_no_version_on_a_head_whose_checksum_file_is_wrong(archive):
+    put("paper-a", 1, FILES1)
+    d, _ = head_of("paper-a")
+    sc = d / "v1" / "inventory.json.sha512"
+    good = sc.read_bytes()
+    for bad in (None, b"not a checksum file", owners.sidecar(b"other bytes")):
+        if bad is None:
+            sc.unlink()
+        else:
+            sc.write_bytes(bad)
+        with pytest.raises(SystemExit, match="the checksum file of its inventory is missing"):
+            put("paper-a", 2, FILES2)
+        assert head_of("paper-a")[1]["head"] == "v1" and not (d / "v2").exists()
+    sc.write_bytes(good)
+    put("paper-a", 2, FILES2)
+    d, inv = head_of("paper-a")
+    assert P.read_json(d, inv, P.OBJ)["previous"] == names.sha512_hex((d / "v1" / "inventory.json").read_bytes())
+
+
 def test_pin_to_a_removed_object_is_reported_as_removed(archive):
     put("paper-a", 1, FILES1)
     put("paper-b", 1, FILES2)
@@ -1143,12 +1162,10 @@ def test_single_rotation_key_and_confirmation(tmp_path, monkeypatch, capsys):
 
 def test_wrong_previous_is_an_error(archive, monkeypatch):
     put("paper-a", 1, FILES1)
-    d, _ = head_of("paper-a")
-    target = (d / "v1" / "inventory.json.sha512").read_bytes()
-    real = owners.sidecar_digest
-    monkeypatch.setattr(owners, "sidecar_digest", lambda data: "0" * 128 if data == target else real(data))
+    real = P.previous_digest
+    monkeypatch.setattr(P, "previous_digest", lambda obj_id, d, head: "0" * 128)
     put("paper-a", 2, FILES2)
-    monkeypatch.setattr(owners, "sidecar_digest", real)
+    monkeypatch.setattr(P, "previous_digest", real)
     assert "paper-a v2: previous is not the digest of the inventory of v1 (section 4.3)" in finish()
 
 
