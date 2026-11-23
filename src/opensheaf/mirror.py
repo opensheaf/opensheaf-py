@@ -133,9 +133,21 @@ def mirror_line(nm, owner, where, *, licence_checked=False, label=None):
                 remote.fetch_object(source.src or remote.Source(source.where), obj_id, new, upto=target,
                                     witness_names=remote.line_witness_names(log),
                                     warn=lambda m: print(f"Warning: {m}; the mirror gets a checksum file "
-                                                         "that states it", file=sys.stderr))
+                                                         "that states it", file=sys.stderr),
+                                    expect={n: source.digest(n) for n in range(1, target + 1)})
             except remote.Unavailable as e:
                 sys.exit(str(e))
+            judgements, _ = P.line_statuses(new, P.load_inventory(new), log)
+            for n, js in enumerate(judgements, 1):
+                w = new / sign.WITNESSES / f"v{n}"
+                for j in js:
+                    if j.status == sign.INVALID:
+                        print(f"warning: {obj_id} v{n}: {j.file} at {source.where}: {j.reason}: not copied",
+                              file=sys.stderr)
+                        for f in [w / j.file] + sorted(w.glob(f"{j.file}.*")):
+                            f.unlink(missing_ok=True)
+            if sign.latest_signed(P.line_statuses(new, P.load_inventory(new), log)[1]) != target:
+                sys.exit(f"{obj_id}: the copy at {source.where} is no longer signed up to v{target}: not copied")
             if not held:
                 d.parent.mkdir(parents=True, exist_ok=True)
                 os.rename(new, d)

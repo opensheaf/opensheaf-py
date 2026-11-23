@@ -294,6 +294,17 @@ name with other bytes is reported, and the mirror keeps its own
 copied when they cannot be named (over HTTP), which is not removing them
 (section 7.2).
 
+What is copied is what was judged. The object is fetched a second time,
+so every inventory fetched must have the digest of the version of that
+number judged above (`expect`): otherwise nothing is copied. The
+signature files fetched are judged against the key log: one that is
+invalid (it does not verify, signs another version, names a key the key
+log does not list) is left out of the copy, with the files that go with
+it (`signature-...json.*`, a timestamp), and reported, so that a mirror
+never takes in a signature file its source could not have made good; and
+the versions copied must still be signed up to the target, or nothing is
+copied.
+
     # in mirrors: copy the versions into the storage root:
     stage = Path(tempfile.mkdtemp(dir=P.ROOT, prefix=".staging-"))
     try:
@@ -302,9 +313,21 @@ copied when they cannot be named (over HTTP), which is not removing them
             remote.fetch_object(source.src or remote.Source(source.where), obj_id, new, upto=target,
                                 witness_names=remote.line_witness_names(log),
                                 warn=lambda m: print(f"Warning: {m}; the mirror gets a checksum file "
-                                                     "that states it", file=sys.stderr))
+                                                     "that states it", file=sys.stderr),
+                                expect={n: source.digest(n) for n in range(1, target + 1)})
         except remote.Unavailable as e:
             sys.exit(str(e))
+        judgements, _ = P.line_statuses(new, P.load_inventory(new), log)
+        for n, js in enumerate(judgements, 1):
+            w = new / sign.WITNESSES / f"v{n}"
+            for j in js:
+                if j.status == sign.INVALID:
+                    print(f"warning: {obj_id} v{n}: {j.file} at {source.where}: {j.reason}: not copied",
+                          file=sys.stderr)
+                    for f in [w / j.file] + sorted(w.glob(f"{j.file}.*")):
+                        f.unlink(missing_ok=True)
+        if sign.latest_signed(P.line_statuses(new, P.load_inventory(new), log)[1]) != target:
+            sys.exit(f"{obj_id}: the copy at {source.where} is no longer signed up to v{target}: not copied")
         if not held:
             d.parent.mkdir(parents=True, exist_ok=True)
             os.rename(new, d)

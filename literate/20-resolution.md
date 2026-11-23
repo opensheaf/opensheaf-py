@@ -304,7 +304,12 @@ use to copy a line into the storage root, from either kind of source:
    digest, so a checksum file missing, or not stating that digest, does
    not make the copy fail (section 12.3): it is reported through `warn`,
    and the copy gets a checksum file that states the digest, as every
-   archive must hold (section 4.1);
+   archive must hold (section 4.1). A caller that has already judged
+   the copy, and copies what it judged, gives `expect`, the digest of the
+   inventory of each version it verified: an inventory fetched with other
+   bytes (the copy changed between the two readings, or another server
+   answered) makes the copy unavailable, never a copy of versions that
+   were not the ones verified;
 2. every file the inventory of the last version copied records, each
    checked against its digest: a file that does not match makes the copy
    unavailable, never a copy with a wrong file;
@@ -344,11 +349,12 @@ one copy brings `MAX_FETCH_FILES` files and `MAX_FETCH_BYTES` bytes at most
         return out
 
 
-    def fetch_object(src, obj_id, dest, *, upto=None, witness_names=None, warn=None):
+    def fetch_object(src, obj_id, dest, *, upto=None, witness_names=None, warn=None, expect=None):
         """Copy the object OBJ_ID of the archive SRC, v1 to UPTO (default: its head), into the new
         folder DEST, checking every file; WITNESS_NAMES(n, dest) names the witness files of vN
-        to fetch over HTTP; WARN(message) hears of checksum files missing or wrong. Returns the
-        number of the last version copied."""
+        to fetch over HTTP; WARN(message) hears of checksum files missing or wrong; EXPECT, if
+        given, {n: the digest of the inventory of vN} that each inventory fetched must have.
+        Returns the number of the last version copied."""
         base = src.object_path(obj_id)
         root = src.get(f"{base}/inventory.json")
         if root is None:
@@ -376,6 +382,9 @@ one copy brings `MAX_FETCH_FILES` files and `MAX_FETCH_BYTES` bytes at most
             data = get(f"{base}/v{n}/inventory.json")
             if data is None:
                 raise Unavailable(f"{src}: {obj_id} v{n} has no inventory (section 4.1)")
+            if expect is not None and names.sha512_hex(data) != expect.get(n):
+                raise Unavailable(f"{src}: {obj_id} v{n}: the inventory fetched is not the one verified "
+                                  "(section 12.3): not copied")
             sc = get(f"{base}/v{n}/inventory.json.sha512")
             if sc is None or owners.sidecar_digest(sc) != names.sha512_hex(data):
                 if warn:

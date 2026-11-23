@@ -186,11 +186,12 @@ def checksum_problems(where, obj_id, d, inv):
     return out
 
 
-def fetch_object(src, obj_id, dest, *, upto=None, witness_names=None, warn=None):
+def fetch_object(src, obj_id, dest, *, upto=None, witness_names=None, warn=None, expect=None):
     """Copy the object OBJ_ID of the archive SRC, v1 to UPTO (default: its head), into the new
     folder DEST, checking every file; WITNESS_NAMES(n, dest) names the witness files of vN
-    to fetch over HTTP; WARN(message) hears of checksum files missing or wrong. Returns the
-    number of the last version copied."""
+    to fetch over HTTP; WARN(message) hears of checksum files missing or wrong; EXPECT, if
+    given, {n: the digest of the inventory of vN} that each inventory fetched must have.
+    Returns the number of the last version copied."""
     base = src.object_path(obj_id)
     root = src.get(f"{base}/inventory.json")
     if root is None:
@@ -218,6 +219,9 @@ def fetch_object(src, obj_id, dest, *, upto=None, witness_names=None, warn=None)
         data = get(f"{base}/v{n}/inventory.json")
         if data is None:
             raise Unavailable(f"{src}: {obj_id} v{n} has no inventory (section 4.1)")
+        if expect is not None and names.sha512_hex(data) != expect.get(n):
+            raise Unavailable(f"{src}: {obj_id} v{n}: the inventory fetched is not the one verified "
+                              "(section 12.3): not copied")
         sc = get(f"{base}/v{n}/inventory.json.sha512")
         if sc is None or owners.sidecar_digest(sc) != names.sha512_hex(data):
             if warn:

@@ -527,6 +527,42 @@ def test_mirror_refuses_a_fork_of_the_line(tmp_path):
         assert found.status == "fork" and any("a fork of the line" in m for _, m in r.notes)
 
 
+def test_mirror_copies_what_it_judged(tmp_path, monkeypatch, capsys):
+    a, lib = make(tmp_path, "authors"), make(tmp_path, "library")
+    deposit(a, "open", "one", new=True)
+    deposit(a, "open", "two")
+    obj_id = line(a, "open")
+    src = P.obj_dir(obj_id)
+    fetch = remote.fetch_object
+
+    def changing(*args, **kw):
+        p = src / "v2" / "inventory.json"
+        p.write_bytes(p.read_bytes() + b"\n")
+        return fetch(*args, **kw)
+    monkeypatch.setattr(remote, "fetch_object", changing)
+    with pytest.raises(SystemExit, match="not the one verified"):
+        run("--root", str(lib), "mirror", uri(a, "open"))
+    P.configure(lib)
+    assert not P.obj_dir(obj_id).exists()
+    monkeypatch.setattr(remote, "fetch_object", fetch)
+    p = src / "v2" / "inventory.json"
+    p.write_bytes(p.read_bytes()[:-1])
+    w = src / sign.WITNESSES / "v1"
+    good = sorted(w.iterdir())[0]
+    forged = json.loads(good.read_text())
+    forged["inventorySha512"] = "0" * 128
+    (w / "signature-forged.json").write_text(json.dumps(forged))
+    (w / "signature-forged.json.ots").write_bytes(b"x")
+    capsys.readouterr()
+    run("--root", str(lib), "mirror", uri(a, "open"))
+    assert "signature-forged.json" in capsys.readouterr().err
+    P.configure(lib)
+    mw = P.obj_dir(obj_id) / sign.WITNESSES / "v1"
+    assert (mw / good.name).exists() and not (mw / "signature-forged.json").exists()
+    assert not (mw / "signature-forged.json.ots").exists()
+    assert errors(lib) == []
+
+
 def test_check_remote_tries_the_copies(tmp_path):
     a, lib, c = make(tmp_path, "a"), make(tmp_path, "lib"), make(tmp_path, "c")
     deposit(a, "open", "one", new=True)

@@ -696,6 +696,48 @@ and does not choose.
             found = r.latest(nm, owner, ["https://example.org/authors/", "https://example.org/twin/"])
             assert found.status == "fork" and any("a fork of the line" in m for _, m in r.notes)
 
+A mirror copies what it judged. When the authors' copy changes between
+the reading that judges it and the fetch that copies it (here, the
+inventory of v2 gets another byte), nothing is copied. A signature file
+that does not verify, put beside the good one with a file that goes with
+it, is left out of the mirror, which verifies.
+
+    # in across: mirrors and key logs:
+    def test_mirror_copies_what_it_judged(tmp_path, monkeypatch, capsys):
+        a, lib = make(tmp_path, "authors"), make(tmp_path, "library")
+        deposit(a, "open", "one", new=True)
+        deposit(a, "open", "two")
+        obj_id = line(a, "open")
+        src = P.obj_dir(obj_id)
+        fetch = remote.fetch_object
+
+        def changing(*args, **kw):
+            p = src / "v2" / "inventory.json"
+            p.write_bytes(p.read_bytes() + b"\n")
+            return fetch(*args, **kw)
+        monkeypatch.setattr(remote, "fetch_object", changing)
+        with pytest.raises(SystemExit, match="not the one verified"):
+            run("--root", str(lib), "mirror", uri(a, "open"))
+        P.configure(lib)
+        assert not P.obj_dir(obj_id).exists()
+        monkeypatch.setattr(remote, "fetch_object", fetch)
+        p = src / "v2" / "inventory.json"
+        p.write_bytes(p.read_bytes()[:-1])
+        w = src / sign.WITNESSES / "v1"
+        good = sorted(w.iterdir())[0]
+        forged = json.loads(good.read_text())
+        forged["inventorySha512"] = "0" * 128
+        (w / "signature-forged.json").write_text(json.dumps(forged))
+        (w / "signature-forged.json.ots").write_bytes(b"x")
+        capsys.readouterr()
+        run("--root", str(lib), "mirror", uri(a, "open"))
+        assert "signature-forged.json" in capsys.readouterr().err
+        P.configure(lib)
+        mw = P.obj_dir(obj_id) / sign.WITNESSES / "v1"
+        assert (mw / good.name).exists() and not (mw / "signature-forged.json").exists()
+        assert not (mw / "signature-forged.json.ots").exists()
+        assert errors(lib) == []
+
 A copy is checked against pins too: a member pinned in archive `a` is
 found at a mirror in the library when `a` loses it, and is unavailable
 when both are gone (copies that agree, section 7.4).
