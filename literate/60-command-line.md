@@ -1189,13 +1189,18 @@ function that carries each out; `collection` calls the function named by
 its action, and `draft` that of its action, a deposit for `new` and
 `deposit`.
 
-Configuring is where an archive of specification 0.1 is recognised.
+Configuring is where an archive of specification 0.1 is recognised, and
+where a command that writes (one that changes the archive, or `index`)
+stops when a page of objects could not be read, before it changes
+anything (see [the archive](10-archive.md)).
 
     # in the main function of osheaf:
     def configure(args):
         core.configure(core.find_root(args.root))
         if core.OLD and args.cmd != "verify":
             sys.exit(core.REBUILD)
+        if changes_archive(args) or args.cmd == "index":
+            core.refuse_unread_pages()
 
 Options from a file
 -------------------

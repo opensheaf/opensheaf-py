@@ -88,6 +88,7 @@ LABELS = {}
 CATALOGUES = {}
 TOMBSTONES = []
 OLD = False
+UNREAD_PAGES = None
 
 SPEC = "0.2"
 OWNER_NAME_LAYOUT = "opensheaf-owner-name-storage-layout"
@@ -135,7 +136,7 @@ def set_paths(root, layout=OWNER_NAME_LAYOUT):
 
 def configure(root):
     """Load the archive configuration and set the paths."""
-    global ARCHIVE, TEXMACS, INDEX, TEXMACS_VERSION, LABELS, CATALOGUES, TOMBSTONES, OLD
+    global ARCHIVE, TEXMACS, INDEX, TEXMACS_VERSION, LABELS, CATALOGUES, TOMBSTONES, OLD, UNREAD_PAGES
     cfg = read_config(root)
     disc_path = Path(root) / "opensheaf.json"
     disc = json.loads(disc_path.read_text(encoding="utf-8")) if disc_path.exists() else {}
@@ -155,14 +156,22 @@ def configure(root):
     TEXMACS_VERSION = TEXMACS.get("version", TEXMACS_VERSION)
     INDEX = cfg.get("index", {})
     try:
-        listed = listed_objects(disc, local_page)
-    except ValueError:
-        listed = []
+        listed, UNREAD_PAGES = listed_objects(disc, local_page), None
+    except ValueError as e:
+        listed, UNREAD_PAGES = [], str(e)
     LABELS = {o["label"]: o["id"] for o in listed if o.get("label")}
     CATALOGUES = {e["owner"]: e["catalogue"] for e in disc.get("owners", [])
                   if isinstance(e, dict) and e.get("owner") and e.get("catalogue")}
     TOMBSTONES = list(disc.get("tombstones", []))
     return ROOT
+
+
+def refuse_unread_pages():
+    """Stop if a page of objects of the discovery document could not be read (#19)."""
+    if UNREAD_PAGES:
+        sys.exit(f"opensheaf.json: {UNREAD_PAGES}: the labels of the lines are not known, and writing "
+                 "the discovery document or the website now would lose them; nothing is written "
+                 "(restore the pages of objects, from git for instance, and run the command again)")
 
 
 def archive_owners():
@@ -1759,6 +1768,7 @@ def discovery():
 def write_discovery():
     """Write the discovery document opensheaf.json, its pages of objects and the indexes from the
     storage root."""
+    refuse_unread_pages()
     write_indexes()
     doc = discovery()
     pages = object_pages(doc["objects"])

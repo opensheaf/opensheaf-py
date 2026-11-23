@@ -605,6 +605,8 @@ def configure(args):
     core.configure(core.find_root(args.root))
     if core.OLD and args.cmd != "verify":
         sys.exit(core.REBUILD)
+    if changes_archive(args) or args.cmd == "index":
+        core.refuse_unread_pages()
 
 
 if __name__ == "__main__":

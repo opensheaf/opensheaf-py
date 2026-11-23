@@ -102,6 +102,7 @@ their genesis record), and in the `object.json` of the heads.
     def write_discovery():
         """Write the discovery document opensheaf.json, its pages of objects and the indexes from the
         storage root."""
+        refuse_unread_pages()
         write_indexes()
         doc = discovery()
         pages = object_pages(doc["objects"])

@@ -998,7 +998,8 @@ def test_object_pages(tmp_path, monkeypatch):
     assert errors(a) == []
     P.configure(a)
     assert P.LABELS["two"] == line(a, "two")
-    _, nm, owner = line(a, "two").split(":")
+    line_id_two = line(a, "two")
+    _, nm, owner = line_id_two.split(":")
     with remote.Resolver(here=False) as r:
         assert r.pin(nm, owner, "v1", head_digest(a, "two", "v1"), [str(a)]).status == "verified"
     first = a / disc["objectPages"][0]
@@ -1007,6 +1008,17 @@ def test_object_pages(tmp_path, monkeypatch):
     assert any("is missing (section 3.1)" in e for e in errors(a))
     with remote.Resolver(here=False) as r:
         assert r.source(str(a)) is None
+    before = (a / "opensheaf.json").read_bytes()
+    assert (a / "paper" / "two" / "index.html").exists()
+    for argv in (["index"], ["deposit", "two", "--pdf", str(a.parent / "two.pdf"), "--no-source", "x",
+                             "--title", "Two", "--author", "Doe, J", "--issued", "2020-01-01"]):
+        with pytest.raises(SystemExit, match="the labels of the lines are not known"):
+            run("--root", str(a), *argv)
+    P.configure(a)
+    with pytest.raises(SystemExit, match="the labels of the lines are not known"):
+        P.write_discovery()
+    assert (a / "opensheaf.json").read_bytes() == before and (a / "paper" / "two" / "index.html").exists()
+    assert not (P.obj_dir(line_id_two) / "v2").exists()
     first.write_bytes(saved)
     monkeypatch.setattr(P, "OBJECTS_PER_PAGE", 1000)
     P.configure(a)

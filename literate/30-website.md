@@ -436,6 +436,7 @@ sheets gets no stray `style.css`.
         read (owners.fetch_json by default). GROUPS: [(owner, members)], the members by owner
         catalogue, for an archive with several owners."""
         global KEEPER_FETCH
+        P.refuse_unread_pages()
         LINES.clear()
         KEEPERS.clear()
         KEEPER_FETCH = keeper_fetch

@@ -1273,7 +1273,10 @@ An archive with more objects than a page holds lists them in pages
 (section 3.1): here a page holds two objects. The pages pass verification,
 the labels are read from them, and another archive resolves a line through
 them; a page missing is an error, and makes the archive unavailable to
-resolvers. Back under the threshold, the pages go.
+resolvers. With a page missing, the labels are not known: a command that
+writes stops before it writes anything (#19), and the discovery document
+and the landing pages stay as they were. Back under the threshold, the
+pages go.
 
     # in across: takedowns and indexes:
     def test_object_pages(tmp_path, monkeypatch):
@@ -1290,7 +1293,8 @@ resolvers. Back under the threshold, the pages go.
         assert errors(a) == []
         P.configure(a)
         assert P.LABELS["two"] == line(a, "two")
-        _, nm, owner = line(a, "two").split(":")
+        line_id_two = line(a, "two")
+        _, nm, owner = line_id_two.split(":")
         with remote.Resolver(here=False) as r:
             assert r.pin(nm, owner, "v1", head_digest(a, "two", "v1"), [str(a)]).status == "verified"
         first = a / disc["objectPages"][0]
@@ -1299,6 +1303,17 @@ resolvers. Back under the threshold, the pages go.
         assert any("is missing (section 3.1)" in e for e in errors(a))
         with remote.Resolver(here=False) as r:
             assert r.source(str(a)) is None
+        before = (a / "opensheaf.json").read_bytes()
+        assert (a / "paper" / "two" / "index.html").exists()
+        for argv in (["index"], ["deposit", "two", "--pdf", str(a.parent / "two.pdf"), "--no-source", "x",
+                                 "--title", "Two", "--author", "Doe, J", "--issued", "2020-01-01"]):
+            with pytest.raises(SystemExit, match="the labels of the lines are not known"):
+                run("--root", str(a), *argv)
+        P.configure(a)
+        with pytest.raises(SystemExit, match="the labels of the lines are not known"):
+            P.write_discovery()
+        assert (a / "opensheaf.json").read_bytes() == before and (a / "paper" / "two" / "index.html").exists()
+        assert not (P.obj_dir(line_id_two) / "v2").exists()
         first.write_bytes(saved)
         monkeypatch.setattr(P, "OBJECTS_PER_PAGE", 1000)
         P.configure(a)

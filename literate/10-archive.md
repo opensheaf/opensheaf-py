@@ -244,7 +244,8 @@ TeXmacs profile and of the index. `LAYOUT` is the storage layout,
 `CATALOGUES` the owners it hosts to their owner catalogues (section 8.1),
 `TOMBSTONES` holds the tombstones of the discovery document (section 13.3),
 which nothing else keeps, and `OLD` says that the folder is an archive of specification 0.1, which these
-tools no longer read (below).
+tools no longer read (below). `UNREAD_PAGES` says why a page of objects of
+the discovery document could not be read, when one could not (#19).
 
     # in the settings of the archive, set when it is configured:
     # set by configure()
@@ -257,6 +258,7 @@ tools no longer read (below).
     CATALOGUES = {}
     TOMBSTONES = []
     OLD = False
+    UNREAD_PAGES = None
 
 The fixed values: the version of the specification written into every file;
 the two storage layouts of section 3.2, by their names in the discovery
@@ -345,6 +347,16 @@ archive succeeds, so that `osheaf verify` can say what to do, and every
 other command stops with that message (see the
 [command line](60-command-line.md)).
 
+The labels of an archive with more than a thousand objects are in the
+pages of objects (section 3.1). A page that is missing or unreadable
+leaves the labels unknown: configuring succeeds, so that `osheaf verify`
+can report it, but nothing that writes the discovery document or the
+website may run then, since it would write the labels away (the next
+discovery document would have none) and remove every landing page under
+`paper/<label>/`. `refuse_unread_pages` stops such a command, before it
+changes anything; the command line calls it for every command that
+writes, and `write_discovery` and `render` call it again.
+
     # in load the configuration and set the paths of the archive:
     def set_paths(root, layout=OWNER_NAME_LAYOUT):
         """Set the folders of the archive in ROOT and its storage layout."""
@@ -356,7 +368,7 @@ other command stops with that message (see the
 
     def configure(root):
         """Load the archive configuration and set the paths."""
-        global ARCHIVE, TEXMACS, INDEX, TEXMACS_VERSION, LABELS, CATALOGUES, TOMBSTONES, OLD
+        global ARCHIVE, TEXMACS, INDEX, TEXMACS_VERSION, LABELS, CATALOGUES, TOMBSTONES, OLD, UNREAD_PAGES
         cfg = read_config(root)
         disc_path = Path(root) / "opensheaf.json"
         disc = json.loads(disc_path.read_text(encoding="utf-8")) if disc_path.exists() else {}
@@ -376,14 +388,22 @@ other command stops with that message (see the
         TEXMACS_VERSION = TEXMACS.get("version", TEXMACS_VERSION)
         INDEX = cfg.get("index", {})
         try:
-            listed = listed_objects(disc, local_page)
-        except ValueError:
-            listed = []
+            listed, UNREAD_PAGES = listed_objects(disc, local_page), None
+        except ValueError as e:
+            listed, UNREAD_PAGES = [], str(e)
         LABELS = {o["label"]: o["id"] for o in listed if o.get("label")}
         CATALOGUES = {e["owner"]: e["catalogue"] for e in disc.get("owners", [])
                       if isinstance(e, dict) and e.get("owner") and e.get("catalogue")}
         TOMBSTONES = list(disc.get("tombstones", []))
         return ROOT
+
+
+    def refuse_unread_pages():
+        """Stop if a page of objects of the discovery document could not be read (#19)."""
+        if UNREAD_PAGES:
+            sys.exit(f"opensheaf.json: {UNREAD_PAGES}: the labels of the lines are not known, and writing "
+                     "the discovery document or the website now would lose them; nothing is written "
+                     "(restore the pages of objects, from git for instance, and run the command again)")
 
 The owners of the archive are the owner of the configuration and the
 others it hosts: each has its owner catalogue, which lists the documents of
