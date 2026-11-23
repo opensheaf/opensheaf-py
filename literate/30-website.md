@@ -1275,7 +1275,10 @@ here (`current_version`).
 The status is the one the archive's discovery document gives the line
 (section 3.1), which a verifier checks against the storage root; for a
 withdrawn line, the withdrawal and its reason are read from the head of the
-line, whose root inventory names it.
+line, whose root inventory names it. The entries are those of all its
+objects: `Source.discovery` reads the pages of objects of an archive with
+more than a thousand (`listed_objects`, #19) into `objects`, and an archive
+whose pages cannot be read does not answer.
 
     # in the status of a member elsewhere:
     entry = next((o for o in disc.get("objects", []) if isinstance(o, dict) and o.get("id") == obj_id), {})

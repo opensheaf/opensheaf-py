@@ -629,6 +629,32 @@ is written, the member with its cached citation.
         home = (a / "index.html").read_text()
         assert "archive unavailable: cached citation" in home and ">One<" in home
 
+### A withdrawn member of an archive that pages its objects
+
+The status of a member elsewhere is read from the discovery document of its
+archive, from its pages of objects when it pages them (#19): a line
+withdrawn in an archive with a page per object is shown withdrawn, with
+its reason, on the home page of the archive that features it.
+
+    # in across: collections:
+    def test_a_withdrawn_member_of_a_paged_archive(tmp_path, monkeypatch):
+        monkeypatch.setattr(P, "OBJECTS_PER_PAGE", 1)
+        p, a = make(tmp_path, "papers"), make(tmp_path, "author")
+        deposit(p, "one", "one", new=True)
+        deposit(p, "two", "two", new=True)
+        spec = tmp_path / "list.yaml"
+        spec.write_text(f"title: A list\ntype: catalogue\nmembers:\n  - '{uri(p, 'one')}'\n")
+        run("--root", str(a), "collection", "sync", "list", "--from", str(spec))
+        run("--root", str(p), "withdraw", "one", "--reason", "a mistake")
+        disc = json.loads((p / "opensheaf.json").read_text())
+        assert "objects" not in disc and disc["objectPages"]
+        cfg = json.loads((a / "osheaf.json").read_text())
+        cfg["index"] = {"html": {"featured": "list"}}
+        (a / "osheaf.json").write_text(json.dumps(cfg))
+        run("--root", str(a), "index")
+        home = (a / "index.html").read_text()
+        assert "Withdrawn by its owner" in home and "a mistake" in home
+
 Mirrors and key logs
 --------------------
 

@@ -478,6 +478,25 @@ def test_a_member_elsewhere_whose_files_are_not_those_pinned(tmp_path):
     assert "archive unavailable: cached citation" in home and ">One<" in home
 
 
+def test_a_withdrawn_member_of_a_paged_archive(tmp_path, monkeypatch):
+    monkeypatch.setattr(P, "OBJECTS_PER_PAGE", 1)
+    p, a = make(tmp_path, "papers"), make(tmp_path, "author")
+    deposit(p, "one", "one", new=True)
+    deposit(p, "two", "two", new=True)
+    spec = tmp_path / "list.yaml"
+    spec.write_text(f"title: A list\ntype: catalogue\nmembers:\n  - '{uri(p, 'one')}'\n")
+    run("--root", str(a), "collection", "sync", "list", "--from", str(spec))
+    run("--root", str(p), "withdraw", "one", "--reason", "a mistake")
+    disc = json.loads((p / "opensheaf.json").read_text())
+    assert "objects" not in disc and disc["objectPages"]
+    cfg = json.loads((a / "osheaf.json").read_text())
+    cfg["index"] = {"html": {"featured": "list"}}
+    (a / "osheaf.json").write_text(json.dumps(cfg))
+    run("--root", str(a), "index")
+    home = (a / "index.html").read_text()
+    assert "Withdrawn by its owner" in home and "a mistake" in home
+
+
 def test_mirror(tmp_path, capsys):
     a, lib = make(tmp_path, "authors"), make(tmp_path, "library")
     deposit(a, "open", "one", new=True)
