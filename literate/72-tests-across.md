@@ -243,6 +243,44 @@ read from disk; and one copy brings a bounded number of files.
         log = owners.load_key_log(kd)
         assert any("a content path out of the object" in p for p in log.problems)
 
+A copy's versions are read through its root inventory. Here the head of
+the paper is forged: an unsigned `v2` whose inventory restates the state
+of the signed `v1` with another PDF, the inventory of `v1` left as it was.
+The inventory of `v1` no longer records `v1` as the head inventory does
+(section 14.2), so the copy is no copy of the line: not resolved to, read
+in place or fetched, and an error of the archive's verification.
+
+    # in across: resolution:
+    def test_an_unsigned_head_cannot_restate_a_signed_version(tmp_path):
+        a, c = make(tmp_path, "a"), make(tmp_path, "c")
+        deposit(a, "paper", "one", new=True)
+        obj_id = line(a, "paper")
+        _, nm, owner = obj_id.split(":")
+        d = P.obj_dir(obj_id)
+        forged = json.loads((d / "v1" / "inventory.json").read_bytes())
+        state = forged["versions"]["v1"]["state"]
+        pdf = next(dg for dg, paths in state.items() if paths[0].endswith(".pdf"))
+        other = b"%PDF-1.4 forged"
+        state[names.sha512_hex(other)] = state.pop(pdf)
+        forged["manifest"][names.sha512_hex(other)] = ["v2/content/forged.pdf"]
+        forged["versions"]["v2"] = dict(forged["versions"]["v1"], message="forged")
+        forged["head"] = "v2"
+        (d / "v2" / "content").mkdir(parents=True)
+        (d / "v2" / "content" / "forged.pdf").write_bytes(other)
+        data = json.dumps(forged).encode()
+        for f in (d / "v2" / "inventory.json", d / "inventory.json"):
+            f.write_bytes(data)
+            f.with_name(f.name + ".sha512").write_bytes(owners.sidecar(data))
+        assert remote.version_problem(forged, 1, json.loads((d / "v1" / "inventory.json").read_bytes()))
+        P.configure(c)
+        with remote.Resolver() as r:
+            assert r.latest(nm, owner, ["https://example.org/a/"]).status == "unavailable"
+            assert any("not a copy of the line: v1: its inventory does not record the versions" in m
+                       for _, m in r.notes)
+        with pytest.raises(remote.Unavailable, match="v1: its inventory does not record the versions"):
+            remote.fetch_object(remote.Source(str(a)), obj_id, tmp_path / "copy")
+        assert any("v1: the inventory copy disagrees with the inventory" in e for e in errors(a))
+
 Over HTTP, a reader cannot list folders: it reads the discovery document,
 computes the path of each object in the archive's layout (here the hashed
 layout, whose folder names hold `%3a`, encoded again in URLs), and fetches

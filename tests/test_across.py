@@ -172,6 +172,37 @@ def test_what_another_archive_says_is_checked(tmp_path, monkeypatch):
     assert any("a content path out of the object" in p for p in log.problems)
 
 
+def test_an_unsigned_head_cannot_restate_a_signed_version(tmp_path):
+    a, c = make(tmp_path, "a"), make(tmp_path, "c")
+    deposit(a, "paper", "one", new=True)
+    obj_id = line(a, "paper")
+    _, nm, owner = obj_id.split(":")
+    d = P.obj_dir(obj_id)
+    forged = json.loads((d / "v1" / "inventory.json").read_bytes())
+    state = forged["versions"]["v1"]["state"]
+    pdf = next(dg for dg, paths in state.items() if paths[0].endswith(".pdf"))
+    other = b"%PDF-1.4 forged"
+    state[names.sha512_hex(other)] = state.pop(pdf)
+    forged["manifest"][names.sha512_hex(other)] = ["v2/content/forged.pdf"]
+    forged["versions"]["v2"] = dict(forged["versions"]["v1"], message="forged")
+    forged["head"] = "v2"
+    (d / "v2" / "content").mkdir(parents=True)
+    (d / "v2" / "content" / "forged.pdf").write_bytes(other)
+    data = json.dumps(forged).encode()
+    for f in (d / "v2" / "inventory.json", d / "inventory.json"):
+        f.write_bytes(data)
+        f.with_name(f.name + ".sha512").write_bytes(owners.sidecar(data))
+    assert remote.version_problem(forged, 1, json.loads((d / "v1" / "inventory.json").read_bytes()))
+    P.configure(c)
+    with remote.Resolver() as r:
+        assert r.latest(nm, owner, ["https://example.org/a/"]).status == "unavailable"
+        assert any("not a copy of the line: v1: its inventory does not record the versions" in m
+                   for _, m in r.notes)
+    with pytest.raises(remote.Unavailable, match="v1: its inventory does not record the versions"):
+        remote.fetch_object(remote.Source(str(a)), obj_id, tmp_path / "copy")
+    assert any("v1: the inventory copy disagrees with the inventory" in e for e in errors(a))
+
+
 class Quiet(http.server.SimpleHTTPRequestHandler):
     def log_message(self, *args):
         pass

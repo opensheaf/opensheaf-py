@@ -321,6 +321,24 @@ use to copy a line into the storage root, from either kind of source:
 4. the inventory of the last version copied becomes the root inventory, so
    that a copy stopping before the head is a valid object of its own.
 
+A version's files are read through the inventory of the last version
+copied: its `versions` give the state of every earlier version, and its
+manifest the content paths. A signature fixes only the bytes of the
+inventory of the version it signs, so an unsigned last version could
+restate the state of an earlier, signed one, and a reader would take that
+version's files from it. The inventory of each version folder is the
+inventory as of that version: its `head` is that version, and its
+`versions` are those of the head inventory up to it, equal as JSON values
+(sections 4.1 and 14.2; OCFL 1.1, section 3.7, whose validation code E066
+asks the same of the state). `version_problem` checks one inventory
+against the last one, and `fetch_object` refuses a copy in which one
+disagrees. `inventories_problem` does the same for a copy read in place,
+whose root inventory must also be, as a JSON value, the inventory of its
+head version, the one its signature names: its bytes may differ, and a pin
+to them is then reported as not matching (section 12.3). With the two in agreement, every earlier version's state is the
+one its own inventory, the one signed, records, and each file read through
+the manifest has the digest that state names, checked as it is fetched.
+
 Content paths and witness names come from the files fetched, so they are
 checked before they are written: every path of the manifest of every
 inventory fetched must be a content path of the object (`vN/content/...`,
@@ -349,6 +367,44 @@ one copy brings `MAX_FETCH_FILES` files and `MAX_FETCH_BYTES` bytes at most
         return out
 
 
+    def version_problem(inv, n, copy):
+        """Why COPY, the inventory held in the folder of vN, is not the inventory INV as of vN
+        (sections 4.1 and 14.2), or None."""
+        upto = [f"v{k}" for k in range(1, n + 1)]
+        if not isinstance(copy, dict) or copy.get("head") != f"v{n}":
+            return "its inventory is not one of that version"
+        held, stated = copy.get("versions"), inv.get("versions")
+        if not isinstance(held, dict) or not isinstance(stated, dict) or sorted(held) != sorted(upto) \
+                or any(held[v] != stated.get(v) for v in upto):
+            return "its inventory does not record the versions up to it as the head inventory does"
+        return None
+
+
+    def inventories_problem(d, inv):
+        """Why the inventories of the version folders of the object in D, read in place, are not
+        those of its root inventory INV as of each version (sections 4.1 and 14.2), or None."""
+        try:
+            head = int(inv["head"][1:])
+        except (KeyError, TypeError, ValueError):
+            return "its inventory cannot be read"
+        for n in range(1, head + 1):
+            p = d / f"v{n}" / "inventory.json"
+            if not p.is_file():
+                return f"v{n} has no inventory (section 4.1)"
+            try:
+                copy = json.loads(p.read_bytes())
+            except ValueError:
+                copy = None
+            if n == head:
+                if copy != inv:
+                    return f"v{n}: the root inventory is not that of the head version (section 14.2)"
+                continue
+            problem = version_problem(inv, n, copy)
+            if problem:
+                return f"v{n}: {problem} (section 14.2)"
+        return None
+
+
     def fetch_object(src, obj_id, dest, *, upto=None, witness_names=None, warn=None, expect=None):
         """Copy the object OBJ_ID of the archive SRC, v1 to UPTO (default: its head), into the new
         folder DEST, checking every file; WITNESS_NAMES(n, dest) names the witness files of vN
@@ -366,7 +422,7 @@ one copy brings `MAX_FETCH_FILES` files and `MAX_FETCH_BYTES` bytes at most
         upto = min(upto or head, head)
         dest.mkdir(parents=True)
         (dest / "0=ocfl_object_1.1").write_text("ocfl_object_1.1\n")
-        last, fetched = None, [0, 0]
+        last, fetched, earlier = None, [0, 0], []
 
         def get(rel):
             data = src.get(rel)
@@ -401,9 +457,14 @@ one copy brings `MAX_FETCH_FILES` files and `MAX_FETCH_BYTES` bytes at most
             (dest / f"v{n}" / "inventory.json").write_bytes(data)
             (dest / f"v{n}" / "inventory.json.sha512").write_bytes(sc)
             last = (data, sc)
-        inv = json.loads(last[0])
+            earlier.append(inv_n)
+        inv = earlier.pop()
         if inv.get("id") != obj_id or inv.get("head") != f"v{upto}":
             raise Unavailable(f"{src}: the inventory of {obj_id} v{upto} is not one of that version")
+        for n, inv_n in enumerate(earlier, 1):
+            problem = version_problem(inv, n, inv_n)
+            if problem:
+                raise Unavailable(f"{src}: {obj_id} v{n}: {problem} (section 14.2): not copied")
         for dig, paths in inv.get("manifest", {}).items():
             for cp in paths:
                 if not owners.content_path(cp, inv, upto):
@@ -730,7 +791,11 @@ resolver's own; for each archive that holds one, the key log beside it is
 met first, so that over HTTP the signature files of every key it lists can
 be named and fetched. Each copy is then checked as section 12.3 says: the
 name is a name of its genesis record, and every version's `object.json`
-records the line; a copy that fails is noted and left out. A checksum file
+records the line; and, since its versions are read through its root
+inventory, the inventory of each version folder is that inventory as of
+the version (`inventories_problem`, above), so that an unsigned head cannot
+restate the files of a signed version before it. A copy that fails is
+noted and left out. A checksum file
 missing or wrong in a copy read in place is noted, as one in a copy
 fetched is (section 12.3); this archive's own are its verification's. Its versions
 are judged against the key log met so far, which, once every copy is
@@ -776,6 +841,9 @@ the copies it finds and the tombstone (section 12.3).
         """Why the object in D is not a copy of the line OBJ_ID (section 12.3), or None."""
         if inv is None or inv.get("id") != obj_id:
             return "its inventory names another object"
+        problem = inventories_problem(d, inv)
+        if problem:
+            return problem
         _, nm, owner = obj_id.split(":")
         g = P.read_logical(d, inv, P.GENESIS, "v1")
         if g is None or not names.is_name_of(nm, g.read_bytes()):

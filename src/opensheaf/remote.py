@@ -186,6 +186,44 @@ def checksum_problems(where, obj_id, d, inv):
     return out
 
 
+def version_problem(inv, n, copy):
+    """Why COPY, the inventory held in the folder of vN, is not the inventory INV as of vN
+    (sections 4.1 and 14.2), or None."""
+    upto = [f"v{k}" for k in range(1, n + 1)]
+    if not isinstance(copy, dict) or copy.get("head") != f"v{n}":
+        return "its inventory is not one of that version"
+    held, stated = copy.get("versions"), inv.get("versions")
+    if not isinstance(held, dict) or not isinstance(stated, dict) or sorted(held) != sorted(upto) \
+            or any(held[v] != stated.get(v) for v in upto):
+        return "its inventory does not record the versions up to it as the head inventory does"
+    return None
+
+
+def inventories_problem(d, inv):
+    """Why the inventories of the version folders of the object in D, read in place, are not
+    those of its root inventory INV as of each version (sections 4.1 and 14.2), or None."""
+    try:
+        head = int(inv["head"][1:])
+    except (KeyError, TypeError, ValueError):
+        return "its inventory cannot be read"
+    for n in range(1, head + 1):
+        p = d / f"v{n}" / "inventory.json"
+        if not p.is_file():
+            return f"v{n} has no inventory (section 4.1)"
+        try:
+            copy = json.loads(p.read_bytes())
+        except ValueError:
+            copy = None
+        if n == head:
+            if copy != inv:
+                return f"v{n}: the root inventory is not that of the head version (section 14.2)"
+            continue
+        problem = version_problem(inv, n, copy)
+        if problem:
+            return f"v{n}: {problem} (section 14.2)"
+    return None
+
+
 def fetch_object(src, obj_id, dest, *, upto=None, witness_names=None, warn=None, expect=None):
     """Copy the object OBJ_ID of the archive SRC, v1 to UPTO (default: its head), into the new
     folder DEST, checking every file; WITNESS_NAMES(n, dest) names the witness files of vN
@@ -203,7 +241,7 @@ def fetch_object(src, obj_id, dest, *, upto=None, witness_names=None, warn=None,
     upto = min(upto or head, head)
     dest.mkdir(parents=True)
     (dest / "0=ocfl_object_1.1").write_text("ocfl_object_1.1\n")
-    last, fetched = None, [0, 0]
+    last, fetched, earlier = None, [0, 0], []
 
     def get(rel):
         data = src.get(rel)
@@ -238,9 +276,14 @@ def fetch_object(src, obj_id, dest, *, upto=None, witness_names=None, warn=None,
         (dest / f"v{n}" / "inventory.json").write_bytes(data)
         (dest / f"v{n}" / "inventory.json.sha512").write_bytes(sc)
         last = (data, sc)
-    inv = json.loads(last[0])
+        earlier.append(inv_n)
+    inv = earlier.pop()
     if inv.get("id") != obj_id or inv.get("head") != f"v{upto}":
         raise Unavailable(f"{src}: the inventory of {obj_id} v{upto} is not one of that version")
+    for n, inv_n in enumerate(earlier, 1):
+        problem = version_problem(inv, n, inv_n)
+        if problem:
+            raise Unavailable(f"{src}: {obj_id} v{n}: {problem} (section 14.2): not copied")
     for dig, paths in inv.get("manifest", {}).items():
         for cp in paths:
             if not owners.content_path(cp, inv, upto):
@@ -526,6 +569,9 @@ class Resolver:
         """Why the object in D is not a copy of the line OBJ_ID (section 12.3), or None."""
         if inv is None or inv.get("id") != obj_id:
             return "its inventory names another object"
+        problem = inventories_problem(d, inv)
+        if problem:
+            return problem
         _, nm, owner = obj_id.split(":")
         g = P.read_logical(d, inv, P.GENESIS, "v1")
         if g is None or not names.is_name_of(nm, g.read_bytes()):
