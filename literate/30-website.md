@@ -878,6 +878,12 @@ licences are the entries of `rightsList` with a URL (section 4.4), only http and
 identifier without one is given the address of its SPDX page.
 
     # in the tags for search engines:
+    def json_in_script(data):
+        """DATA as JSON to write inside a <script> element: no <, > or & is left for HTML to read."""
+        text = json.dumps(data, ensure_ascii=False)
+        return text.replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026")
+
+
     def content_items(obj):
         """(logical path, media type) of the renditions and the main source of OBJ."""
         out = [(r["path"], r.get("mediaType")) for r in obj.get("renditions", [])]
@@ -918,8 +924,11 @@ abstract and keywords; for a collection, `hasPart`, the landing pages of
 the members held here and the DOIs of the others that have one; and for a
 withdrawn line, `creativeWorkStatus` `Withdrawn`. It follows DataCite's
 correspondence with schema.org. It is written into a `<script>` element,
-where the sequence `</` would end the element early: it is escaped as
-`<\/`, which JSON reads as the same string.
+where `</script` would end the element early, and `<!--` would make the
+parser look for a `-->` and for `<script>` inside it, so that a title or
+an abstract holding them would break the page. Every `<`, `>` and `&` in
+the JSON is written as a `\u` escape (`json_in_script`), which JSON reads
+as the same character, and none is left for HTML to read.
 
     # in the schema.org record of a landing page:
     ld = {"@context": "https://schema.org", "@type": kind,
@@ -949,8 +958,7 @@ where the sequence `</` would end the element early: it is escaped as
         ld["hasPart"] = collection_parts(line, cur)
     if obj.get("status") == "withdrawn":
         ld["creativeWorkStatus"] = "Withdrawn"
-    tags.append('<script type="application/ld+json">'
-                + json.dumps(ld, ensure_ascii=False).replace("</", "<\\/") + "</script>")
+    tags.append('<script type="application/ld+json">' + json_in_script(ld) + "</script>")
 
 The type follows DataCite's correspondence for the common types, and is
 `CreativeWork` otherwise.

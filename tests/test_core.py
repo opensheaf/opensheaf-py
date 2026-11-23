@@ -134,6 +134,13 @@ def test_landing_page_describes_itself(archive):
     assert any("lacks a schema.org record" in e for e in P.verify_errors())
 
 
+def test_the_schema_org_record_cannot_break_its_script_element():
+    from opensheaf import html
+    data = {"abstract": "a <!--<script> b </script> c & d", "name": "x</SCRIPT >"}
+    text = html.json_in_script(data)
+    assert not set("<>&") & set(text) and json.loads(text) == data
+
+
 def test_gap_in_numbering_is_an_error(archive):
     put("paper-a", 1, FILES1)
     put("paper-a", 3, FILES2)

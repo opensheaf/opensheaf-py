@@ -287,6 +287,17 @@ website.
         page.write_text(re.sub(r'<script type="application/ld\+json">.*?</script>', "", text, flags=re.S))
         assert any("lacks a schema.org record" in e for e in P.verify_errors())
 
+The record is JSON inside a `<script>` element: a title or an abstract
+holding `</script>` or `<!--<script>` cannot end the element or open a
+comment in it, since no `<`, `>` or `&` is left for HTML to read.
+
+    # in test: the rules of document versions:
+    def test_the_schema_org_record_cannot_break_its_script_element():
+        from opensheaf import html
+        data = {"abstract": "a <!--<script> b </script> c & d", "name": "x</SCRIPT >"}
+        text = html.json_in_script(data)
+        assert not set("<>&") & set(text) and json.loads(text) == data
+
 Document versions are numbered from 1 without gaps. A paper whose second
 object version claims to be document version 3 breaks the numbering.
 

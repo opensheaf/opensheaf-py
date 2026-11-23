@@ -300,9 +300,14 @@ def meta_tags(line, cur, obj, dc):
         ld["hasPart"] = collection_parts(line, cur)
     if obj.get("status") == "withdrawn":
         ld["creativeWorkStatus"] = "Withdrawn"
-    tags.append('<script type="application/ld+json">'
-                + json.dumps(ld, ensure_ascii=False).replace("</", "<\\/") + "</script>")
+    tags.append('<script type="application/ld+json">' + json_in_script(ld) + "</script>")
     return "\n".join(tags)
+
+
+def json_in_script(data):
+    """DATA as JSON to write inside a <script> element: no <, > or & is left for HTML to read."""
+    text = json.dumps(data, ensure_ascii=False)
+    return text.replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026")
 
 
 def content_items(obj):
