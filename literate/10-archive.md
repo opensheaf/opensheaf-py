@@ -949,16 +949,17 @@ layout, is authoritative. Creating the root is idempotent.
             write_file(OCFL / LAYOUT_FILE, LAYOUT_TEXT)
 
 The root inventory of an object, or `None` for an object not yet created
-or one whose inventory cannot be read, which [verification](17-verify.md)
-reports.
+or one whose inventory cannot be read (not JSON, nested too deep, or not a
+JSON object), which [verification](17-verify.md) reports.
 
     # in read the inventory of an object:
     def load_inventory(obj_dir):
         p = obj_dir / "inventory.json"
         try:
-            return names.json_value(p.read_text(encoding="utf-8")) if p.exists() else None
+            inv = names.json_value(p.read_text(encoding="utf-8")) if p.exists() else None
         except (ValueError, UnicodeDecodeError):
             return None
+        return inv if isinstance(inv, dict) else None
 
 Inventories are written by one function, as bytes, with their *checksum
 file* (the sidecar), whose line is the digest, two spaces and the name of
@@ -1063,13 +1064,19 @@ layout puts it where it is, and sorted by identifier so that every listing
 is reproducible.
 
     # in the objects of the storage root:
+    SKIPPED = set()
+
+
     def objects():
-        """(id, object dir, inventory) of every object of the storage root."""
+        """(id, object dir, inventory) of every object of the storage root, but those of SKIPPED,
+        the folders of objects the verifier could not read."""
         out = []
 
         def walk(d):
             for c in sorted(d.iterdir()):
                 if not c.is_dir() or c.is_symlink():
+                    continue
+                if c in SKIPPED:
                     continue
                 if (c / "0=ocfl_object_1.1").exists():
                     inv = load_inventory(c)

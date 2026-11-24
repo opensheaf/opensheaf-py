@@ -166,15 +166,30 @@ steps of section 14, in order.
             f.error("opensheaf.json", "the discovery document is missing (section 3.1)")
         else:
             try:
-                disc = json.loads(disc_path.read_text(encoding="utf-8"))
+                disc = names.json_value(disc_path.read_text(encoding="utf-8"))
             except ValueError as e:
                 f.error("opensheaf.json", f"not JSON: {e}")
-            if disc.get("specification") == "0.1":
+                disc = None
+            if not isinstance(disc, dict):
+                if disc is not None:
+                    f.error("opensheaf.json", "the discovery document is a JSON object (section 3.1)")
+                disc = {}
+            elif disc.get("specification") == "0.1":
                 f.error("archive", "specification 0.1: rebuild (section 16.1)")
                 return f
-            schema("opensheaf.json", disc, "archive")
-            if "objectPages" in disc:
-                disc["objects"] = check_object_pages(f, schema, disc)
+            else:
+                schema("opensheaf.json", disc, "archive")
+                if "objectPages" in disc:
+                    disc["objects"] = check_object_pages(f, schema, disc)
+        SKIPPED.clear()
+        try:
+            return checked(f, schema, disc, remote, keeper_fetch)
+        finally:
+            SKIPPED.clear()
+
+
+    def checked(f, schema, disc, remote, keeper_fetch):
+        """The steps of section 14, with their findings in F."""
         found = guarded(f, "the storage root", check_storage, f, schema, disc) or {}
         logs = guarded(f, "the key logs", check_key_logs, f, found, schema) or {}
         guarded(f, "the keepers", check_keepers, f, logs, remote, keeper_fetch)
@@ -203,6 +218,11 @@ verification half way with a traceback. Each object is checked on its own,
 and one that cannot be read is reported and left out of the later steps
 (`check_storage`); each step runs under `guarded`, which turns what stops
 it into an error that says which step stopped, and goes on to the next.
+
+An object that cannot be read is also left out of the storage root as the
+later steps see it (`SKIPPED`, which `objects` passes over): they would
+read it again, to compare the discovery document and the indexes with the
+storage root, and stop on it. `SKIPPED` holds for one verification only.
 
     # in check an archive and list its findings:
     UNREADABLE = (UnsafePath, ValueError, KeyError, TypeError, AttributeError, IndexError,
@@ -278,8 +298,13 @@ layout.
             if ext != HASHED_LAYOUT:
                 f.error("ocfl", f"ocfl_layout.json must name the extension {HASHED_LAYOUT} (section 3.2)")
             cfg = OCFL / "extensions" / HASHED_LAYOUT / "config.json"
-            if cfg.exists():
-                c = json.loads(cfg.read_text(encoding="utf-8"))
+            try:
+                c = names.json_value(cfg.read_text(encoding="utf-8")) if cfg.exists() else {}
+            except (OSError, ValueError):
+                c = None
+            if not isinstance(c, dict):
+                f.error("ocfl", f"extensions/{HASHED_LAYOUT}/config.json is not a JSON object")
+            else:
                 if (c.get("digestAlgorithm", "sha256"), c.get("tupleSize", 3), c.get("numberOfTuples", 3)) != \
                         ("sha256", 3, 3):
                     f.error("ocfl", "the hashed layout keeps its default parameters (section 3.2)")
@@ -288,6 +313,8 @@ layout.
             rel = d.relative_to(OCFL).as_posix()
             if inv is None or obj_id is None:
                 f.error(f"ocfl/{rel}", "an object without a readable inventory")
+                unread.append(rel)
+                SKIPPED.add(d)
                 continue
             try:
                 expected = path_of(obj_id)
@@ -299,14 +326,20 @@ layout.
             if obj_id in found:
                 f.error(where(obj_id), "two objects of the storage root have this identifier (section 4)")
             found[obj_id] = (d, inv)
+            problem = inventory_problem(inv)
             try:
-                readable = check_object_storage(f, schema, obj_id, d, inv)
+                if problem:
+                    f.error(where(obj_id), f"{problem}: not checked further")
+                    readable = False
+                else:
+                    readable = check_object_storage(f, schema, obj_id, d, inv)
             except UNREADABLE as e:
                 f.error(where(obj_id), f"cannot be read ({type(e).__name__}: {str(e)[:300]}): not checked further")
                 readable = False
             if readable is False:
                 del found[obj_id]
                 unread.append(obj_id)
+                SKIPPED.add(d)
         <<check the storage root with an independent OCFL validator>>
         return found
 
@@ -335,7 +368,37 @@ of the version before, as its checksum file states it; a first version and
 a draft have none. The key logs are checked for it with the other rules of
 key logs (section 14.3), so they are left out here.
 
+Before any of this, the inventory must have the shape the checks read: a
+manifest mapping digests to lists of content paths, versions mapping names
+to versions, each with a state of the same shape, a user that is a mapping
+and a message that is text, if they are given. An inventory of another
+shape is reported, and its object is not checked further: the checks would
+otherwise stop on it.
+
     # in check the files and the storage of an archive:
+    def inventory_problem(inv):
+        """Why the inventory INV does not have the shape of an OCFL inventory, or None."""
+        def paths_map(m):
+            return isinstance(m, dict) and all(
+                isinstance(k, str) and isinstance(v, list) and v and all(isinstance(p, str) for p in v)
+                for k, v in m.items())
+        if not paths_map(inv.get("manifest")):
+            return "the inventory has no manifest of digests and content paths (OCFL 3.5.3)"
+        versions = inv.get("versions")
+        if not isinstance(versions, dict) or not versions or not all(
+                isinstance(v, dict) for v in versions.values()):
+            return "the inventory has no versions, each a JSON object (OCFL 3.5.3)"
+        if inv.get("head") not in versions:
+            return "the head of the inventory is not one of its versions (OCFL 3.5.1)"
+        for name, v in versions.items():
+            if not paths_map(v.get("state")):
+                return f"{name} has no state of digests and logical paths (OCFL 3.5.3.1)"
+            if not isinstance(v.get("user", {}), dict) or not isinstance(v.get("message", ""), str) \
+                    or not isinstance(v.get("created", ""), str):
+                return f"{name} has a user that is not a JSON object, or a message or time that is not text"
+        return None
+
+
     def check_logical_path(p):
         """Whether the logical path P follows the rules of section 4.1."""
         parts = p.split("/")
@@ -826,7 +889,11 @@ belongs to the document version, since it was written and deposited with it
     obj = read_json(d, inv, OBJ, ver)
     if obj is None or obj.get("kind") not in ("document", "collection"):
         return errors
-    n = obj["documentVersion"]
+    n = obj.get("documentVersion")
+    if not isinstance(n, int) or isinstance(n, bool) or n < 1:
+        errors.append(f"{ver}: documentVersion is a positive integer, not {n!r} (section 4.3): the "
+                      "document versions are not checked further")
+        return errors
     new_doc = n not in seen
     own, change = own_files(obj, {p: dig for dig, ps in vinfo["state"].items() for p in ps})
 
@@ -1491,7 +1558,7 @@ the takedown removed it from the pages (section 13.2).
                 report("index.html", f"does not show the pin of {m.get('name')}" + note)
             try:
                 obj_id = names.object_id(m.get("name"), m.get("owner"))
-                held_here = (obj_dir(obj_id) / "inventory.json").is_file()
+                held_here = (obj_dir(obj_id) / "inventory.json").is_file() and obj_dir(obj_id) not in SKIPPED
             except (ValueError, TypeError):
                 continue
             if held_here:

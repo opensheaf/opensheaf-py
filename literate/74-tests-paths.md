@@ -36,6 +36,9 @@ in `tests/test_paths.py`.
 
     <<path tests: a deposit that fails>>
 
+
+    <<path tests: the verifier on malformed files>>
+
 The imports
 -----------
 
@@ -267,7 +270,8 @@ replaced by a script that writes the PDF and the HTML file the Scheme code
 asks for (or, with `pdf=False`, nothing); the archive has an HTML package,
 so that deposits make HTML versions. A deposit that stops after typesetting
 (here on a licence file that is not one of its files) leaves the HTML
-version in `site/` as it was, and leaves no scratch folder; one that
+version in `site/` as it was, and leaves no scratch folder (in a folder of
+the test, which no other program uses); one that
 succeeds replaces it; TeXmacs that makes no PDF stops the deposit with a
 message.
 
@@ -298,14 +302,70 @@ message.
         site = archive / "site" / "paper-t"
         site.mkdir(parents=True)
         (site / "paper-t.html").write_text("<html>old</html>")
-        before = set(Path(tempfile.gettempdir()).glob("osheaf-*"))
+        (tmp_path / "scratch").mkdir()
+        monkeypatch.setattr(tempfile, "tempdir", str(tmp_path / "scratch"))
         with pytest.raises(SystemExit, match="licence-file"):
             run(*r, "--new", "--licence-file", "LICENCE")
         assert (site / "paper-t.html").read_text() == "<html>old</html>"
-        assert set(Path(tempfile.gettempdir()).glob("osheaf-*")) <= before
+        assert list((tmp_path / "scratch").iterdir()) == []
         run(*r, "--new")
         assert (site / "paper-t.html").read_text() == "<html>new</html>"
         fake_texmacs(tmp_path, monkeypatch, pdf=False)
         with pytest.raises(SystemExit, match="made no PDF"):
             run(*r[:-2], "--changes", "x")
         assert (site / "paper-t.html").read_text() == "<html>new</html>"
+
+The verifier on malformed files
+-------------------------------
+
+The verifier reports what it cannot read and goes on: a `documentVersion`
+that is text or missing, a discovery document that is a list, an inventory
+nested deeper than any JSON the tools read, an `object.json` that is not
+UTF-8, a configuration of the hashed layout that is not JSON, an inventory
+whose versions are a list or whose user is text. Each case is a finding;
+none ends the verification with a traceback.
+
+    # in path tests: the verifier on malformed files:
+    def break_inventory(d, change):
+        inv = json.loads((d / "inventory.json").read_text())
+        change(inv)
+        (d / "inventory.json").write_text(json.dumps(inv))
+
+
+    @pytest.mark.parametrize("case", ["documentVersion text", "documentVersion missing", "discovery list",
+                                      "deep inventory", "object.json latin-1", "hashed config",
+                                      "versions list", "user text"])
+    def test_the_verifier_reports_what_it_cannot_read(archive, case):
+        put("paper-a", 1, FILES1, extra_obj={"documentVersion": "1"} if case == "documentVersion text" else None)
+        finish()
+        if case == "documentVersion missing":
+            put("paper-a", 2, FILES2, extra_obj={"documentVersion": None})
+        d = P.obj_dir(P.LABELS["paper-a"])
+        inv = P.load_inventory(d)
+        expected = {"documentVersion text": "documentVersion is a positive integer",
+                    "documentVersion missing": "documentVersion is a positive integer",
+                    "discovery list": "is a JSON object", "deep inventory": "without a readable inventory",
+                    "object.json latin-1": "cannot be read", "hashed config": "config.json is not a JSON object",
+                    "versions list": "no versions", "user text": "a user that is not"}[case]
+        if case == "discovery list":
+            (archive / "opensheaf.json").write_text("[]")
+        elif case == "deep inventory":
+            (d / "inventory.json").write_text("[" * 100000)
+        elif case == "object.json latin-1":
+            (d / P.content_path(inv, "v1", P.OBJ)).write_bytes(b"\xff\xfe{}")
+        elif case == "hashed config":
+            monkey = P.LAYOUT
+            P.LAYOUT = P.HASHED_LAYOUT
+            (P.OCFL / "extensions" / P.HASHED_LAYOUT).mkdir(parents=True)
+            (P.OCFL / "extensions" / P.HASHED_LAYOUT / "config.json").write_text("[1")
+        elif case == "versions list":
+            break_inventory(d, lambda i: i.update(versions=["v1"]))
+        elif case == "user text":
+            break_inventory(d, lambda i: i["versions"]["v1"].update(user="me"))
+        try:
+            errors = P.verify_errors()
+        finally:
+            if case == "hashed config":
+                P.LAYOUT = monkey
+        assert any(expected in e for e in errors), errors
+        assert not any("stopped on a file" in e for e in errors), [e for e in errors if "stopped" in e]
