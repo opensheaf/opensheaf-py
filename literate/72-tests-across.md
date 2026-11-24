@@ -243,6 +243,28 @@ read from disk; and one copy brings a bounded number of files.
         log = owners.load_key_log(kd)
         assert any("a content path out of the object" in p for p in log.problems)
 
+A JSON file nested deeper than 64 levels is not JSON a reader accepts: a
+discovery document of 400 000 brackets makes its archive unavailable,
+noted, and a website that lists a member there shows its cached citation;
+neither stops.
+
+    # in across: resolution:
+    def test_json_nested_too_deeply(tmp_path):
+        from opensheaf import html
+        assert names.json_value("[" * 64 + "]" * 64) is not None
+        for text in ("[" * 65 + "]" * 65, "[" * 400000 + "]" * 400000, '{"a":' * 65 + "1" + "}" * 65):
+            with pytest.raises(ValueError, match="nested"):
+                names.json_value(text)
+        deep = tmp_path / "deep"
+        deep.mkdir()
+        (deep / "opensheaf.json").write_text("[" * 400000 + "]" * 400000)
+        a = make(tmp_path, "a")
+        with remote.Resolver(places=["https://example.org/deep/"]) as r:
+            assert r.source("https://example.org/deep/") is None and any("nested" in m for _, m in r.notes)
+        m = {"kind": "document", "name": "a" * 52, "owner": "b" * 52, "at": ["https://example.org/deep/"],
+             "version": "v1", "inventorySha512": "c" * 128, "cite": {"title": "Cached"}}
+        assert html.remote_view(m) is None and "Cached" in html.remote_entry(m)
+
 A copy read in place from a folder is checked as a copy fetched over HTTP
 is: a PDF changed in the folder, or replaced by a link to a file outside
 it, makes the copy unavailable, noted, never a verified copy with another

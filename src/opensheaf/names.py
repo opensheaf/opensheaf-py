@@ -215,8 +215,28 @@ def loads_exact(text):
     absolute value at most 2^53 - 1 (section 2); ValueError otherwise."""
     if isinstance(text, bytes):
         text = text.decode("utf-8")
-    return json.loads(text, parse_int=_exact_integer, parse_float=_not_an_integer,
+    return json_value(text, parse_int=_exact_integer, parse_float=_not_an_integer,
                       parse_constant=_not_an_integer)
+
+
+MAX_NESTING = 64
+
+
+def json_value(data, **hooks):
+    """The JSON value of DATA (str or bytes), parsed with the HOOKS of json.loads; ValueError if
+    it is not JSON or nests arrays and objects deeper than MAX_NESTING levels."""
+    try:
+        value = json.loads(data, **hooks)
+    except RecursionError:
+        raise ValueError(f"JSON nested more than {MAX_NESTING} levels deep") from None
+    todo = [(value, 1)]
+    while todo:
+        v, depth = todo.pop()
+        if isinstance(v, (dict, list)):
+            if depth > MAX_NESTING:
+                raise ValueError(f"JSON nested more than {MAX_NESTING} levels deep")
+            todo += [(x, depth + 1) for x in (v.values() if isinstance(v, dict) else v)]
+    return value
 
 
 def read_genesis(data):

@@ -699,7 +699,7 @@ def remote_view(m):
             view = {"archive": name if isinstance(name, str) and name else at, "at": src.at or at}
             if names.sha512_hex(data) != pin:
                 return dict(view, mismatch=True)
-            inv = json.loads(data)
+            inv = names.json_value(data)
 
             def read(ver, logical, inv=inv):
                 dig = next((dg for dg, ps in inv["versions"][ver]["state"].items() if logical in ps), None)
@@ -707,7 +707,7 @@ def remote_view(m):
                 raw = src.get(f"{path}/{cp}") if cp and remote.safe_path(cp) else None
                 if raw is not None and names.sha512_hex(raw) != dig:
                     raise ValueError(f"{cp}: not the file its inventory names")
-                return json.loads(raw) if raw else None
+                return names.json_value(raw) if raw else None
             if m.get("revisions"):
                 shown = pin_ver
             else:
@@ -728,7 +728,7 @@ def remote_view(m):
                 view["pdf"] = f"{src.at}{path}/{cp}"
             entry = next((o for o in disc.get("objects", []) if isinstance(o, dict) and o.get("id") == obj_id), {})
             if entry.get("status") == "withdrawn":
-                root_inv = json.loads(src.get(f"{path}/inventory.json") or b"{}")
+                root_inv = names.json_value(src.get(f"{path}/inventory.json") or b"{}")
                 state = read(root_inv.get("head", pin_ver), P.OBJ, root_inv) if root_inv.get("versions") else None
                 view["state"] = state if state and state.get("status") == "withdrawn" else {"status": "withdrawn"}
             if not view["dc"]:

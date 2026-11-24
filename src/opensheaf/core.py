@@ -467,7 +467,7 @@ def init_storage_root():
 def load_inventory(obj_dir):
     p = obj_dir / "inventory.json"
     try:
-        return json.loads(p.read_text(encoding="utf-8")) if p.exists() else None
+        return names.json_value(p.read_text(encoding="utf-8")) if p.exists() else None
     except (ValueError, UnicodeDecodeError):
         return None
 
@@ -495,7 +495,7 @@ TODAY = datetime.date.today().isoformat()
 
 def read_json(obj_dir, inv, logical, version=None):
     p = read_logical(obj_dir, inv, logical, version)
-    return json.loads(p.read_text(encoding="utf-8")) if p else None
+    return names.json_value(p.read_text(encoding="utf-8")) if p else None
 
 
 def doc_version_of(obj_dir, inv, version):
@@ -1930,7 +1930,7 @@ def listed_objects(disc, read):
         if data is None:
             raise ValueError(f"the page of objects {path} is missing (section 3.1)")
         try:
-            page = json.loads(data)
+            page = names.json_value(data)
         except ValueError:
             raise ValueError(f"the page of objects {path} is not JSON") from None
         if not isinstance(page, dict) or not isinstance(page.get("objects"), list):

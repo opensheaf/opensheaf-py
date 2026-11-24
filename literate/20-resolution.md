@@ -167,7 +167,7 @@ one.
             cfg = self.folder / P.CONFIG_NAME if self.folder else None
             if cfg is not None and cfg.is_file():
                 try:
-                    base = json.loads(cfg.read_text(encoding="utf-8")).get("baseUrl", "")
+                    base = names.json_value(cfg.read_text(encoding="utf-8")).get("baseUrl", "")
                 except ValueError:
                     base = ""
                 if base.startswith("https://") and base.endswith("/"):
@@ -235,7 +235,7 @@ makes the archive unavailable.
             if data is None:
                 raise Unavailable(f"{self}: no discovery document opensheaf.json")
             try:
-                disc = json.loads(data)
+                disc = names.json_value(data)
             except ValueError as e:
                 raise Unavailable(f"{self}: the discovery document is not JSON ({e})") from None
             if not isinstance(disc, dict) or disc.get("specification") != "0.2":
@@ -401,7 +401,7 @@ one copy brings `MAX_FETCH_FILES` files and `MAX_FETCH_BYTES` bytes at most
             if not p.is_file():
                 return f"v{n} has no inventory (section 4.1)"
             try:
-                copy = json.loads(p.read_bytes())
+                copy = names.json_value(p.read_bytes())
             except ValueError:
                 copy = None
             if n == head:
@@ -450,7 +450,7 @@ one copy brings `MAX_FETCH_FILES` files and `MAX_FETCH_BYTES` bytes at most
         if root is None:
             raise Unavailable(f"{src}: no object {obj_id}")
         try:
-            head = int(json.loads(root)["head"][1:])
+            head = int(names.json_value(root)["head"][1:])
         except (ValueError, KeyError, TypeError):
             raise Unavailable(f"{src}: the inventory of {obj_id} cannot be read") from None
         upto = min(upto or head, head)
@@ -481,7 +481,7 @@ one copy brings `MAX_FETCH_FILES` files and `MAX_FETCH_BYTES` bytes at most
                     warn(checksum_warning(src, obj_id, n))
                 sc = owners.sidecar(data)
             try:
-                inv_n = json.loads(data)
+                inv_n = names.json_value(data)
                 bad = [cp for ps in inv_n["manifest"].values() for cp in ps if not owners.content_path(cp, inv_n, n)]
             except (ValueError, KeyError, TypeError, AttributeError):
                 raise Unavailable(f"{src}: the inventory of {obj_id} v{n} cannot be read") from None
@@ -537,7 +537,7 @@ signed it.
         """The names of the signature files that may sign vN of the key log copied into DEST."""
         if n == 1:
             return []
-        inv = json.loads((dest / f"v{n - 1}" / "inventory.json").read_bytes())
+        inv = names.json_value((dest / f"v{n - 1}" / "inventory.json").read_bytes())
         k = P.read_json(dest, inv, owners.KEYS, f"v{n - 1}") or {}
         return [f"signature-{d[:16]}.json" for d in k.get("next", []) if isinstance(d, str)]
 

@@ -956,7 +956,7 @@ reports.
     def load_inventory(obj_dir):
         p = obj_dir / "inventory.json"
         try:
-            return json.loads(p.read_text(encoding="utf-8")) if p.exists() else None
+            return names.json_value(p.read_text(encoding="utf-8")) if p.exists() else None
         except (ValueError, UnicodeDecodeError):
             return None
 
@@ -1052,7 +1052,7 @@ Most files the tools read are JSON: `object.json`, `datacite.json`,
     # in read a JSON file of an object version:
     def read_json(obj_dir, inv, logical, version=None):
         p = read_logical(obj_dir, inv, logical, version)
-        return json.loads(p.read_text(encoding="utf-8")) if p else None
+        return names.json_value(p.read_text(encoding="utf-8")) if p else None
 
 The objects of the storage root are its folders marked as OCFL objects,
 wherever the layout puts them: the storage root is walked, without

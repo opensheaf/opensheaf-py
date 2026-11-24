@@ -172,6 +172,23 @@ def test_what_another_archive_says_is_checked(tmp_path, monkeypatch):
     assert any("a content path out of the object" in p for p in log.problems)
 
 
+def test_json_nested_too_deeply(tmp_path):
+    from opensheaf import html
+    assert names.json_value("[" * 64 + "]" * 64) is not None
+    for text in ("[" * 65 + "]" * 65, "[" * 400000 + "]" * 400000, '{"a":' * 65 + "1" + "}" * 65):
+        with pytest.raises(ValueError, match="nested"):
+            names.json_value(text)
+    deep = tmp_path / "deep"
+    deep.mkdir()
+    (deep / "opensheaf.json").write_text("[" * 400000 + "]" * 400000)
+    a = make(tmp_path, "a")
+    with remote.Resolver(places=["https://example.org/deep/"]) as r:
+        assert r.source("https://example.org/deep/") is None and any("nested" in m for _, m in r.notes)
+    m = {"kind": "document", "name": "a" * 52, "owner": "b" * 52, "at": ["https://example.org/deep/"],
+         "version": "v1", "inventorySha512": "c" * 128, "cite": {"title": "Cached"}}
+    assert html.remote_view(m) is None and "Cached" in html.remote_entry(m)
+
+
 def test_a_copy_read_in_place_is_checked(tmp_path):
     a = make(tmp_path, "a")
     deposit(a, "paper", "one", new=True)

@@ -397,7 +397,7 @@ section 6 does not admit as a version of the key log.
 
     def _json_or_none(data):
         try:
-            return json.loads(data) if data is not None else None
+            return names.json_value(data) if data is not None else None
         except ValueError:
             return None
 
@@ -1205,7 +1205,7 @@ failure is `KeeperUnreachable`.
         if len(data) > 1 << 20:
             raise KeeperUnreachable(f"{url}: more than 1 MB")
         try:
-            return json.loads(data)
+            return names.json_value(data)
         except ValueError:
             raise KeeperUnreachable(f"{url}: not JSON") from None
 
@@ -1326,14 +1326,14 @@ the key log, and never read or written.
         obj_dir, problems, versions = Path(obj_dir), [], []
         try:
             root = (obj_dir / "inventory.json").read_bytes()
-            head = int(json.loads(root)["head"][1:])
+            head = int(names.json_value(root)["head"][1:])
         except (OSError, ValueError, KeyError, TypeError) as e:
             raise OwnerError(f"{obj_dir}: not an OCFL object with an inventory ({e})") from None
         for n in range(1, head + 1):
             vdir = obj_dir / f"v{n}"
             try:
                 inv_bytes = (vdir / "inventory.json").read_bytes()
-                entry = json.loads(inv_bytes)
+                entry = names.json_value(inv_bytes)
                 manifest, state = entry["manifest"], entry["versions"][f"v{n}"]["state"]
             except (OSError, ValueError, KeyError, TypeError) as e:
                 problems.append(f"v{n}: no readable inventory in the version folder (section 4.1; {e})")

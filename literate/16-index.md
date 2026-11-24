@@ -174,7 +174,7 @@ the document: relative, without `.`, `..` or a scheme.
             if data is None:
                 raise ValueError(f"the page of objects {path} is missing (section 3.1)")
             try:
-                page = json.loads(data)
+                page = names.json_value(data)
             except ValueError:
                 raise ValueError(f"the page of objects {path} is not JSON") from None
             if not isinstance(page, dict) or not isinstance(page.get("objects"), list):

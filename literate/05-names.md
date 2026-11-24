@@ -364,8 +364,37 @@ infinities, and an integer out of range, wherever they are.
         absolute value at most 2^53 - 1 (section 2); ValueError otherwise."""
         if isinstance(text, bytes):
             text = text.decode("utf-8")
-        return json.loads(text, parse_int=_exact_integer, parse_float=_not_an_integer,
+        return json_value(text, parse_int=_exact_integer, parse_float=_not_an_integer,
                           parse_constant=_not_an_integer)
+
+Every JSON file read from another archive is read through `json_value`,
+which bounds how deeply arrays and objects nest, to `MAX_NESTING` levels,
+the bound of the JavaScript tools. No file of the specification comes near
+it; a file that goes past it is malformed, a `ValueError` like any file
+that is not JSON. Python's parser is recursive: without a bound, a file of
+a few hundred kilobytes of `[` raises `RecursionError`, which no reader
+expects, and which stopped a whole command (a resolution, a website) over
+one hostile file (section 15.2).
+
+    # in names: genesis records:
+    MAX_NESTING = 64
+
+
+    def json_value(data, **hooks):
+        """The JSON value of DATA (str or bytes), parsed with the HOOKS of json.loads; ValueError if
+        it is not JSON or nests arrays and objects deeper than MAX_NESTING levels."""
+        try:
+            value = json.loads(data, **hooks)
+        except RecursionError:
+            raise ValueError(f"JSON nested more than {MAX_NESTING} levels deep") from None
+        todo = [(value, 1)]
+        while todo:
+            v, depth = todo.pop()
+            if isinstance(v, (dict, list)):
+                if depth > MAX_NESTING:
+                    raise ValueError(f"JSON nested more than {MAX_NESTING} levels deep")
+                todo += [(x, depth + 1) for x in (v.values() if isinstance(v, dict) else v)]
+        return value
 
 `read_genesis` parses the bytes of a record and checks what the schema
 checks (appendix B), with the encoding of section 5.1: UTF-8, without a
