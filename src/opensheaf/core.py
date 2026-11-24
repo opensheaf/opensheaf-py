@@ -772,13 +772,13 @@ def install_version(obj_id, stage):
 
 
 def zenodo_pending(obj_id):
-    """Whether a Zenodo deposit of OBJ_ID was published and its version not yet added."""
+    """Whether a Zenodo deposit of OBJ_ID was (or may have been) published and its version not yet added."""
     try:
         p = ROOT / "zenodo-staging" / path_of(obj_id) / "state.json"
     except ValueError:
         return False
     try:
-        return p.is_file() and json.loads(p.read_text(encoding="utf-8")).get("phase") == "published"
+        return p.is_file() and json.loads(p.read_text(encoding="utf-8")).get("phase") in ("publishing", "published")
     except ValueError:
         return False
 

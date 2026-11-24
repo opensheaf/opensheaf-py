@@ -127,6 +127,9 @@ sandbox safe, as we shall see.
     <<Zenodo: committing the deposit>>
 
 
+    <<Zenodo: settling an interrupted deposit>>
+
+
     <<Zenodo: the checks of a deposit record>>
 
 
@@ -245,6 +248,21 @@ becomes the error of the request.
 
     OPENER = urllib.request.build_opener(SameHostRedirects)
 
+An error is a `ZenodoError`. One that Zenodo answered carries the HTTP
+status, `code`; one that got no answer, or none that can be read (the
+connection refused or lost, a time-out, a body that is not JSON) has no
+code: the request may or may not have been carried out, which matters
+after a request to publish (below).
+
+    # in Zenodo: talking to the API:
+    class ZenodoError(RuntimeError):
+        """A request to Zenodo that failed: CODE, the HTTP status of Zenodo's answer, or None
+        when there was no answer that can be read (the request may have been carried out)."""
+
+        def __init__(self, message, code=None):
+            super().__init__(message)
+            self.code = code
+
 
     class Zenodo:
         def __init__(self, production):
@@ -272,7 +290,10 @@ becomes the error of the request.
                     t = r.read()
                     return json.loads(t) if t else None
             except urllib.error.HTTPError as e:
-                raise RuntimeError(f"Zenodo {method} {url}: {e.code} {e.read().decode()[:1000]}")
+                raise ZenodoError(f"Zenodo {method} {url}: {e.code} {e.read().decode(errors='replace')[:1000]}",
+                                  e.code) from None
+            except (urllib.error.URLError, OSError, ValueError) as e:
+                raise ZenodoError(f"Zenodo {method} {url}: no answer ({e})") from None
 
         def doi(self, recid):
             return f"{self.s['prefix']}/zenodo.{recid}"
@@ -390,9 +411,11 @@ recommends, kept on disk so that it survives a crash.
 
         <<Zenodo: the document version to deposit>>
 
-        <<Zenodo: a draft and its DOI>>
+        <<Zenodo: record the deposit before the first request>>
 
         try:
+            <<Zenodo: a draft and its DOI>>
+
             <<Zenodo: stage the files of the version>>
             <<Zenodo: the DOI and the relations in datacite.json>>
             <<Zenodo: the deposit in object.json>>
@@ -401,14 +424,14 @@ recommends, kept on disk so that it survives a crash.
             <<Zenodo: upload and compare the checksums>>
 
             # 5. Publish
+            state["phase"] = "publishing"
+            P.write_json(state_path, state)
             pub = z.call("POST", f"/deposit/depositions/{recid}/actions/publish")
         except BaseException:
-            print(f"{label}: failed before publication; discarding draft {recid}")
-            try:
-                z.call("DELETE", f"/deposit/depositions/{recid}")
-            except RuntimeError as e:
-                print(f"  (could not discard: {e})")
-            remove_stage(P, stage)
+            print(f"{label}: failed before the publication was confirmed")
+            if settle(P, z, label, stage, state) == "published":
+                print(f"{label}: Zenodo published {state['doi']} all the same: osheaf zenodo {label} "
+                      "adds its object version")
             raise
         state["phase"] = "published"
         P.write_json(state_path, state)
@@ -420,10 +443,17 @@ recommends, kept on disk so that it survives a crash.
         # 6. Add the object version and rewrite the discovery document
         commit(P, obj_id, stage, state)
 
-Any exception before publication, an interruption from the keyboard
-included, discards the draft and the staging folder: Zenodo allows only
+Any exception before publication is confirmed, an interruption from the
+keyboard included, settles the draft (`settle`, below): Zenodo allows only
 one unpublished version per record, and a draft left behind would block
-the next attempt. After publication, the DOI that Zenodo published is
+the next attempt. The request to publish is the one step whose failure does
+not say what happened: an answer lost on the way back leaves a published
+record, with its DOI, that the archive does not know of, and discarding the
+staging folder then would lose the version built for it, so that a second
+run would publish a second record. The phase `publishing` is therefore
+written before the request is sent, and locks the line as `published`
+does; and whatever failed, Zenodo is asked what became of the draft before
+anything is discarded. After publication, the DOI that Zenodo published is
 compared with the one reserved and written into `datacite.json`. They
 should agree; if they do not, the staging folder is kept, and the line
 stays locked, for a person to look at: the version built is signed, and
@@ -434,8 +464,12 @@ cannot be corrected in place.
 A deposit finds the staging folder of an earlier one when that one was
 interrupted. If it was published, the object version is added, and
 nothing else is done: appendix A.1 requires this before any other deposit
-of the line. Otherwise its draft is discarded, as far as Zenodo allows,
-and the deposit starts again.
+of the line. Otherwise the draft is settled: if Zenodo says it was
+published after all, its version is added as well; if it is a draft, it
+is discarded, and the deposit starts again; if Zenodo cannot be asked, or
+will not discard it, nothing is done and the staging folder stays, for the
+next run to ask again. A staging folder without `state.json` holds nothing
+recorded (an older run stopped before writing it), and is removed.
 
     # in Zenodo: complete or discard an interrupted deposit:
     if state_path.exists():
@@ -443,12 +477,80 @@ and the deposit starts again.
         if state["phase"] in ("published", "added"):
             print(f"{label}: completing the object version of record {state['record']}")
             return commit(P, obj_id, stage, state)
-        print(f"{label}: discarding the unpublished draft {state['record']}")
-        try:
-            z.call("DELETE", f"/deposit/depositions/{state['record']}")
-        except RuntimeError as e:
-            print(f"  (could not discard: {e})")
+        print(f"{label}: an interrupted deposit (phase {state['phase']}): asking Zenodo what became of it")
+        outcome = settle(P, z, label, stage, state)
+        if outcome == "published":
+            print(f"{label}: Zenodo published {state['doi']}: completing its object version")
+            return commit(P, obj_id, stage, state)
+        if outcome == "kept":
+            sys.exit(f"{label}: the interrupted deposit is not settled; nothing else is done")
+    elif stage.exists():
         remove_stage(P, stage)
+
+An interrupted deposit is settled by asking Zenodo about its draft. The
+record is the one `state.json` names; a run stopped between the request
+for a new version and its answer names none yet, and the draft is then
+the latest draft of the record of the version before, which Zenodo
+lists. A new record whose creation was not answered cannot be found from
+here: nothing of it is public, and Zenodo's page of uploads shows it, to
+be deleted there. The answer decides:
+
+- published (`submitted`): the phase becomes `published`, if the version
+  built for it is in the staging folder with the DOI Zenodo published;
+  the line stays locked until its version is added;
+- a draft: it is deleted, and the staging folder with it;
+- gone (Zenodo answers 404 or 410): the staging folder is removed;
+- no answer, or a refusal to delete: the staging folder and its
+  `state.json` are kept, and the next run asks again.
+
+`settle` returns `published`, `discarded` or `kept`.
+
+    # in Zenodo: settling an interrupted deposit:
+    def draft_of(link):
+        """The number of the deposit a link of the API names (latest_draft), or None."""
+        m = re.search(r"/deposit/depositions/([0-9]+)/?\Z", link or "")
+        return int(m.group(1)) if m else None
+
+
+    def settle(P, z, label, stage, state):
+        """Find out from Zenodo what became of the draft of the interrupted deposit STATE, and
+        complete, discard or keep its staging folder STAGE: 'published', 'discarded' or 'kept'."""
+        state_path = stage / "state.json"
+        try:
+            recid = state.get("record")
+            if recid is None and state.get("previous"):
+                prev = z.call("GET", f"/deposit/depositions/{state['previous']}") or {}
+                recid = draft_of(prev.get("links", {}).get("latest_draft"))
+            if recid is None:
+                if state.get("phase") == "creating" and not state.get("previous"):
+                    print(f"  a new Zenodo record may have been created without its number reaching us: "
+                          "delete it on Zenodo's page of uploads if one is listed there")
+                remove_stage(P, stage)
+                return "discarded"
+            try:
+                dep = z.call("GET", f"/deposit/depositions/{recid}") or {}
+            except ZenodoError as e:
+                if e.code in (404, 410):
+                    remove_stage(P, stage)
+                    return "discarded"
+                raise
+            if dep.get("submitted") is True:
+                built = state.get("version") and (stage / "version").is_dir()
+                if not built or dep.get("doi") != state.get("doi"):
+                    print(f"  Zenodo published record {recid} (DOI {dep.get('doi')}), and the staging folder "
+                          f"{stage} holds no version built for that DOI: it is kept, for a person to look at")
+                    return "kept"
+                state["phase"] = "published"
+                P.write_json(state_path, state)
+                return "published"
+            print(f"  discarding the unpublished draft {recid}")
+            z.call("DELETE", f"/deposit/depositions/{recid}")
+        except ZenodoError as e:
+            print(f"  Zenodo could not tell or do what is needed ({e}); the staging folder {stage} is kept, "
+                  f"and the next run of osheaf zenodo {label} asks again")
+            return "kept"
+        remove_stage(P, stage)
+        return "discarded"
 
 ### Steps 1 and 2: the draft and its DOI
 
@@ -480,6 +582,18 @@ that holds it.
         sys.exit(f"{label}: document version {doc_version} is already on Zenodo "
                  f"({zenodo_entries(obj)[0]['doi']})")
 
+The deposit is recorded before Zenodo is asked for anything: the staging
+folder is made and `state.json` written, in phase `creating`, with the
+record of the version before, if any; the draft's number is written as
+soon as an answer gives it, before the files it inherits are deleted. A
+failure at any step after the first request settles the draft.
+
+    # in Zenodo: record the deposit before the first request:
+    prev_rec, prev_doi = previous_record(P, obj_dir, inv, doc_version, signed, z.s["records"])
+    stage.mkdir(parents=True, exist_ok=True)
+    state = {"phase": "creating", "previous": prev_rec, "documentVersion": doc_version}
+    P.write_json(state_path, state)
+
 If an earlier document version is on Zenodo, the new one becomes a new
 version of its record. Zenodo copies the files of the previous version
 into the new one; we delete them, since the new version has its own. If
@@ -490,9 +604,10 @@ standing for all versions, gives the concept DOI.
     # in Zenodo: a draft and its DOI:
     # 1-2. Draft: a new record, or a new version of the document's record;
     # Zenodo reserves the DOI when the draft is created.
-    prev_rec, prev_doi = previous_record(P, obj_dir, inv, doc_version, signed, z.s["records"])
     if prev_rec:
         nv = z.call("POST", f"/deposit/depositions/{prev_rec}/actions/newversion")
+        state.update(phase="draft", record=draft_of(nv["links"]["latest_draft"]))
+        P.write_json(state_path, state)
         draft = z.call("GET", nv["links"]["latest_draft"])
         for f in draft.get("files", []):     # a new version inherits the files
             z.call("DELETE", f"/deposit/depositions/{draft['id']}/files/{f['id']}")
@@ -502,8 +617,7 @@ standing for all versions, gives the concept DOI.
     concept = draft.get("conceptrecid")
     doi = z.doi(recid)
     concept_doi = z.doi(concept) if concept else None
-    stage.mkdir(parents=True)
-    state = {"phase": "draft", "record": recid, "doi": doi, "documentVersion": doc_version}
+    state.update(phase="draft", record=recid, doi=doi)
     P.write_json(state_path, state)
 
 The earlier version is the one before the current version in the history,

@@ -1183,7 +1183,8 @@ A version built in a staging folder is added only if the line has not
 moved meanwhile: its head must still be the version before. The staging
 folder holds the version folder, named by its number, and the witness
 folder. The lock that keeps the line from moving is the state file of a
-Zenodo deposit published and not yet added.
+Zenodo deposit published and not yet added, or whose request to publish
+was sent and not answered (phase `publishing`): it may be published.
 
     # in move the staged version into the storage root:
     def install_version(obj_id, stage):
@@ -1202,13 +1203,13 @@ Zenodo deposit published and not yet added.
 
 
     def zenodo_pending(obj_id):
-        """Whether a Zenodo deposit of OBJ_ID was published and its version not yet added."""
+        """Whether a Zenodo deposit of OBJ_ID was (or may have been) published and its version not yet added."""
         try:
             p = ROOT / "zenodo-staging" / path_of(obj_id) / "state.json"
         except ValueError:
             return False
         try:
-            return p.is_file() and json.loads(p.read_text(encoding="utf-8")).get("phase") == "published"
+            return p.is_file() and json.loads(p.read_text(encoding="utf-8")).get("phase") in ("publishing", "published")
         except ValueError:
             return False
 

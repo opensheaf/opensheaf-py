@@ -1728,17 +1728,46 @@ class FakeZenodo:
         if method == "POST" and url == "/deposit/depositions":
             return self._record(None)
         if url.endswith("/actions/newversion"):
-            rec = self._record(self.records[int(url.split("/")[-3])]["conceptrecid"])
+            parent = self.records[int(url.split("/")[-3])]
+            rec = self._record(parent["conceptrecid"])
+            parent["links"]["latest_draft"] = rec["links"]["latest_draft"]
             return {"links": {"latest_draft": rec["links"]["latest_draft"]}}
         if url.endswith("/actions/publish"):
             rec = self.records[int(url.split("/")[-3])]
+            rec.update(submitted=True, doi=self.doi(rec["id"]))
             return {"doi": self.doi(rec["id"]), "conceptdoi": self.doi(rec["conceptrecid"])}
-        if method == "GET":
-            return self.records[int(url.rsplit("/", 1)[1])]
+        number = url.rsplit("/", 1)[1]
+        if "/deposit/depositions/" in url and number.isdigit() and method in ("GET", "DELETE"):
+            if int(number) not in self.records:
+                from opensheaf import zenodo
+                raise zenodo.ZenodoError(f"Zenodo {method} {url}: 404", 404)
+            if method == "DELETE":
+                del self.records[int(number)]
+                return None
+            return self.records[int(number)]
         if method == "PUT" and "/bucket/" in url:
             self.uploads[url.rsplit("/", 1)[1]] = raw
             return {"checksum": "md5:" + hashlib.md5(raw).hexdigest()}
         return {}
+
+
+class FlakyZenodo(FakeZenodo):
+    """FakeZenodo whose requests named in FAIL ([(method, part of the URL, when)]) get no answer:
+    before Zenodo does anything, or after it did it ('lost')."""
+
+    def __init__(self, production=True):
+        super().__init__(production)
+        self.fail = []
+
+    def call(self, method, url, data=None, raw=None):
+        from opensheaf import zenodo
+        for k, (m, part, when) in enumerate(self.fail):
+            if m == method and part in url:
+                del self.fail[k]
+                if when == "lost":
+                    super().call(method, url, data, raw)
+                raise zenodo.ZenodoError(f"Zenodo {method} {url}: no answer ({when})")
+        return super().call(method, url, data, raw)
 
 
 @pytest.fixture
@@ -1838,6 +1867,64 @@ def test_zenodo_token_and_records_stay_with_their_service(tmp_path, monkeypatch)
     assert fake_zenodo[False].uploads
     assert not any(u.endswith("/actions/newversion") for _, u in fake_zenodo[False].calls)
 
+
+def test_zenodo_answers_lost(tmp_path, monkeypatch):
+    from opensheaf import zenodo
+    z = FlakyZenodo(True)
+    monkeypatch.setattr(zenodo, "Zenodo", lambda production: z)
+    root = tmp_path / "a"
+    make_archive(root)
+    pdf = tmp_path / "p.pdf"
+    pdf.write_bytes(b"%PDF-1.4 p")
+    r = ["--root", str(root)]
+    paper = ["--pdf", str(pdf), "--no-source", "lost", "--title", "P", "--author", "Doe, Jane"]
+    run(*r, "deposit", "p", *paper, "--new")
+    obj_id = P.LABELS["p"]
+    stage = root / "zenodo-staging" / P.path_of(obj_id)
+    publishes = lambda: sum(u.endswith("/actions/publish") for _, u in z.calls)
+    # the answer to the request to publish is lost, and so is the question that follows
+    z.fail = [("POST", "/actions/publish", "lost"), ("GET", "/deposit/depositions/", "before")]
+    with pytest.raises(zenodo.ZenodoError):
+        run(*r, "zenodo", "p", "--production")
+    assert json.loads((stage / "state.json").read_text())["phase"] == "publishing"
+    with pytest.raises(SystemExit, match="completes it first"):
+        run(*r, "deposit", "p", *paper, "--changes", "x")
+    run(*r, "zenodo", "p", "--production")
+    P.configure(root)
+    d = P.obj_dir(obj_id)
+    inv = P.load_inventory(d)
+    assert inv["head"] == "v2" and not stage.exists() and publishes() == 1 and len(z.records) == 1
+    doi = P.read_json(d, inv, "datacite.json")["doi"]
+    assert doi == z.doi(next(iter(z.records)))
+    # the next deposit gets its new version, and no answer to the request for its draft,
+    # nor to the request to discard it: the draft is recorded, and discarded by the next run
+    pdf.write_bytes(b"%PDF-1.4 p2")
+    run(*r, "deposit", "p", *paper, "--changes", "Typos.")
+    z.fail = [("GET", "/deposit/depositions/", "before"), ("DELETE", "/deposit/depositions/", "before")]
+    with pytest.raises(zenodo.ZenodoError):
+        run(*r, "zenodo", "p", "--production")
+    state = json.loads((stage / "state.json").read_text())
+    assert state["phase"] == "draft" and state["record"] in z.records
+    run(*r, "zenodo", "p", "--production")
+    assert publishes() == 2 and len(z.records) == 2 and state["record"] not in z.records
+    P.configure(root)
+    assert P.load_inventory(d)["head"] == "v4" and P.verify_errors() == []
+    # a request for a new version whose answer never came, and Zenodo unreachable after it:
+    # the next run finds the draft from the record before
+    run(*r, "deposit", "p", *paper, "--changes", "More.")
+    z.fail = [("POST", "/actions/newversion", "lost"), ("GET", "/deposit/depositions/", "before")]
+    with pytest.raises(zenodo.ZenodoError):
+        run(*r, "zenodo", "p", "--production")
+    assert "record" not in json.loads((stage / "state.json").read_text())
+    drafts = [k for k, rec in z.records.items() if not rec.get("submitted")]
+    assert len(drafts) == 1
+    run(*r, "zenodo", "p", "--production")
+    assert drafts[0] not in z.records and publishes() == 3
+    # a staging folder left without state.json holds nothing recorded
+    (stage / "version").mkdir(parents=True)
+    run(*r, "deposit", "p", *paper, "--changes", "Last.")
+    run(*r, "zenodo", "p", "--production")
+    assert publishes() == 4 and not stage.exists()
 
 def test_zenodo_completes_and_signs_again(tmp_path, fake_zenodo, monkeypatch):
     root = tmp_path / "a"
