@@ -17,6 +17,9 @@ extracts titles and abstracts for `datacite.json`. It is used by the
     <<the Scheme code exporting a TeXmacs document>>
 
 
+    <<the files the TeXmacs settings name>>
+
+
     <<add a style package to a TeXmacs document>>
 
 
@@ -63,7 +66,7 @@ archive.
         """Run Scheme CALLS in a headless TeXmacs with the private profile."""
         <<prepare the private TeXmacs profile of the archive>>
         # style-clear-cache: TeXmacs caches style environments in the profile.
-        init = f"(load \"{ROOT / TEXMACS['init']}\") " if TEXMACS.get("init") else ""
+        init = f"(load {scheme_string(ROOT / TEXMACS['init'])}) " if TEXMACS.get("init") else ""
         cmd = (f"(begin {init}(catch #t (lambda () (style-clear-cache) {calls}) (lambda args"
                f" (display \"SCHEME-ERROR \") (write args) (newline))) (quit-TeXmacs))")
         # in a scratch folder: TeXmacs' helpers (Ghostscript) may leave files in
@@ -123,13 +126,70 @@ one typesetting and makes the tools independent of the version.
     # in the Scheme code exporting a TeXmacs document:
     def export_calls(doc, pdf=None, html=None):
         """Scheme code exporting DOC; a PDF export typesets it first."""
-        c = (f'(let ((u (string->url "{doc}"))) (load-buffer u) (switch-to-buffer u)'
+        c = (f'(let ((u (string->url {scheme_string(doc)}))) (load-buffer u) (switch-to-buffer u)'
              ' (update-forced)')
         if pdf:
-            c += f' (export-buffer-main u (string->url "{pdf}") "pdf" (list :overwrite))'
+            c += f' (export-buffer-main u (string->url {scheme_string(pdf)}) "pdf" (list :overwrite))'
         if html:
-            c += f' (export-buffer-main u (string->url "{html}") "html" (list :overwrite))'
+            c += f' (export-buffer-main u (string->url {scheme_string(html)}) "html" (list :overwrite))'
         return c + ")"
+
+The paths go into the Scheme code as strings, and a path is any text: a
+folder named `a" (system "...") "` would end the string and run what
+follows. `scheme_string` writes a path as a Scheme string literal, its
+backslashes and double quotes escaped.
+
+    # in the Scheme code exporting a TeXmacs document:
+    def scheme_string(s):
+        """S (a path or a text) as a Scheme string literal."""
+        return '"' + str(s).replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+### What the settings may name
+
+The settings of the profile in `osheaf.json` (`texmacs.init`,
+`texmacs.plugins`, `texmacs.htmlPackage`) and the profile `texmacs_home/`
+are code that TeXmacs runs: the `init` file is Scheme, loaded before every
+run, a style package or a plugin may run Scheme too, and so may the
+preferences of the profile. Whoever can change `osheaf.json`, the files it
+names or `texmacs_home/` can run commands as the user who deposits; an
+archive taken from someone else is read with `osheaf verify`, which runs no
+TeXmacs, before any command that typesets (`deposit` of a TeXmacs source,
+`index` of a TeXmacs index). `texmacs_home/` is private to the machine and
+not committed: `osheaf init` puts it in `.gitignore`.
+
+What the tools can check they do: the files that the HTML version takes
+from the settings are files of the archive or of the plugins. The style
+package (`htmlPackage`) is a file of the archive, read through no symbolic
+link (`content_problem` checks a path below a folder for the inventories,
+and serves here too); the resources (`htmlResources`), which are copied
+into the website, are paths below the plugins, relative and without `..`
+(the plugins folder itself is the user's, often a link). Without these
+checks, `"htmlResources": ["../../.ssh/id_ed25519"]` would publish a
+private key with the next deposit.
+
+    # in the files the TeXmacs settings name:
+    def html_package():
+        """The file of the style package of the HTML versions (texmacs.htmlPackage), or None."""
+        pkg = TEXMACS.get("htmlPackage")
+        if not pkg:
+            return None
+        problem = content_problem(ROOT, pkg) if isinstance(pkg, str) else "not a path"
+        if problem or not (ROOT / pkg).is_file():
+            stop(f"{CONFIG_NAME}: texmacs.htmlPackage is a file of the archive, read through no link: "
+                 f"{problem or f'no file {pkg}'}")
+        return ROOT / pkg
+
+
+    def html_resources():
+        """{name: file} of the resources of the HTML versions (texmacs.htmlResources), below the plugins."""
+        out = {}
+        for r in TEXMACS.get("htmlResources", []):
+            parts = r.split("/") if isinstance(r, str) else [""]
+            if not isinstance(r, str) or r.startswith("/") or "\\" in r or any(p in ("", ".", "..") for p in parts):
+                stop(f"{CONFIG_NAME}: texmacs.htmlResources names files below the plugins, by relative "
+                     f"paths without ..: not {r!r}")
+            out[parts[-1]] = TM_HOME / "plugins" / r
+        return out
 
 ### The PDF and the HTML version
 
@@ -179,12 +239,13 @@ the copy is the same bytes as the source but for the style line.
             d.mkdir()
         shutil.copyfile(source, plain / f"{obj_id}.tm")
         calls = export_calls(plain / f"{obj_id}.tm", pdf=pdf)
-        pkg = TEXMACS.get("htmlPackage")
+        pkg = html_package()
+        resources = html_resources()
         if html_dir is not None:
             text = source.read_text(encoding="latin-1")
             if pkg:
-                shutil.copyfile(ROOT / pkg, styled / Path(pkg).name)
-                text = with_package(text, Path(pkg).stem)
+                shutil.copyfile(pkg, styled / pkg.name)
+                text = with_package(text, pkg.stem)
             with open(styled / f"{obj_id}.tm", "w", encoding="latin-1", newline="") as f:
                 f.write(text)
             calls += " " + export_calls(styled / f"{obj_id}.tm", pdf=tmp / "styled.pdf",
@@ -196,8 +257,8 @@ the copy is the same bytes as the source but for the style line.
                 unlinked(old).unlink()
             for f in out.iterdir():
                 shutil.copyfile(f, html_dir / f.name)
-            for r in TEXMACS.get("htmlResources", []):
-                shutil.copyfile(TM_HOME / "plugins" / r, html_dir / Path(r).name)
+            for name, r in resources.items():
+                shutil.copyfile(r, html_dir / name)
         shutil.rmtree(tmp, ignore_errors=True)
 
 Reading TeXmacs markup

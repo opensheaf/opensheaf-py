@@ -130,3 +130,26 @@ def test_content_paths_outside_the_object_are_not_read(archive, tmp_path, where)
     assert any("not read" in e for e in errors)
     with pytest.raises(SystemExit, match="nothing is read"):
         run("--root", str(archive), "describe", "paper-a", "--title", "T")
+
+
+@pytest.mark.parametrize("setting", [{"htmlResources": ["../../.ssh/id_ed25519"]},
+                                     {"htmlResources": ["/etc/passwd"]},
+                                     {"htmlPackage": "/etc/passwd"},
+                                     {"htmlPackage": "../outside.ts"}])
+def test_texmacs_settings_name_files_inside(archive, tmp_path, monkeypatch, setting):
+    monkeypatch.setenv("TEXMACS_BIN", "/nonexistent/texmacs")
+    monkeypatch.setattr(P, "TEXMACS", setting)
+    (tmp_path / "outside.ts").write_text("x")
+    src = tmp_path / "p.tm"
+    src.write_text("<TeXmacs|2.1>\n<style|article>\n<body>x</body>\n")
+    with pytest.raises(SystemExit, match="htmlResources|htmlPackage"):
+        P.typeset(src, "paper-a", tmp_path / "out.pdf", P.SITE / "paper-a")
+
+
+def test_paths_in_scheme_are_string_literals():
+    assert P.scheme_string('a" (system "x") "\\b') == '"a\\" (system \\"x\\") \\"\\\\b"'
+    assert '(system "x")' not in P.export_calls('/tmp/a" (system "x") "')
+
+
+def test_init_keeps_the_profile_out_of_git(archive):
+    assert {"texmacs_home/", ".staging-*"} <= set((archive / ".gitignore").read_text().splitlines())

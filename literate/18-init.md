@@ -106,6 +106,15 @@ the user's own settings (a user-wide `*.pdf filter=lfs`, say) applies.
     *.pdf binary
     """
 
+Two things in the folder of an archive are never committed: the private
+TeXmacs profile `texmacs_home/`, which is the machine's (and code that
+TeXmacs runs, see the chapter on [TeXmacs](12-texmacs.md)), and the
+staging folders `.staging-*` of versions being built. `osheaf init` adds
+them to `.gitignore`, keeping what is there.
+
+    # in create an archive in a folder:
+    GITIGNORE = ("texmacs_home/", ".staging-*")
+
 The command itself:
 
     # in create an archive in a folder:
@@ -155,6 +164,11 @@ The command itself:
         write_file(root / CONFIG_NAME, json.dumps(cfg, indent=2, ensure_ascii=False) + "\n")
         if not (root / ".gitattributes").exists():
             write_file(root / ".gitattributes", GITATTRIBUTES)
+        ignore = (root / ".gitignore").read_text(encoding="utf-8") if (root / ".gitignore").is_file() else ""
+        missing = [x for x in GITIGNORE if x not in ignore.splitlines()]
+        if missing:
+            write_file(root / ".gitignore", ignore + ("\n" if ignore and not ignore.endswith("\n") else "")
+                       + "".join(f"{x}\n" for x in missing))
         if kind == "website":
             from . import html
             (root / "templates").mkdir(exist_ok=True)

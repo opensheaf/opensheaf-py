@@ -942,7 +942,7 @@ def run_texmacs(calls):
                '("texmacs->html:mathjax" "on")\n'
                '("texmacs->html:mathml" "off")\n')
     # style-clear-cache: TeXmacs caches style environments in the profile.
-    init = f"(load \"{ROOT / TEXMACS['init']}\") " if TEXMACS.get("init") else ""
+    init = f"(load {scheme_string(ROOT / TEXMACS['init'])}) " if TEXMACS.get("init") else ""
     cmd = (f"(begin {init}(catch #t (lambda () (style-clear-cache) {calls}) (lambda args"
            f" (display \"SCHEME-ERROR \") (write args) (newline))) (quit-TeXmacs))")
     # in a scratch folder: TeXmacs' helpers (Ghostscript) may leave files in
@@ -959,13 +959,42 @@ def run_texmacs(calls):
 
 def export_calls(doc, pdf=None, html=None):
     """Scheme code exporting DOC; a PDF export typesets it first."""
-    c = (f'(let ((u (string->url "{doc}"))) (load-buffer u) (switch-to-buffer u)'
+    c = (f'(let ((u (string->url {scheme_string(doc)}))) (load-buffer u) (switch-to-buffer u)'
          ' (update-forced)')
     if pdf:
-        c += f' (export-buffer-main u (string->url "{pdf}") "pdf" (list :overwrite))'
+        c += f' (export-buffer-main u (string->url {scheme_string(pdf)}) "pdf" (list :overwrite))'
     if html:
-        c += f' (export-buffer-main u (string->url "{html}") "html" (list :overwrite))'
+        c += f' (export-buffer-main u (string->url {scheme_string(html)}) "html" (list :overwrite))'
     return c + ")"
+
+
+def scheme_string(s):
+    """S (a path or a text) as a Scheme string literal."""
+    return '"' + str(s).replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def html_package():
+    """The file of the style package of the HTML versions (texmacs.htmlPackage), or None."""
+    pkg = TEXMACS.get("htmlPackage")
+    if not pkg:
+        return None
+    problem = content_problem(ROOT, pkg) if isinstance(pkg, str) else "not a path"
+    if problem or not (ROOT / pkg).is_file():
+        stop(f"{CONFIG_NAME}: texmacs.htmlPackage is a file of the archive, read through no link: "
+             f"{problem or f'no file {pkg}'}")
+    return ROOT / pkg
+
+
+def html_resources():
+    """{name: file} of the resources of the HTML versions (texmacs.htmlResources), below the plugins."""
+    out = {}
+    for r in TEXMACS.get("htmlResources", []):
+        parts = r.split("/") if isinstance(r, str) else [""]
+        if not isinstance(r, str) or r.startswith("/") or "\\" in r or any(p in ("", ".", "..") for p in parts):
+            stop(f"{CONFIG_NAME}: texmacs.htmlResources names files below the plugins, by relative "
+                 f"paths without ..: not {r!r}")
+        out[parts[-1]] = TM_HOME / "plugins" / r
+    return out
 
 
 def with_package(text, package):
@@ -988,12 +1017,13 @@ def typeset(source, obj_id, pdf, html_dir):
         d.mkdir()
     shutil.copyfile(source, plain / f"{obj_id}.tm")
     calls = export_calls(plain / f"{obj_id}.tm", pdf=pdf)
-    pkg = TEXMACS.get("htmlPackage")
+    pkg = html_package()
+    resources = html_resources()
     if html_dir is not None:
         text = source.read_text(encoding="latin-1")
         if pkg:
-            shutil.copyfile(ROOT / pkg, styled / Path(pkg).name)
-            text = with_package(text, Path(pkg).stem)
+            shutil.copyfile(pkg, styled / pkg.name)
+            text = with_package(text, pkg.stem)
         with open(styled / f"{obj_id}.tm", "w", encoding="latin-1", newline="") as f:
             f.write(text)
         calls += " " + export_calls(styled / f"{obj_id}.tm", pdf=tmp / "styled.pdf",
@@ -1005,8 +1035,8 @@ def typeset(source, obj_id, pdf, html_dir):
             unlinked(old).unlink()
         for f in out.iterdir():
             shutil.copyfile(f, html_dir / f.name)
-        for r in TEXMACS.get("htmlResources", []):
-            shutil.copyfile(TM_HOME / "plugins" / r, html_dir / Path(r).name)
+        for name, r in resources.items():
+            shutil.copyfile(r, html_dir / name)
     shutil.rmtree(tmp, ignore_errors=True)
 
 
@@ -3378,6 +3408,9 @@ sha512/**      -text -filter -ident -working-tree-encoding -export-subst -merge
 """
 
 
+GITIGNORE = ("texmacs_home/", ".staging-*")
+
+
 def init(args):
     """Create an archive in the folder: osheaf.json, the storage root, the owner and its
     key log (made, or copied), its empty owner catalogue, the discovery document, and the
@@ -3438,6 +3471,11 @@ def init(args):
     write_file(root / CONFIG_NAME, json.dumps(cfg, indent=2, ensure_ascii=False) + "\n")
     if not (root / ".gitattributes").exists():
         write_file(root / ".gitattributes", GITATTRIBUTES)
+    ignore = (root / ".gitignore").read_text(encoding="utf-8") if (root / ".gitignore").is_file() else ""
+    missing = [x for x in GITIGNORE if x not in ignore.splitlines()]
+    if missing:
+        write_file(root / ".gitignore", ignore + ("\n" if ignore and not ignore.endswith("\n") else "")
+                   + "".join(f"{x}\n" for x in missing))
     if kind == "website":
         from . import html
         (root / "templates").mkdir(exist_ok=True)
