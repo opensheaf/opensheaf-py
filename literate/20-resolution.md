@@ -339,6 +339,15 @@ to them is then reported as not matching (section 12.3). With the two in agreeme
 one its own inventory, the one signed, records, and each file read through
 the manifest has the digest that state names, checked as it is fetched.
 
+A copy read in place is checked as a copy fetched is, before anything
+is read from it (`folder_problem`): every path of its manifest is a
+content path of the object, a regular file below the object's folder (not
+a link leading out of it), with the digest the manifest gives. Without
+that, a file changed in the folder, a PDF, a `datacite.json`, an
+`object.json`, would be read as the one the signed inventory names, and
+the copy would still resolve as verified. Reading every file once costs
+what copying it would, without the writing.
+
 Content paths and witness names come from the files fetched, so they are
 checked before they are written: every path of the manifest of every
 inventory fetched must be a content path of the object (`vN/content/...`,
@@ -402,6 +411,31 @@ one copy brings `MAX_FETCH_FILES` files and `MAX_FETCH_BYTES` bytes at most
             problem = version_problem(inv, n, copy)
             if problem:
                 return f"v{n}: {problem} (section 14.2)"
+        return None
+
+
+    def folder_problem(d, inv):
+        """Why the files of the object in D, read in place, are not those its root inventory INV
+        names (a content path out of the object, a file missing, out of the folder or with
+        another digest), or None."""
+        try:
+            head = int(inv["head"][1:])
+            manifest = list(inv["manifest"].items())
+        except (KeyError, TypeError, ValueError, AttributeError):
+            return "its inventory cannot be read"
+        top = d.resolve()
+        for dig, paths in manifest:
+            for cp in paths if isinstance(paths, list) else [paths]:
+                if not isinstance(cp, str) or not owners.content_path(cp, inv, head):
+                    return f"a content path out of the object: {cp!r}"
+                p = d / cp
+                try:
+                    p.resolve().relative_to(top)
+                    data = p.read_bytes() if p.is_file() else None
+                except (ValueError, OSError):
+                    data = None
+                if data is None or names.sha512_hex(data) != dig:
+                    return f"{cp} is missing, or does not have its digest"
         return None
 
 
@@ -668,10 +702,18 @@ a copy fetched over HTTP, once per run.
         if src is None:
             return None
         if src.folder is not None:
-            try:
-                return src.object_folder(obj_id)
-            except ValueError:
-                return None
+            key = (where, obj_id)
+            if key not in self.fetched:
+                try:
+                    d = src.object_folder(obj_id)
+                except (ValueError, Unavailable):
+                    d = None
+                problem = folder_problem(d, P.load_inventory(d) or {}) if d is not None else None
+                if problem:
+                    self.note("warning", f"{where}: {obj_id}: {problem}: not read (section 12.3)")
+                    d = None
+                self.fetched[key] = d
+            return self.fetched[key]
         key = (where, obj_id) if upto is None else (where, obj_id, upto)
         if key not in self.fetched:
             dest = self.cache / str(len(self.fetched))

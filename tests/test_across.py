@@ -172,6 +172,33 @@ def test_what_another_archive_says_is_checked(tmp_path, monkeypatch):
     assert any("a content path out of the object" in p for p in log.problems)
 
 
+def test_a_copy_read_in_place_is_checked(tmp_path):
+    a = make(tmp_path, "a")
+    deposit(a, "paper", "one", new=True)
+    oid = line(a, "paper")
+    _, nm, owner = oid.split(":")
+    d = P.obj_dir(oid)
+    inv = P.load_inventory(d)
+    pdf = d / next(cp for ps in inv["manifest"].values() for cp in ps if cp.endswith(".pdf"))
+    good = pdf.read_bytes()
+    c = make(tmp_path, "c")
+    with remote.Resolver(places=[str(a)]) as r:
+        assert r.resolve(f"sheaf:{nm}:{owner}")[1].status == "verified"
+    pdf.write_bytes(b"%PDF tampered")
+    for place in (str(a), "https://example.org/a/"):
+        P.configure(c)
+        with remote.Resolver(places=[place]) as r:
+            assert r.resolve(f"sheaf:{nm}:{owner}")[1].status == "unavailable"
+            assert any("does not have its digest" in m for _, m in r.notes)
+    outside = tmp_path / "outside.pdf"
+    outside.write_bytes(good)
+    pdf.unlink()
+    pdf.symlink_to(outside)
+    P.configure(c)
+    with remote.Resolver(places=[str(a)]) as r:
+        assert r.resolve(f"sheaf:{nm}:{owner}")[1].status == "unavailable"
+
+
 def test_an_unsigned_head_cannot_restate_a_signed_version(tmp_path):
     a, c = make(tmp_path, "a"), make(tmp_path, "c")
     deposit(a, "paper", "one", new=True)

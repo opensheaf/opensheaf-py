@@ -243,6 +243,38 @@ read from disk; and one copy brings a bounded number of files.
         log = owners.load_key_log(kd)
         assert any("a content path out of the object" in p for p in log.problems)
 
+A copy read in place from a folder is checked as a copy fetched over HTTP
+is: a PDF changed in the folder, or replaced by a link to a file outside
+it, makes the copy unavailable, noted, never a verified copy with another
+file. The same holds when the folder is reached through `locations`.
+
+    # in across: resolution:
+    def test_a_copy_read_in_place_is_checked(tmp_path):
+        a = make(tmp_path, "a")
+        deposit(a, "paper", "one", new=True)
+        oid = line(a, "paper")
+        _, nm, owner = oid.split(":")
+        d = P.obj_dir(oid)
+        inv = P.load_inventory(d)
+        pdf = d / next(cp for ps in inv["manifest"].values() for cp in ps if cp.endswith(".pdf"))
+        good = pdf.read_bytes()
+        c = make(tmp_path, "c")
+        with remote.Resolver(places=[str(a)]) as r:
+            assert r.resolve(f"sheaf:{nm}:{owner}")[1].status == "verified"
+        pdf.write_bytes(b"%PDF tampered")
+        for place in (str(a), "https://example.org/a/"):
+            P.configure(c)
+            with remote.Resolver(places=[place]) as r:
+                assert r.resolve(f"sheaf:{nm}:{owner}")[1].status == "unavailable"
+                assert any("does not have its digest" in m for _, m in r.notes)
+        outside = tmp_path / "outside.pdf"
+        outside.write_bytes(good)
+        pdf.unlink()
+        pdf.symlink_to(outside)
+        P.configure(c)
+        with remote.Resolver(places=[str(a)]) as r:
+            assert r.resolve(f"sheaf:{nm}:{owner}")[1].status == "unavailable"
+
 A copy's versions are read through its root inventory. Here the head of
 the paper is forged: an unsigned `v2` whose inventory restates the state
 of the signed `v1` with another PDF, the inventory of `v1` left as it was.

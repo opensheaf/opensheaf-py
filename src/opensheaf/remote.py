@@ -224,6 +224,31 @@ def inventories_problem(d, inv):
     return None
 
 
+def folder_problem(d, inv):
+    """Why the files of the object in D, read in place, are not those its root inventory INV
+    names (a content path out of the object, a file missing, out of the folder or with
+    another digest), or None."""
+    try:
+        head = int(inv["head"][1:])
+        manifest = list(inv["manifest"].items())
+    except (KeyError, TypeError, ValueError, AttributeError):
+        return "its inventory cannot be read"
+    top = d.resolve()
+    for dig, paths in manifest:
+        for cp in paths if isinstance(paths, list) else [paths]:
+            if not isinstance(cp, str) or not owners.content_path(cp, inv, head):
+                return f"a content path out of the object: {cp!r}"
+            p = d / cp
+            try:
+                p.resolve().relative_to(top)
+                data = p.read_bytes() if p.is_file() else None
+            except (ValueError, OSError):
+                data = None
+            if data is None or names.sha512_hex(data) != dig:
+                return f"{cp} is missing, or does not have its digest"
+    return None
+
+
 def fetch_object(src, obj_id, dest, *, upto=None, witness_names=None, warn=None, expect=None):
     """Copy the object OBJ_ID of the archive SRC, v1 to UPTO (default: its head), into the new
     folder DEST, checking every file; WITNESS_NAMES(n, dest) names the witness files of vN
@@ -444,10 +469,18 @@ class Resolver:
         if src is None:
             return None
         if src.folder is not None:
-            try:
-                return src.object_folder(obj_id)
-            except ValueError:
-                return None
+            key = (where, obj_id)
+            if key not in self.fetched:
+                try:
+                    d = src.object_folder(obj_id)
+                except (ValueError, Unavailable):
+                    d = None
+                problem = folder_problem(d, P.load_inventory(d) or {}) if d is not None else None
+                if problem:
+                    self.note("warning", f"{where}: {obj_id}: {problem}: not read (section 12.3)")
+                    d = None
+                self.fetched[key] = d
+            return self.fetched[key]
         key = (where, obj_id) if upto is None else (where, obj_id, upto)
         if key not in self.fetched:
             dest = self.cache / str(len(self.fetched))
