@@ -1221,6 +1221,7 @@ appendix A.1 requires.
             check_before_extending(obj_id, d, inv, acknowledged)
             obj["previous"] = previous_digest(obj_id, d, inv["head"])
         ver = f"v{int(inv['head'][1:]) + 1}"
+        refuse_interrupted(obj_id, d, ver)
         if stage_in is not None:
             stage = Path(stage_in)
             stage.mkdir(parents=True)
@@ -1271,10 +1272,39 @@ The moves. A new object is assembled whole in the staging folder and
 renamed into place; an existing one receives the version folder, then the
 witness folder of the version, then the new root inventory.
 
+An interruption between these moves (a crash, the power cut, a full disk)
+can leave the folder of the new version, and perhaps its witness folder,
+in an object whose root inventory still names the version before as its
+head. The folder is then in the way of every later version, and the
+rename would fail with a bare `Directory not empty`. `refuse_interrupted`
+stops before any work, naming what is there and the two ways out. The
+tools do not remove the folder themselves: it is not referenced by the
+root inventory, but it is a whole version (its folder was renamed into
+place in one step), with its inventory copy and perhaps its signatures,
+and the right repair may be to finish the add rather than to undo it,
+which only the owner can tell. Removing data an owner may want is the one
+thing a repair must not do unasked.
+
     # in move the staged version into the storage root:
+    def refuse_interrupted(obj_id, d, ver):
+        """Stop if the folder of VER, the next version of the object OBJ_ID in D, or its witness
+        folder exists already: an add of VER was interrupted."""
+        left = [p for p in (d / ver, d / sign.WITNESSES / ver) if os.path.lexists(p)]
+        if not left:
+            return
+        shown = ", ".join(p.relative_to(ROOT).as_posix() + "/" for p in left)
+        stop(f"{label_of(obj_id) or obj_id}: {shown} exist, but the inventory of the object names "
+             f"v{int(ver[1:]) - 1} as its head: an earlier add of {ver} was interrupted. Either finish it "
+             f"(if {d.relative_to(ROOT).as_posix()}/{ver}/ is the version you made: copy its inventory.json "
+             "and inventory.json.sha512 into the object folder, then run osheaf verify), or undo it (remove "
+             "those folders); then run the command again")
+
+
     def move_staged(d, stage, ver, draft):
         """Move the version VER built in STAGE into the object folder D."""
         data = (stage / ver / "inventory.json").read_bytes()
+        if ver != "v1":
+            refuse_interrupted(json.loads(data).get("id"), d, ver)
         sidecar = (stage / ver / "inventory.json.sha512").read_bytes()
         wdir = stage / "witnesses"
         if ver == "v1":

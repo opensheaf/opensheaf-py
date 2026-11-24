@@ -45,6 +45,9 @@ in `tests/test_paths.py`.
 
     <<path tests: reserved names>>
 
+
+    <<path tests: an interrupted version>>
+
 The imports
 -----------
 
@@ -442,3 +445,23 @@ deposit.
             with pytest.raises(SystemExit, match="--extra-source"):
                 run(*r, f"{src}={logical}")
         run(*r, f"{src}=sub/main.tex")
+
+An interrupted version
+----------------------
+
+The folder of the next version, left by an add that was interrupted, stops
+the next add with a message that says what to do, before anything is
+staged; once it is removed, the add goes through.
+
+    # in path tests: an interrupted version:
+    def test_an_interrupted_version_is_named(archive):
+        put("paper-a", 1, FILES1)
+        d = P.obj_dir(P.LABELS["paper-a"])
+        (d / "v2" / "content").mkdir(parents=True)
+        with pytest.raises(SystemExit, match="v2 was interrupted"):
+            put("paper-a", 2, FILES2)
+        assert not list(archive.glob(".staging-*"))
+        (d / "v2" / "content").rmdir()
+        (d / "v2").rmdir()
+        put("paper-a", 2, FILES2)
+        assert finish() == []

@@ -773,6 +773,7 @@ def add_version(obj_id, files, obj, message, *, acknowledged=False, stage_in=Non
         check_before_extending(obj_id, d, inv, acknowledged)
         obj["previous"] = previous_digest(obj_id, d, inv["head"])
     ver = f"v{int(inv['head'][1:]) + 1}"
+    refuse_interrupted(obj_id, d, ver)
     if stage_in is not None:
         stage = Path(stage_in)
         stage.mkdir(parents=True)
@@ -820,9 +821,25 @@ def add_version(obj_id, files, obj, message, *, acknowledged=False, stage_in=Non
     return inv
 
 
+def refuse_interrupted(obj_id, d, ver):
+    """Stop if the folder of VER, the next version of the object OBJ_ID in D, or its witness
+    folder exists already: an add of VER was interrupted."""
+    left = [p for p in (d / ver, d / sign.WITNESSES / ver) if os.path.lexists(p)]
+    if not left:
+        return
+    shown = ", ".join(p.relative_to(ROOT).as_posix() + "/" for p in left)
+    stop(f"{label_of(obj_id) or obj_id}: {shown} exist, but the inventory of the object names "
+         f"v{int(ver[1:]) - 1} as its head: an earlier add of {ver} was interrupted. Either finish it "
+         f"(if {d.relative_to(ROOT).as_posix()}/{ver}/ is the version you made: copy its inventory.json "
+         "and inventory.json.sha512 into the object folder, then run osheaf verify), or undo it (remove "
+         "those folders); then run the command again")
+
+
 def move_staged(d, stage, ver, draft):
     """Move the version VER built in STAGE into the object folder D."""
     data = (stage / ver / "inventory.json").read_bytes()
+    if ver != "v1":
+        refuse_interrupted(json.loads(data).get("id"), d, ver)
     sidecar = (stage / ver / "inventory.json.sha512").read_bytes()
     wdir = stage / "witnesses"
     if ver == "v1":
@@ -2416,10 +2433,12 @@ def readable_index(args):
     unlinked(ROOT / ".texmacs-noconvert").touch()
     if not getattr(args, "no_html", False):
         unlinked(ROOT / "index.html")
-        scratch = Path(tempfile.mkdtemp())
-        run_texmacs(export_calls(ROOT / "index.tm", pdf=scratch / "index.pdf",
-                                 html=ROOT / "index.html"))
-        shutil.rmtree(scratch, ignore_errors=True)
+        scratch = Path(tempfile.mkdtemp(prefix="osheaf-index-"))
+        try:
+            run_texmacs(export_calls(ROOT / "index.tm", pdf=scratch / "index.pdf",
+                                     html=ROOT / "index.html"))
+        finally:
+            shutil.rmtree(scratch, ignore_errors=True)
     print("Done: opensheaf.json, index.tm" + ("" if getattr(args, "no_html", False) else ", index.html")
           + f", {plural(pages, 'landing page')} and sitemap.xml written.")
 

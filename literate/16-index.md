@@ -497,10 +497,12 @@ as it was, rather than a file cut short.
         unlinked(ROOT / ".texmacs-noconvert").touch()
         if not getattr(args, "no_html", False):
             unlinked(ROOT / "index.html")
-            scratch = Path(tempfile.mkdtemp())
-            run_texmacs(export_calls(ROOT / "index.tm", pdf=scratch / "index.pdf",
-                                     html=ROOT / "index.html"))
-            shutil.rmtree(scratch, ignore_errors=True)
+            scratch = Path(tempfile.mkdtemp(prefix="osheaf-index-"))
+            try:
+                run_texmacs(export_calls(ROOT / "index.tm", pdf=scratch / "index.pdf",
+                                         html=ROOT / "index.html"))
+            finally:
+                shutil.rmtree(scratch, ignore_errors=True)
         print("Done: opensheaf.json, index.tm" + ("" if getattr(args, "no_html", False) else ", index.html")
               + f", {plural(pages, 'landing page')} and sitemap.xml written.")
 

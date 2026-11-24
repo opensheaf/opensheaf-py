@@ -302,3 +302,16 @@ def test_reserved_names_in_a_document(archive, tmp_path):
         with pytest.raises(SystemExit, match="--extra-source"):
             run(*r, f"{src}={logical}")
     run(*r, f"{src}=sub/main.tex")
+
+
+def test_an_interrupted_version_is_named(archive):
+    put("paper-a", 1, FILES1)
+    d = P.obj_dir(P.LABELS["paper-a"])
+    (d / "v2" / "content").mkdir(parents=True)
+    with pytest.raises(SystemExit, match="v2 was interrupted"):
+        put("paper-a", 2, FILES2)
+    assert not list(archive.glob(".staging-*"))
+    (d / "v2" / "content").rmdir()
+    (d / "v2").rmdir()
+    put("paper-a", 2, FILES2)
+    assert finish() == []
