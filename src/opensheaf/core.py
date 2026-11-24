@@ -1011,7 +1011,14 @@ def with_package(text, package):
 def typeset(source, obj_id, pdf, html_dir):
     """PDF from a plain copy of SOURCE; with an HTML package configured
     (texmacs.htmlPackage), the HTML version from another copy using it."""
-    tmp = Path(tempfile.mkdtemp())
+    tmp = Path(tempfile.mkdtemp(prefix="osheaf-typeset-"))
+    try:
+        typeset_in(tmp, source, obj_id, pdf, html_dir)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def typeset_in(tmp, source, obj_id, pdf, html_dir):
     plain, styled, out = tmp / "plain", tmp / "styled", tmp / "out"
     for d in (plain, styled, out):
         d.mkdir()
@@ -1030,14 +1037,22 @@ def typeset(source, obj_id, pdf, html_dir):
                                     html=out / f"{obj_id}.html")
     run_texmacs(calls)
     if html_dir is not None:
-        unlinked(html_dir).mkdir(parents=True, exist_ok=True)
-        for old in html_dir.iterdir():
-            unlinked(old).unlink()
+        new = tmp / "html"
+        new.mkdir()
         for f in out.iterdir():
-            shutil.copyfile(f, html_dir / f.name)
+            shutil.copyfile(f, new / f.name)
         for name, r in resources.items():
-            shutil.copyfile(r, html_dir / name)
-    shutil.rmtree(tmp, ignore_errors=True)
+            shutil.copyfile(r, new / name)
+        install_html(new, html_dir)
+
+
+def install_html(new, html_dir):
+    """Replace the files of the folder HTML_DIR by those of NEW."""
+    unlinked(html_dir).mkdir(parents=True, exist_ok=True)
+    for old in html_dir.iterdir():
+        unlinked(old).unlink()
+    for f in sorted(new.iterdir()):
+        write_file(html_dir / f.name, f.read_bytes())
 
 
 def tm_balanced(s, i):
@@ -1248,6 +1263,15 @@ def deposit(args):
     """Deposit a document, or a new document version of it: a TeXmacs source
     (typeset by the archive), or any source with its PDF (--pdf), or a PDF
     alone (--no-source REASON)."""
+    tmp = Path(tempfile.mkdtemp(prefix="osheaf-deposit-"))
+    try:
+        deposit_in(args, tmp)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def deposit_in(args, tmp):
+    """The deposit of ARGS, with the scratch folder TMP."""
     label = args.id
     new = getattr(args, "new", False)
     draft = getattr(args, "draft", False)
@@ -1301,7 +1325,6 @@ def deposit(args):
     available = args.available or TODAY
     issued = args.issued or (date_of(prev_dc, "Issued") if prev_dc else None) or available
 
-    tmp = Path(tempfile.mkdtemp())
     texmacs = source is not None and source.suffix == ".tm" and not args.pdf
     if not texmacs and not args.pdf:
         sys.exit("give the PDF of this version with --pdf (only TeXmacs sources are typeset by the archive)")
@@ -1328,9 +1351,14 @@ def deposit(args):
         files[logical] = Path(src)
         if logical.endswith(".bib") and "application/x-bibtex" not in formats:
             formats.append("application/x-bibtex")
+    html_dir = None
     if texmacs:
         pdf = tmp / "paper.pdf"
-        typeset(source, label, pdf, SITE / label if TEXMACS.get("htmlPackage") or not INDEX.get("html") else None)
+        if TEXMACS.get("htmlPackage") or not INDEX.get("html"):
+            html_dir = tmp / "html"
+        typeset(source, label, pdf, html_dir)
+        if not pdf.is_file() or pdf.read_bytes()[:4] != b"%PDF":
+            stop(f"TeXmacs made no PDF of {source}: nothing is deposited (open it in TeXmacs to see why)")
     else:
         pdf = Path(args.pdf)
         if pdf.read_bytes()[:4] != b"%PDF":
@@ -1440,7 +1468,8 @@ def deposit(args):
     files["datacite.json"] = json_bytes(datacite)
     inv = add_version(obj_id, files, obj, args.message or f"Deposit: document version {doc_version}",
                       acknowledged=getattr(args, "i_know", False))
-    shutil.rmtree(tmp, ignore_errors=True)
+    if html_dir is not None:
+        install_html(html_dir, SITE / label)
     if not draft:
         LABELS[label] = obj_id
     write_discovery()

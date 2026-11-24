@@ -238,13 +238,23 @@ typesets; any other source with its PDF (`--pdf`), since the archive
 cannot reproduce a LaTeX build faithfully; or a PDF alone, with the reason
 why the sources are missing (`--no-source REASON`, section 4.3), which a
 later [completion](14-description.md) may remedy. The function reads as a
-sequence of steps.
+sequence of steps, in a scratch folder that is removed however the deposit
+ends, also when it stops on an error.
 
     # in deposit a document version:
     def deposit(args):
         """Deposit a document, or a new document version of it: a TeXmacs source
         (typeset by the archive), or any source with its PDF (--pdf), or a PDF
         alone (--no-source REASON)."""
+        tmp = Path(tempfile.mkdtemp(prefix="osheaf-deposit-"))
+        try:
+            deposit_in(args, tmp)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+
+    def deposit_in(args, tmp):
+        """The deposit of ARGS, with the scratch folder TMP."""
         <<check the identifier and the files of a deposit>>
         <<find the earlier versions of a deposited document and the new number>>
         <<the dates of a deposited version>>
@@ -379,7 +389,6 @@ The scratch folder made first will hold the generated files: the PDF of a
 TeXmacs source and the two descriptions.
 
     # in collect the files of a deposited version:
-    tmp = Path(tempfile.mkdtemp())
     texmacs = source is not None and source.suffix == ".tm" and not args.pdf
     if not texmacs and not args.pdf:
         sys.exit("give the PDF of this version with --pdf (only TeXmacs sources are typeset by the archive)")
@@ -407,14 +416,23 @@ TeXmacs source and the two descriptions.
         if logical.endswith(".bib") and "application/x-bibtex" not in formats:
             formats.append("application/x-bibtex")
 
-The rendition is always `paper.pdf`. A TeXmacs source is typeset now: the
-PDF into the scratch folder, the HTML version (if the archive makes one)
-into `site/`. A PDF given by the depositor is checked to be one.
+The rendition is always `paper.pdf`. A TeXmacs source is typeset now, the
+PDF and the HTML version (if the archive makes one) into the scratch
+folder: the HTML version replaces the one in `site/` only once the version
+is added, so that a deposit that fails (a file refused, the line moved, a
+key missing) leaves the website as it was. TeXmacs that ends without a PDF
+(a document it cannot load, a style missing) stops the deposit with a
+message. A PDF given by the depositor is checked to be one.
 
     # in typeset the TeXmacs source of a deposit, or check its PDF:
+    html_dir = None
     if texmacs:
         pdf = tmp / "paper.pdf"
-        typeset(source, label, pdf, SITE / label if TEXMACS.get("htmlPackage") or not INDEX.get("html") else None)
+        if TEXMACS.get("htmlPackage") or not INDEX.get("html"):
+            html_dir = tmp / "html"
+        typeset(source, label, pdf, html_dir)
+        if not pdf.is_file() or pdf.read_bytes()[:4] != b"%PDF":
+            stop(f"TeXmacs made no PDF of {source}: nothing is deposited (open it in TeXmacs to see why)")
     else:
         pdf = Path(args.pdf)
         if pdf.read_bytes()[:4] != b"%PDF":
@@ -568,7 +586,8 @@ as it was (only `site/` may have a new HTML version).
     files["datacite.json"] = json_bytes(datacite)
     inv = add_version(obj_id, files, obj, args.message or f"Deposit: document version {doc_version}",
                       acknowledged=getattr(args, "i_know", False))
-    shutil.rmtree(tmp, ignore_errors=True)
+    if html_dir is not None:
+        install_html(html_dir, SITE / label)
     if not draft:
         LABELS[label] = obj_id
     write_discovery()

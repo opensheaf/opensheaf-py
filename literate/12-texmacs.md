@@ -233,7 +233,14 @@ the copy is the same bytes as the source but for the style line.
     def typeset(source, obj_id, pdf, html_dir):
         """PDF from a plain copy of SOURCE; with an HTML package configured
         (texmacs.htmlPackage), the HTML version from another copy using it."""
-        tmp = Path(tempfile.mkdtemp())
+        tmp = Path(tempfile.mkdtemp(prefix="osheaf-typeset-"))
+        try:
+            typeset_in(tmp, source, obj_id, pdf, html_dir)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+
+    def typeset_in(tmp, source, obj_id, pdf, html_dir):
         plain, styled, out = tmp / "plain", tmp / "styled", tmp / "out"
         for d in (plain, styled, out):
             d.mkdir()
@@ -252,14 +259,26 @@ the copy is the same bytes as the source but for the style line.
                                         html=out / f"{obj_id}.html")
         run_texmacs(calls)
         if html_dir is not None:
-            unlinked(html_dir).mkdir(parents=True, exist_ok=True)
-            for old in html_dir.iterdir():
-                unlinked(old).unlink()
+            new = tmp / "html"
+            new.mkdir()
             for f in out.iterdir():
-                shutil.copyfile(f, html_dir / f.name)
+                shutil.copyfile(f, new / f.name)
             for name, r in resources.items():
-                shutil.copyfile(r, html_dir / name)
-        shutil.rmtree(tmp, ignore_errors=True)
+                shutil.copyfile(r, new / name)
+            install_html(new, html_dir)
+
+The files of an HTML version replace those of the folder, which may be in
+`site/` or a scratch folder of a deposit, and are installed in `site/` once
+the version is added.
+
+    # in typeset a TeXmacs source into a PDF and an HTML version:
+    def install_html(new, html_dir):
+        """Replace the files of the folder HTML_DIR by those of NEW."""
+        unlinked(html_dir).mkdir(parents=True, exist_ok=True)
+        for old in html_dir.iterdir():
+            unlinked(old).unlink()
+        for f in sorted(new.iterdir()):
+            write_file(html_dir / f.name, f.read_bytes())
 
 Reading TeXmacs markup
 ----------------------

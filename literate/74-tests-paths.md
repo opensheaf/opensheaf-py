@@ -33,6 +33,9 @@ in `tests/test_paths.py`.
 
     <<path tests: the TeXmacs index>>
 
+
+    <<path tests: a deposit that fails>>
+
 The imports
 -----------
 
@@ -42,6 +45,8 @@ The imports
 
     import json
     import os
+    import sys
+    import tempfile
     from pathlib import Path
 
     import pytest
@@ -253,3 +258,54 @@ reaches the index.
         entry = P.index_entry(m)
         assert "<html-javascript" not in entry and "<b|x>" not in entry and "<with|x|<x" not in entry
         assert "v1<gtr><gtr><less>html-javascript" in entry
+
+A deposit that fails
+--------------------
+
+A deposit changes the website only once its version is added. TeXmacs is
+replaced by a script that writes the PDF and the HTML file the Scheme code
+asks for (or, with `pdf=False`, nothing); the archive has an HTML package,
+so that deposits make HTML versions. A deposit that stops after typesetting
+(here on a licence file that is not one of its files) leaves the HTML
+version in `site/` as it was, and leaves no scratch folder; one that
+succeeds replaces it; TeXmacs that makes no PDF stops the deposit with a
+message.
+
+    # in path tests: a deposit that fails:
+    def fake_texmacs(tmp_path, monkeypatch, pdf=True):
+        script = tmp_path / "texmacs"
+        script.write_text(f"#!{sys.executable}\n" + (
+            "import re, sys\n"
+            "for p, kind in re.findall(r'\\(string->url \"((?:[^\"\\\\\\\\]|\\\\\\\\.)*)\"\\) \"(pdf|html)\"', sys.argv[-1]):\n"
+            "    open(re.sub(r'\\\\\\\\(.)', r'\\1', p), 'wb').write(b'%PDF-1.4 typeset' if kind == 'pdf' else b'<html>new</html>')\n"
+            if pdf else ""))
+        script.chmod(0o755)
+        monkeypatch.setenv("TEXMACS_BIN", str(script))
+        monkeypatch.setattr(P, "USER_PLUGINS", tmp_path / "plugins")
+        (tmp_path / "plugins").mkdir(exist_ok=True)
+
+
+    def test_a_failed_deposit_leaves_the_website(archive, tmp_path, monkeypatch):
+        fake_texmacs(tmp_path, monkeypatch)
+        cfg = json.loads((archive / "osheaf.json").read_text())
+        cfg["texmacs"] = {"htmlPackage": "paper-html.ts"}
+        (archive / "osheaf.json").write_text(json.dumps(cfg))
+        (archive / "paper-html.ts").write_text("<TeXmacs|2.1>\n")
+        src = tmp_path / "p.tm"
+        src.write_text("<TeXmacs|2.1>\n<style|article>\n<body>x</body>\n")
+        r = ["--root", str(archive), "deposit", "paper-t", str(src), "--title", "T", "--author", "Doe, J",
+             "--rights", "cc-by-4.0"]
+        site = archive / "site" / "paper-t"
+        site.mkdir(parents=True)
+        (site / "paper-t.html").write_text("<html>old</html>")
+        before = set(Path(tempfile.gettempdir()).glob("osheaf-*"))
+        with pytest.raises(SystemExit, match="licence-file"):
+            run(*r, "--new", "--licence-file", "LICENCE")
+        assert (site / "paper-t.html").read_text() == "<html>old</html>"
+        assert set(Path(tempfile.gettempdir()).glob("osheaf-*")) <= before
+        run(*r, "--new")
+        assert (site / "paper-t.html").read_text() == "<html>new</html>"
+        fake_texmacs(tmp_path, monkeypatch, pdf=False)
+        with pytest.raises(SystemExit, match="made no PDF"):
+            run(*r[:-2], "--changes", "x")
+        assert (site / "paper-t.html").read_text() == "<html>new</html>"
