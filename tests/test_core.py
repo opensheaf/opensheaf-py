@@ -668,6 +668,47 @@ def test_zenodo_token_order(monkeypatch):
     assert asked[1][3] == "zenodo-sandbox-token"
 
 
+def test_zenodo_token_not_sent_on_a_redirect():
+    import http.server
+    import threading
+    import urllib.error
+    import urllib.request
+    from opensheaf import zenodo
+    seen = []
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            seen.append((self.server.server_port, self.path, self.headers.get("Authorization")))
+            if self.path.startswith("/to-"):
+                self.send_response(302)
+                self.send_header("Location", self.path[4:].replace("|", "/"))
+                self.end_headers()
+                return
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"{}")
+
+        def log_message(self, *a):
+            pass
+    servers = [http.server.HTTPServer(("127.0.0.1", 0), Handler) for _ in range(2)]
+    for srv in servers:
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        a, b = (f"http://127.0.0.1:{srv.server_port}" for srv in servers)
+        req = lambda path: urllib.request.Request(a + path, headers={"Authorization": "Bearer SECRET"})
+        with pytest.raises(urllib.error.HTTPError) as e:
+            zenodo.OPENER.open(req("/to-" + (b + "/x").replace("/", "|")), timeout=5)
+        assert e.value.code == 302
+        assert all(port != servers[1].server_port for port, _, _ in seen)
+        with zenodo.OPENER.open(req("/to-|here"), timeout=5) as r:
+            assert r.read() == b"{}"
+        assert seen[-1] == (servers[0].server_port, "/here", "Bearer SECRET")
+    finally:
+        for srv in servers:
+            srv.shutdown()
+            srv.server_close()
+
+
 def run(*argv):
     from opensheaf import cli
     cli.main(list(argv))
@@ -1708,6 +1749,7 @@ def fake_zenodo(monkeypatch):
     def no_network(*a, **k):
         raise AssertionError("a test reached for the network")
     monkeypatch.setattr(urllib.request, "urlopen", no_network)
+    monkeypatch.setattr(zenodo.OPENER, "open", no_network)
     fakes = {True: FakeZenodo(True), False: FakeZenodo(False)}
     monkeypatch.setattr(zenodo, "Zenodo", lambda production: fakes[production])
     return fakes
@@ -1767,7 +1809,7 @@ def test_zenodo_token_and_records_stay_with_their_service(tmp_path, monkeypatch)
 
         def read(self):
             return b"{}"
-    monkeypatch.setattr(urllib.request, "urlopen", lambda req, timeout: sent.append(req) or Answer())
+    monkeypatch.setattr(zenodo.OPENER, "open", lambda req, timeout: sent.append(req) or Answer())
     monkeypatch.setenv("ZENODO_TOKEN", "secret")
     z = real(True)
     for bad in ("https://evil.example/api/files/1", "http://zenodo.org/api/files/1",

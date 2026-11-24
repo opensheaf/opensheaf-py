@@ -225,9 +225,27 @@ Every request carries the token. A request names a path of the API, or a
 link Zenodo gave in an answer (the bucket of a draft, the latest draft of
 a new version); such a link is followed only over HTTPS and only on the
 host of the service in use, so that an answer cannot send the token
-anywhere else, nor in clear.
+anywhere else, nor in clear. A redirect is an answer too: the redirect
+handler of `urllib` follows it with every header of the request, the
+token included, to whatever host it names. The requests that carry the
+token are therefore made through an opener that follows a redirect only
+to the same scheme and host; any other redirect is not followed, and
+becomes the error of the request.
 
     # in Zenodo: talking to the API:
+    class SameHostRedirects(urllib.request.HTTPRedirectHandler):
+        """Redirects followed only to the scheme and host of the request, which carries the token."""
+
+        def redirect_request(self, req, fp, code, msg, headers, newurl):
+            a, b = urllib.parse.urlsplit(req.full_url), urllib.parse.urlsplit(newurl)
+            if (a.scheme, a.netloc.lower()) != (b.scheme, b.netloc.lower()):
+                return None
+            return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+    OPENER = urllib.request.build_opener(SameHostRedirects)
+
+
     class Zenodo:
         def __init__(self, production):
             self.production = production
@@ -250,7 +268,7 @@ anywhere else, nor in clear.
                 "Authorization": f"Bearer {self.token}", "Content-Type": ctype,
                 "Accept": "application/json"})
             try:
-                with urllib.request.urlopen(req, timeout=300) as r:
+                with OPENER.open(req, timeout=300) as r:
                     t = r.read()
                     return json.loads(t) if t else None
             except urllib.error.HTTPError as e:
