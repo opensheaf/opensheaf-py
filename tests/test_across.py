@@ -461,6 +461,40 @@ def test_only_http_links(tmp_path, monkeypatch, capsys):
     assert "href" not in out and "Elsewhere" in out and ">T<" in out
 
 
+def test_what_a_member_says_is_escaped(tmp_path, monkeypatch):
+    from opensheaf import collections, html
+    assert html.fill("{{a}} {{b}} {{c}}", {"a": "{{b}}", "b": "X"}) == "{{b}} X {{c}}"
+    assert html.number(3) == "3" and html.number("<b>") == "?" and html.number(True) == "?"
+    monkeypatch.setattr(html, "remote_view", lambda m: pytest.fail("a bad pin was followed"))
+    m = {"kind": "document", "name": "a" * 64, "owner": "b" * 64, "at": [],
+         "revisions": [{"version": "v1", "documentVersion": "<img src=x onerror=alert(1)>",
+                        "inventorySha512": '"><script>alert(2)</script>'}],
+         "cite": {"title": "{{versions}}"}}
+    out = html.remote_entry(m)
+    assert "<img" not in out and "<script" not in out and "no valid pin" in out and "versions ?" not in out
+    assert "vetted: version ?" in out
+    a = make(tmp_path, "author")
+    deposit(a, "one", "one", new=True)
+    spec = tmp_path / "list.yaml"
+    spec.write_text("title: '{{versions}}'\ntype: catalogue\nmembers: []\n")
+    run("--root", str(a), "collection", "sync", "list", "--from", str(spec))
+    P.configure(a)
+    _, nm, owner = line(a, "one").split(":")
+    bad = {"kind": "document", "name": nm, "owner": owner, "version": "v99", "at": [],
+           "inventorySha512": '"><script>alert(3)</script>'}
+    collections.write(line(a, "list"), dict(members(a, "list"), members=[bad, m]), message="by hand")
+    cfg = json.loads((a / "osheaf.json").read_text())
+    cfg["index"] = {"html": {"featured": "list"}}
+    (a / "osheaf.json").write_text(json.dumps(cfg))
+    run("--root", str(a), "index")
+    for page in [a / "index.html", *a.glob("paper/*/index.html")]:
+        text = page.read_text()
+        assert "<script>alert" not in text and "<img src=x" not in text, page
+    page = (a / "paper" / "list" / "index.html").read_text()
+    assert "{{versions}}" in page and page.count('<li class="version') == 2
+    assert "<lastmod>" in (a / "sitemap.xml").read_text()
+
+
 def forge(d, ver, logical, data):
     """Put DATA in place of LOGICAL in vVER of the object in D, its inventory rewritten to match."""
     p = d / ver / "inventory.json"

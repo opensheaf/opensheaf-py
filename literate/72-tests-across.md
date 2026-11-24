@@ -610,6 +610,50 @@ anything else is shown as text.
         out = html.remote_entry(m)
         assert "href" not in out and "Elsewhere" in out and ">T<" in out
 
+### What a member says is checked before a page uses it
+
+A member's entry is another archive's, or a careless curator's: its pins,
+its document versions and its title are text to show, not HTML. A
+document version that is not a number and a pin that is not a digest are
+not shown, and a member whose pins are not well formed is not presented
+from the line it names, which gets its page from its label instead. The
+templates are filled in one pass, so a title holding a placeholder stays
+that text. The dates of the sitemap are dates or nothing.
+
+    # in across: collections:
+    def test_what_a_member_says_is_escaped(tmp_path, monkeypatch):
+        from opensheaf import collections, html
+        assert html.fill("{{a}} {{b}} {{c}}", {"a": "{{b}}", "b": "X"}) == "{{b}} X {{c}}"
+        assert html.number(3) == "3" and html.number("<b>") == "?" and html.number(True) == "?"
+        monkeypatch.setattr(html, "remote_view", lambda m: pytest.fail("a bad pin was followed"))
+        m = {"kind": "document", "name": "a" * 64, "owner": "b" * 64, "at": [],
+             "revisions": [{"version": "v1", "documentVersion": "<img src=x onerror=alert(1)>",
+                            "inventorySha512": '"><script>alert(2)</script>'}],
+             "cite": {"title": "{{versions}}"}}
+        out = html.remote_entry(m)
+        assert "<img" not in out and "<script" not in out and "no valid pin" in out and "versions ?" not in out
+        assert "vetted: version ?" in out
+        a = make(tmp_path, "author")
+        deposit(a, "one", "one", new=True)
+        spec = tmp_path / "list.yaml"
+        spec.write_text("title: '{{versions}}'\ntype: catalogue\nmembers: []\n")
+        run("--root", str(a), "collection", "sync", "list", "--from", str(spec))
+        P.configure(a)
+        _, nm, owner = line(a, "one").split(":")
+        bad = {"kind": "document", "name": nm, "owner": owner, "version": "v99", "at": [],
+               "inventorySha512": '"><script>alert(3)</script>'}
+        collections.write(line(a, "list"), dict(members(a, "list"), members=[bad, m]), message="by hand")
+        cfg = json.loads((a / "osheaf.json").read_text())
+        cfg["index"] = {"html": {"featured": "list"}}
+        (a / "osheaf.json").write_text(json.dumps(cfg))
+        run("--root", str(a), "index")
+        for page in [a / "index.html", *a.glob("paper/*/index.html")]:
+            text = page.read_text()
+            assert "<script>alert" not in text and "<img src=x" not in text, page
+        page = (a / "paper" / "list" / "index.html").read_text()
+        assert "{{versions}}" in page and page.count('<li class="version') == 2
+        assert "<lastmod>" in (a / "sitemap.xml").read_text()
+
 ### What the website shows of a member elsewhere
 
 The pin fixes the inventory of the version pinned, and the inventory fixes

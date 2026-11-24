@@ -19,6 +19,7 @@ pages, the owner pages and the sitemap are written here.
 import datetime
 import html
 import json
+import re
 import shutil
 from pathlib import Path
 
@@ -28,7 +29,7 @@ DEFAULTS = Path(__file__).resolve().parent / "templates"
 
 
 def esc(s):
-    return html.escape(s or "", quote=True)
+    return html.escape(s if isinstance(s, str) else str(s) if s else "", quote=True)
 
 
 def safe_url(u):
@@ -45,14 +46,43 @@ def link(u, label, cls=""):
     return f'<span{attr}>{label}</span>' if cls else label
 
 
+PIN = re.compile(r"[0-9a-f]{128}\Z")
+OBJECT_VERSION = re.compile(r"v[1-9][0-9]*\Z")
+DAY = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}\Z")
+
+
+def number(n):
+    """The document version N as text if it is a positive integer, else "?"."""
+    return str(n) if isinstance(n, int) and not isinstance(n, bool) and n > 0 else "?"
+
+
+def pin_html(pin):
+    """The pin PIN shown by its beginning, the whole as its title; a note if it is not a pin."""
+    if isinstance(pin, str) and PIN.match(pin):
+        return f'<span class="pin" title="{pin}">pin {pin[:32]}…</span>'
+    return '<span class="contested">no valid pin</span>'
+
+
+def pins_ok(m, line=None):
+    """Whether every pin of member M is a digest and an object version (of LINE, if given)."""
+    try:
+        pins = P.member_pins(m)
+        return bool(pins) and all(
+            isinstance(v, str) and OBJECT_VERSION.match(v) and isinstance(d, str) and PIN.match(d)
+            and (line is None or v in line.inv["versions"]) for v, d, _ in pins)
+    except (TypeError, AttributeError, KeyError):
+        return False
+
+
 def template(name):
     return template_path(name).read_text(encoding="utf-8")
 
 
+PLACEHOLDER = re.compile(r"\{\{([A-Za-z0-9_]+)\}\}")
+
+
 def fill(text, values):
-    for k, v in values.items():
-        text = text.replace("{{" + k + "}}", v)
-    return text
+    return PLACEHOLDER.sub(lambda mo: values.get(mo.group(1), mo.group(0)), text)
 
 
 def fmt_date(d):
@@ -94,9 +124,9 @@ def owner_tag(owner, root=""):
 def versions_line(m, obj):
     """'version 3', or for a member of a selection 'vetted: versions 2, 3'."""
     if m.get("revisions"):
-        ns = [str(r["documentVersion"]) for r in m["revisions"]]
+        ns = [number(r.get("documentVersion")) for r in m["revisions"]]
         return f"vetted: version{'s' if len(ns) > 1 else ''} {', '.join(ns)}"
-    return f"version {obj['documentVersion']}"
+    return f"version {number(obj.get('documentVersion'))}"
 
 
 LINES = {}
@@ -181,7 +211,7 @@ def version_block(line, ver, shown, notices, root, vetted=None):
     par = line.json(P.OBJ, first).get("parent")
     if par and (vs.index(first) == 0 or line.json(P.OBJ, vs[vs.index(first) - 1]).get("parent") != par):
         labels.insert(0, f"the parent's version {par.get('documentVersion')}")
-    head = f"Version {n}" + (f" ({esc(', '.join(labels))})" if labels else "")
+    head = f"Version {number(n)}" + (f" ({esc(', '.join(labels))})" if labels else "")
     if obj.get("stage"):
         head += f' <span class="stage">{esc(obj["stage"]["value"])}</span>'
     if vetted is not None and n in vetted:
@@ -216,7 +246,7 @@ def version_block(line, ver, shown, notices, root, vetted=None):
         files.append(f'<a href="https://arxiv.org/abs/{esc(arxiv)}">arXiv:{esc(arxiv)}</a>')
     if dc.get("doi"):
         files.append(f'<a href="https://doi.org/{esc(dc["doi"])}">doi:{esc(dc["doi"])}</a>')
-    out = [f'<li class="version{" is-current" if n == shown else ""}" id="v{n}">',
+    out = [f'<li class="version{" is-current" if n == shown else ""}" id="v{number(n)}">',
            f'<div class="version-head">{head}</div>']
     if when:
         out.append(f'<div class="version-date">{esc(when)}</div>')
@@ -427,7 +457,7 @@ def render(members, home=True, featured=None, keeper_fetch=None, groups=None):
         while queue:
             qm = queue.pop(0)
             line = held(qm)
-            if line is None:
+            if line is None or not pins_ok(qm, line):
                 continue
             if line.id not in pages:
                 pages[line.id] = qm
@@ -480,7 +510,7 @@ def render(members, home=True, featured=None, keeper_fetch=None, groups=None):
             "head": meta_tags(line, cur, obj, dc), "title": esc(dc["titles"][0]["title"]),
             "issued": esc(fmt_date(issued)), "withdrawn": withdrawn, "contested": contested,
             "versions": versions, "licence": licence, "cite": cite,
-            "pin": pin, "pin_url": f"{root}ocfl/{P.path_of(line.id)}/{pin_ver}/inventory.json",
+            "pin": esc(pin), "pin_url": f"{root}ocfl/{P.path_of(line.id)}/{pin_ver}/inventory.json",
             "sheaf_uri": esc(full_uri(line)), "sheaf_short": esc(short_uri(line)),
             "owner": owner_html(line.owner, root),
         }
@@ -500,14 +530,15 @@ def render(members, home=True, featured=None, keeper_fetch=None, groups=None):
         else:
             page = fill(page_t, dict(common, **{
                 "authors": esc(authors(dc)), "abstract": abstract_html(dc),
-                "pdf": esc(pdf_address(root, line, cur, obj) or f"#v{obj['documentVersion']}"),
+                "pdf": esc(pdf_address(root, line, cur, obj) or f"#v{number(obj['documentVersion'])}"),
                 "html_link": html_link}))
         for address in dict.fromkeys([line.home, line.slug]):
             out = root_out / "paper" / address / "index.html"
             out.parent.mkdir(parents=True, exist_ok=True)
             out.write_text(page, encoding="utf-8")
             written.append(address)
-        lastmod = line.inv["versions"][line.inv["head"]]["created"][:10]
+        lastmod = str(line.inv["versions"][line.inv["head"]].get("created", ""))[:10]
+        lastmod = lastmod if DAY.match(lastmod) else None
         urls.append((f"{base}paper/{line.slug}/", lastmod))
         if html_link:
             urls.append((f"{base}site/{line.slug}/{line.slug}.html", lastmod))
@@ -620,11 +651,11 @@ def remote_entry(m, root="", show_owner=False):
     cite = m.get("cite", {})
     title, by, year = cite.get("title") or m["name"], P.names_joined(cite.get("creators", [])), \
         cite.get("year", "")
-    pin = P.member_pins(m)[-1][1]
+    pin = P.member_pins(m)[-1][1] if pins_ok(m) else None
     links, abstract, landing, withdrawn = [], "", "", ""
     at = (m.get("at") or [""])[0]
-    archive_name = at
-    view = remote_view(m)
+    at = archive_name = at if isinstance(at, str) else ""
+    view = remote_view(m) if pin else None
     if view is None:
         links.append('<span class="missing">archive unavailable: cached citation</span>')
     elif view.get("mismatch"):
@@ -648,7 +679,7 @@ def remote_entry(m, root="", show_owner=False):
         + f' · in {link(at, esc(archive_name))}'
         + (f' · {versions_line(m, {})}' if m.get("revisions") else "")
         + (" · " + " · ".join(links) if links else "")
-        + f' · <span class="pin" title="{pin}">pin {pin[:32]}…</span></div>',
+        + f' · {pin_html(pin)}</div>',
         withdrawn,
         f"<details><summary>Abstract</summary>{abstract}</details>" if abstract else "",
         "</li>"])
@@ -724,6 +755,8 @@ def local_entry(m, root="", show_owner=False):
     root: the way to the root of the archive from the page ("../../" on a landing page);
     SHOW_OWNER: the owner of its line named after the year."""
     line = held(m)
+    if not pins_ok(m, line):
+        return remote_entry(m, root, show_owner)
     cur = P.presented_version(m, line.dir, line.inv)
     pin_ver, pin = P.member_pins(m)[-1][:2]
     obj = line.json(P.OBJ, cur)
@@ -741,7 +774,7 @@ def local_entry(m, root="", show_owner=False):
         + (f' · {owner_tag(m["owner"], root)}' if show_owner else "") + f' · {versions_line(m, obj)}'
         + (f' · <a href="{esc(pdf)}">PDF</a>' if pdf else "")
         + (' · <span class="contested">contested</span>' if contested else "")
-        + f' · <span class="pin" title="{pin}">pin {pin[:32]}…</span></div>',
+        + f' · {pin_html(pin)}</div>',
         f"<details><summary>{summary}</summary>{abstract}</details>" if abstract else "",
         "</li>"])
 

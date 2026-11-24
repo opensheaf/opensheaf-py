@@ -94,6 +94,7 @@ The module
     import datetime
     import html
     import json
+    import re
     import shutil
     from pathlib import Path
 
@@ -192,26 +193,30 @@ A template is HTML with placeholders `{{name}}`, replaced by plain
 string substitution. There is no template language, and no package to
 install: an archive's curator can edit a template knowing only HTML. The
 values are HTML already, escaped by the code that makes them. The
-replacement is made value after value, so a value that contained the
-placeholder of a later one would see it filled too; titles and abstracts
-do not contain double braces in practice. A placeholder that a template
-does not use is simply not shown, so that templates written before a
-placeholder existed keep working.
+template is read once, by one regular expression, and each placeholder is
+replaced by its value: a value is never read again, so a title that
+contains `{{versions}}` stays that text rather than receiving the list of
+versions of a later placeholder (a page is made from what other archives
+write, and a member's title is theirs). A placeholder with no value is
+left as it is, and one that a template does not use is simply not shown,
+so that templates written before a placeholder existed keep working.
 
     # in reading and filling the templates:
+    PLACEHOLDER = re.compile(r"\{\{([A-Za-z0-9_]+)\}\}")
+
+
     def fill(text, values):
-        for k, v in values.items():
-            text = text.replace("{{" + k + "}}", v)
-        return text
+        return PLACEHOLDER.sub(lambda mo: values.get(mo.group(1), mo.group(0)), text)
 
 Every text from the files of objects is escaped, quotes included, since it
 may end up in an attribute: section 15.2 asks that titles, abstracts,
 notes and reasons be shown as text, never as HTML. A missing value becomes
-the empty string.
+the empty string, and a value that is not a string (a number, or what a
+careless or hostile file puts where a string belongs) is shown as its text.
 
     # in escaping text for HTML:
     def esc(s):
-        return html.escape(s or "", quote=True)
+        return html.escape(s if isinstance(s, str) else str(s) if s else "", quote=True)
 
 Escaping is not enough for an address. A URL read from the files, ours or
 another archive's (the `url` of a member's DataCite record, its `at`, the
@@ -236,6 +241,47 @@ value is shown as text, without a link.
         if u:
             return f'<a{attr} href="{esc(u)}">{label}</a>'
         return f'<span{attr}>{label}</span>' if cls else label
+
+Escaping is not enough for the values a page builds on either. A pin, an
+object version and a document version are read from members' entries
+(which may be another archive's) and from the files of objects, and end up
+in attributes, anchors and addresses: `id="v3"`, the link to
+`v3/inventory.json`, the title of a pin. A pin is used only if it is 128
+lowercase hexadecimal digits (section 5), an object version only if it is
+`v` and a positive integer, a document version only if it is a positive
+integer, and the date of the sitemap only if it is a date; anything else
+is not shown, or shown as `?`. A member whose pins are not all well formed
+and, for a line held here, versions of that line (`pins_ok`) is not
+presented from the line: it gets no landing page, and its entry is that of
+a member held elsewhere, with its cached citation.
+
+    # in escaping text for HTML:
+    PIN = re.compile(r"[0-9a-f]{128}\Z")
+    OBJECT_VERSION = re.compile(r"v[1-9][0-9]*\Z")
+    DAY = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}\Z")
+
+
+    def number(n):
+        """The document version N as text if it is a positive integer, else "?"."""
+        return str(n) if isinstance(n, int) and not isinstance(n, bool) and n > 0 else "?"
+
+
+    def pin_html(pin):
+        """The pin PIN shown by its beginning, the whole as its title; a note if it is not a pin."""
+        if isinstance(pin, str) and PIN.match(pin):
+            return f'<span class="pin" title="{pin}">pin {pin[:32]}…</span>'
+        return '<span class="contested">no valid pin</span>'
+
+
+    def pins_ok(m, line=None):
+        """Whether every pin of member M is a digest and an object version (of LINE, if given)."""
+        try:
+            pins = P.member_pins(m)
+            return bool(pins) and all(
+                isinstance(v, str) and OBJECT_VERSION.match(v) and isinstance(d, str) and PIN.match(d)
+                and (line is None or v in line.inv["versions"]) for v, d, _ in pins)
+        except (TypeError, AttributeError, KeyError):
+            return False
 
 Mathematics in titles and abstracts is written in LaTeX between dollar
 signs (section 4.4) and is left as it is: MathJax, loaded by the
@@ -490,7 +536,7 @@ page.
         while queue:
             qm = queue.pop(0)
             line = held(qm)
-            if line is None:
+            if line is None or not pins_ok(qm, line):
                 continue
             if line.id not in pages:
                 pages[line.id] = qm
@@ -553,7 +599,7 @@ the base URL.
         "head": meta_tags(line, cur, obj, dc), "title": esc(dc["titles"][0]["title"]),
         "issued": esc(fmt_date(issued)), "withdrawn": withdrawn, "contested": contested,
         "versions": versions, "licence": licence, "cite": cite,
-        "pin": pin, "pin_url": f"{root}ocfl/{P.path_of(line.id)}/{pin_ver}/inventory.json",
+        "pin": esc(pin), "pin_url": f"{root}ocfl/{P.path_of(line.id)}/{pin_ver}/inventory.json",
         "sheaf_uri": esc(full_uri(line)), "sheaf_short": esc(short_uri(line)),
         "owner": owner_html(line.owner, root),
     }
@@ -564,14 +610,15 @@ the base URL.
     else:
         page = fill(page_t, dict(common, **{
             "authors": esc(authors(dc)), "abstract": abstract_html(dc),
-            "pdf": esc(pdf_address(root, line, cur, obj) or f"#v{obj['documentVersion']}"),
+            "pdf": esc(pdf_address(root, line, cur, obj) or f"#v{number(obj['documentVersion'])}"),
             "html_link": html_link}))
     for address in dict.fromkeys([line.home, line.slug]):
         out = root_out / "paper" / address / "index.html"
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(page, encoding="utf-8")
         written.append(address)
-    lastmod = line.inv["versions"][line.inv["head"]]["created"][:10]
+    lastmod = str(line.inv["versions"][line.inv["head"]].get("created", ""))[:10]
+    lastmod = lastmod if DAY.match(lastmod) else None
     urls.append((f"{base}paper/{line.slug}/", lastmod))
     if html_link:
         urls.append((f"{base}site/{line.slug}/{line.slug}.html", lastmod))
@@ -692,7 +739,7 @@ necessarily the document's current version, and is not called current.
         n = obj["documentVersion"]
         <<the heading and date of a version>>
         <<the links of a version>>
-        out = [f'<li class="version{" is-current" if n == shown else ""}" id="v{n}">',
+        out = [f'<li class="version{" is-current" if n == shown else ""}" id="v{number(n)}">',
                f'<div class="version-head">{head}</div>']
         if when:
             out.append(f'<div class="version-date">{esc(when)}</div>')
@@ -739,7 +786,7 @@ of the version.
     labels = [f"{e['service']} {e['label']}" for e in obj.get("external", [])
               if e.get("role") == "source" and e.get("label")]
     <<the number in the parent line of a version of a branch>>
-    head = f"Version {n}" + (f" ({esc(', '.join(labels))})" if labels else "")
+    head = f"Version {number(n)}" + (f" ({esc(', '.join(labels))})" if labels else "")
     if obj.get("stage"):
         head += f' <span class="stage">{esc(obj["stage"]["value"])}</span>'
     if vetted is not None and n in vetted:
@@ -1036,6 +1083,8 @@ element, so that the list stays short.
         root: the way to the root of the archive from the page ("../../" on a landing page);
         SHOW_OWNER: the owner of its line named after the year."""
         line = held(m)
+        if not pins_ok(m, line):
+            return remote_entry(m, root, show_owner)
         cur = P.presented_version(m, line.dir, line.inv)
         pin_ver, pin = P.member_pins(m)[-1][:2]
         obj = line.json(P.OBJ, cur)
@@ -1053,7 +1102,7 @@ element, so that the list stays short.
             + (f' · {owner_tag(m["owner"], root)}' if show_owner else "") + f' · {versions_line(m, obj)}'
             + (f' · <a href="{esc(pdf)}">PDF</a>' if pdf else "")
             + (' · <span class="contested">contested</span>' if contested else "")
-            + f' · <span class="pin" title="{pin}">pin {pin[:32]}…</span></div>',
+            + f' · {pin_html(pin)}</div>',
             f"<details><summary>{summary}</summary>{abstract}</details>" if abstract else "",
             "</li>"])
 
@@ -1122,9 +1171,9 @@ of a selection, the versions vetted, the last of which is presented.
     def versions_line(m, obj):
         """'version 3', or for a member of a selection 'vetted: versions 2, 3'."""
         if m.get("revisions"):
-            ns = [str(r["documentVersion"]) for r in m["revisions"]]
+            ns = [number(r.get("documentVersion")) for r in m["revisions"]]
             return f"vetted: version{'s' if len(ns) > 1 else ''} {', '.join(ns)}"
-        return f"version {obj['documentVersion']}"
+        return f"version {number(obj.get('documentVersion'))}"
 
 The lead paragraph of the home page says what the archive is. An archive
 of its owners' documents gets a fixed text; an archive with one owner
@@ -1271,11 +1320,11 @@ whose archives do not answer shows the cached citation, and says so.
         cite = m.get("cite", {})
         title, by, year = cite.get("title") or m["name"], P.names_joined(cite.get("creators", [])), \
             cite.get("year", "")
-        pin = P.member_pins(m)[-1][1]
+        pin = P.member_pins(m)[-1][1] if pins_ok(m) else None
         links, abstract, landing, withdrawn = [], "", "", ""
         at = (m.get("at") or [""])[0]
-        archive_name = at
-        view = remote_view(m)
+        at = archive_name = at if isinstance(at, str) else ""
+        view = remote_view(m) if pin else None
         if view is None:
             links.append('<span class="missing">archive unavailable: cached citation</span>')
         elif view.get("mismatch"):
@@ -1309,7 +1358,7 @@ the withdrawal (section 8.3), said to come from its owner (section 8.4).
         + f' · in {link(at, esc(archive_name))}'
         + (f' · {versions_line(m, {})}' if m.get("revisions") else "")
         + (" · " + " · ".join(links) if links else "")
-        + f' · <span class="pin" title="{pin}">pin {pin[:32]}…</span></div>',
+        + f' · {pin_html(pin)}</div>',
         withdrawn,
         f"<details><summary>Abstract</summary>{abstract}</details>" if abstract else "",
         "</li>"])
