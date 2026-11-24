@@ -178,12 +178,20 @@ command wallet, comes after the user's `wallets`. The wallet of a command
 that names none is then:
 
 1. that of `OPENSHEAF_WALLET`, which wins;
-2. else, among the wallets hinted for the owner and then the user's
-   (`candidates`, each once), the first that holds keys of the owner (its
-   folder `<owner>/`, listed); a wallet that cannot be read or listed is
-   passed over; when only one is named it is taken as it is, without a
+2. else, among the user's wallets and then the wallets hinted for the
+   owner (`candidates`, each once), the first that holds keys of the owner
+   (its folder `<owner>/`, listed); a wallet that cannot be read or listed
+   is passed over; when only one is named it is taken as it is, without a
    listing; when none holds keys of the owner, the first, where keys of
    it would go.
+
+The user's own configuration comes first: `osheaf.json` is the archive's,
+which anyone who can change the archive (a collaborator, a pull request
+merged, a clone from elsewhere) writes, and a hint placed first would
+otherwise decide where `osheaf key push` sends the owner's keys. A hint
+is still followed where the user names nothing; but keys are put into a
+wallet that only `osheaf.json` names after a confirmation (`hinted_only`,
+and `wallet_for` in the chapter on the [owner commands](19-owner-commands.md)).
 
 A command that names no owner, such as `osheaf owner init` before the
 owner exists, takes the first candidate. A command wallet without a
@@ -298,14 +306,19 @@ wallet refuses (below).
 
 
     def candidates(config, owner=None):
-        """[(wallet, place)]: that of OPENSHEAF_WALLET alone; or else those CONFIG (the `keys` of osheaf.json)
-        hints for OWNER, then the user's, each once."""
+        """[(wallet, place)]: that of OPENSHEAF_WALLET alone; or else the user's, then those CONFIG (the
+        `keys` of osheaf.json) hints for OWNER, each once."""
         check_archive_config(config)
         env = os.environ.get(WALLET, "").strip()
         if env:
             return [(env, WALLET)]
-        out = [(w, CONFIG_FILE) for w in hints(config, owner)]
-        return out + [(w, str(user_config_path())) for w in user_wallets() if w not in {x for x, _ in out}]
+        out = [(w, str(user_config_path())) for w in user_wallets()]
+        return out + [(w, CONFIG_FILE) for w in hints(config, owner) if w not in {x for x, _ in out}]
+
+
+    def hinted_only(config, owner, name):
+        """Whether the wallet NAME is a candidate for OWNER only because osheaf.json hints it."""
+        return dict(candidates(config, owner)).get(name) == CONFIG_FILE
 
 
     def configured(config, *, forbidden=(), owner=None):

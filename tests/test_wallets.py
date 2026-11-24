@@ -403,7 +403,7 @@ def test_wallets_of_each_owner(tmp_path, monkeypatch, capsys):
     assert json.loads(user.read_text())["wallets"] == ["github:me/keys"]
     with pytest.raises(SystemExit, match="not one of your wallets"):
         run(*r, "key", "wallets", "--remove", "github:me/nothing")
-    # the user's "keys", after the hints; one wallet for the archive, no longer read
+    # the user's "keys", after the user's wallets; one wallet for the archive, no longer read
     user.write_text(json.dumps({"keys": {"wallet": "github:me/keys"}}))
     cfg = json.loads((root / "osheaf.json").read_text())
     cfg["keys"] = {second: {"wallets": ["github:me/other"]}}
@@ -428,6 +428,34 @@ def test_wallets_of_each_owner(tmp_path, monkeypatch, capsys):
     P.configure(root)
     with pytest.raises(SystemExit, match="configures a command wallet"):
         P.configured_wallet(first)
+
+
+def test_a_hinted_wallet_is_confirmed(tmp_path, monkeypatch):
+    monkeypatch.setenv(P.PASSPHRASE, "correct horse")
+    repos = json.loads((tmp_path / "gh-state" / "repos.json").read_text())
+    (tmp_path / "gh-state" / "repos.json").write_text(json.dumps({**repos, "eve/keys": True}))
+    root = make_archive(tmp_path, "--export", str(tmp_path / "usb"), "--no-passphrase")
+    owner = P.ARCHIVE["owner"]
+    r = ["--root", str(root)]
+    cfg = json.loads((root / "osheaf.json").read_text())
+    cfg["keys"] = {owner: {"wallets": ["github:eve/keys"]}}
+    (root / "osheaf.json").write_text(json.dumps(cfg, indent=2) + "\n")
+    monkeypatch.setattr("builtins.input", lambda prompt: "no")
+    with pytest.raises(SystemExit, match="(?i)not confirmed: nothing was put into github:eve/keys"):
+        run(*r, "key", "push")
+    assert in_repo(tmp_path, "eve/keys") == {}
+    run(*r, "key", "push", "--wallet", "github:me/keys")
+    user = tmp_path / "config" / "opensheaf" / "config.json"
+    user.parent.mkdir(parents=True, exist_ok=True)
+    user.write_text(json.dumps({"wallets": ["github:me/keys"]}))
+    P.configure(root)
+    assert P.configured_wallet(owner).name == "github:me/keys"
+    run(*r, "key", "push")
+    assert in_repo(tmp_path, "eve/keys") == {}
+    user.write_text(json.dumps({}))
+    (root / "osheaf.json").write_text(json.dumps(cfg, indent=2) + "\n")
+    run(*r, "key", "push", "--yes")
+    assert in_repo(tmp_path, "eve/keys") != {}
 
 
 def test_clipboard_round_trip(tmp_path, monkeypatch, capsys):

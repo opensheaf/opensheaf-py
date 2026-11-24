@@ -148,14 +148,19 @@ def check_archive_config(config):
 
 
 def candidates(config, owner=None):
-    """[(wallet, place)]: that of OPENSHEAF_WALLET alone; or else those CONFIG (the `keys` of osheaf.json)
-    hints for OWNER, then the user's, each once."""
+    """[(wallet, place)]: that of OPENSHEAF_WALLET alone; or else the user's, then those CONFIG (the
+    `keys` of osheaf.json) hints for OWNER, each once."""
     check_archive_config(config)
     env = os.environ.get(WALLET, "").strip()
     if env:
         return [(env, WALLET)]
-    out = [(w, CONFIG_FILE) for w in hints(config, owner)]
-    return out + [(w, str(user_config_path())) for w in user_wallets() if w not in {x for x, _ in out}]
+    out = [(w, str(user_config_path())) for w in user_wallets()]
+    return out + [(w, CONFIG_FILE) for w in hints(config, owner) if w not in {x for x, _ in out}]
+
+
+def hinted_only(config, owner, name):
+    """Whether the wallet NAME is a candidate for OWNER only because osheaf.json hints it."""
+    return dict(candidates(config, owner)).get(name) == CONFIG_FILE
 
 
 def configured(config, *, forbidden=(), owner=None):

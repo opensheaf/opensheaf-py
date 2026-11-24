@@ -3775,11 +3775,20 @@ def level_wallet(args, owner=None):
         stop(str(e))
 
 
-def wallet_for(args, owner=None):
+def wallet_for(args, owner=None, putting=False):
     """The wallet a command reads or moves keys of OWNER with: that of --wallet (--keys), or the configured
-    one."""
+    one; PUTTING (keys are put into it): a wallet that only osheaf.json names is confirmed first."""
     from . import wallet
-    w = level_wallet(args, owner) or configured_wallet(owner)
+    w = level_wallet(args, owner)
+    if w is None:
+        w = configured_wallet(owner)
+        if w is not None and putting and wallet.hinted_only(ARCHIVE.get("keys"), owner, w.name):
+            print(f"The key wallet {w.name} is named by {CONFIG_NAME} of this archive, which whoever can change "
+                  "the archive writes, and not by your own configuration: the keys would be put there.",
+                  file=sys.stderr)
+            if not confirmed("put", args):
+                stop(f"not confirmed: nothing was put into {w.name} (give --wallet, or add the wallet to "
+                     f"{wallet.user_config_path()})")
     if w is None:
         stop("no key wallet: give --wallet github:OWNER/REPO (or command), or configure one in "
              f'{wallet.user_config_path()}, or in osheaf.json for the owner ("keys": {{"<owner>": {{"wallets": [...]}}}}), '
@@ -4235,7 +4244,7 @@ def key_push(args):
     latest = log.latest()
     if latest is None:
         stop(f"the owner {who} has ended (section 6.3)")
-    w = wallet_for(args, owner)
+    w = wallet_for(args, owner, putting=True)
     dids = list(getattr(args, "did", None) or latest.keys["keys"])
     try:
         here = keys.current_keys(owner, dids)

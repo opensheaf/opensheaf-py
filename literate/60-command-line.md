@@ -906,6 +906,8 @@ The options of making an owner are shared by `owner init` and
     kp = ksub.add_parser("push", help="put the current keys of this device into the key wallet")
     kp.add_argument("did", nargs="*", metavar="DID", help="the keys (default: the current keys of the owner)")
     kp.add_argument("--plain-current", action="store_true", help="keep them unencrypted in the wallet")
+    kp.add_argument("--yes", action="store_true",
+                    help="do not ask to confirm a wallet that only osheaf.json names (scripts)")
     kl = ksub.add_parser("pull", help="keep on this device the owner's current keys that the wallet holds")
     kls = ksub.add_parser("list", help="what the key wallet holds, as a table: owner, kind, key, version, locks (no secrets)")
     kw = ksub.add_parser("wallet", help="the key wallets in which the owner's keys are looked for; hint one "
