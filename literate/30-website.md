@@ -1388,6 +1388,8 @@ rest of the website is written.
         """{archive, at, dc, pdf, state, title, by, abstract, landing, withdrawn} of member M,
         read at the first of its at that answers and whose copy matches the pin; {archive, at,
         mismatch} for a copy that does not match; None if none answers."""
+        if not pins_ok(m):
+            return None
         obj_id = names.object_id(m["name"], m["owner"])
         pin_ver, pin = P.member_pins(m)[-1][:2]
         for at in m.get("at", []):
@@ -1434,7 +1436,10 @@ rest of the website is written.
 The version presented of a member of a selection is its last revision, the
 version pinned; that of a member of a catalogue is computed from the files
 of the versions up to the pin, as the core computes it for a line held
-here (`current_version`).
+here (`current_version`). The versions are those the inventory pinned
+records, whose head must be the version pinned: the number in a member's
+pin (`v999999999999`) bounds nothing, and a member pinned so is no member
+whose inventory answers.
 
     # in the version of a member elsewhere that is presented:
     if m.get("revisions"):
@@ -1445,7 +1450,9 @@ here (`current_version`).
             shown = hist[-1]
         else:
             last = {}
-            for k in range(1, int(pin_ver[1:]) + 1):
+            if inv.get("head") != pin_ver or len(inv["versions"]) != int(pin_ver[1:]):
+                raise ValueError(f"the inventory pinned is not that of {pin_ver}")
+            for k in range(1, len(inv["versions"]) + 1):
                 o = read(f"v{k}", P.OBJ) if f"v{k}" in inv["versions"] else None
                 if o:
                     last[o["documentVersion"]] = f"v{k}"

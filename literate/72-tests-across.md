@@ -730,6 +730,41 @@ that text. The dates of the sitemap are dates or nothing.
         assert "{{versions}}" in page and page.count('<li class="version') == 2
         assert "<lastmod>" in (a / "sitemap.xml").read_text()
 
+### A pin whose number bounds nothing
+
+The number of a version in a member's pin is not a count to loop to: a
+member elsewhere pinned at `v999999999999`, whose archive serves an
+inventory of that version alone, is no member whose inventory answers,
+and the website is written at once.
+
+    # in across: collections:
+    def test_a_pin_whose_number_bounds_nothing(monkeypatch):
+        from opensheaf import html
+        obj = json.dumps({"documentVersion": 1}).encode()
+        d = names.sha512_hex(obj)
+        ver = "v999999999999"
+        inv = json.dumps({"head": ver, "versions": {ver: {"state": {d: ["object.json"]}}},
+                          "manifest": {d: [f"{ver}/content/object.json"]}}).encode()
+
+        class Evil:
+            at = "https://evil.example/"
+
+            def __init__(self, at):
+                pass
+
+            def discovery(self):
+                return {"specification": "0.2"}
+
+            def object_path(self, obj_id):
+                return "o"
+
+            def get(self, rel):
+                return inv if rel.endswith("inventory.json") else obj
+        monkeypatch.setattr(html.remote, "Source", Evil)
+        m = {"kind": "document", "name": "a" * 52, "owner": "b" * 52, "at": ["https://evil.example/"],
+             "version": ver, "inventorySha512": names.sha512_hex(inv), "cite": {"title": "Cached"}}
+        assert html.remote_view(m) is None
+
 ### What the website shows of a member elsewhere
 
 The pin fixes the inventory of the version pinned, and the inventory fixes

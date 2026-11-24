@@ -558,6 +558,34 @@ def test_what_a_member_says_is_escaped(tmp_path, monkeypatch):
     assert "<lastmod>" in (a / "sitemap.xml").read_text()
 
 
+def test_a_pin_whose_number_bounds_nothing(monkeypatch):
+    from opensheaf import html
+    obj = json.dumps({"documentVersion": 1}).encode()
+    d = names.sha512_hex(obj)
+    ver = "v999999999999"
+    inv = json.dumps({"head": ver, "versions": {ver: {"state": {d: ["object.json"]}}},
+                      "manifest": {d: [f"{ver}/content/object.json"]}}).encode()
+
+    class Evil:
+        at = "https://evil.example/"
+
+        def __init__(self, at):
+            pass
+
+        def discovery(self):
+            return {"specification": "0.2"}
+
+        def object_path(self, obj_id):
+            return "o"
+
+        def get(self, rel):
+            return inv if rel.endswith("inventory.json") else obj
+    monkeypatch.setattr(html.remote, "Source", Evil)
+    m = {"kind": "document", "name": "a" * 52, "owner": "b" * 52, "at": ["https://evil.example/"],
+         "version": ver, "inventorySha512": names.sha512_hex(inv), "cite": {"title": "Cached"}}
+    assert html.remote_view(m) is None
+
+
 def forge(d, ver, logical, data):
     """Put DATA in place of LOGICAL in vVER of the object in D, its inventory rewritten to match."""
     p = d / ver / "inventory.json"

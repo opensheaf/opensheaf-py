@@ -685,6 +685,8 @@ def remote_view(m):
     """{archive, at, dc, pdf, state, title, by, abstract, landing, withdrawn} of member M,
     read at the first of its at that answers and whose copy matches the pin; {archive, at,
     mismatch} for a copy that does not match; None if none answers."""
+    if not pins_ok(m):
+        return None
     obj_id = names.object_id(m["name"], m["owner"])
     pin_ver, pin = P.member_pins(m)[-1][:2]
     for at in m.get("at", []):
@@ -716,7 +718,9 @@ def remote_view(m):
                     shown = hist[-1]
                 else:
                     last = {}
-                    for k in range(1, int(pin_ver[1:]) + 1):
+                    if inv.get("head") != pin_ver or len(inv["versions"]) != int(pin_ver[1:]):
+                        raise ValueError(f"the inventory pinned is not that of {pin_ver}")
+                    for k in range(1, len(inv["versions"]) + 1):
                         o = read(f"v{k}", P.OBJ) if f"v{k}" in inv["versions"] else None
                         if o:
                             last[o["documentVersion"]] = f"v{k}"
