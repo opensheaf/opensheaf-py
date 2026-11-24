@@ -347,6 +347,24 @@ def test_fork_record_of_appendix_c():
         log.record_fork([other], user=USER_A)
 
 
+def test_a_version_after_an_ending_one_is_a_problem():
+    new = keys.new_key
+    rot = [new(), new(), new()]
+    mine = owners.new_owner([new()], rot, threshold=1, next_threshold=1)
+    theirs = owners.KeyLog(mine.genesis)
+    mine.rotate([rot[0]], next_keys=[new()], next_threshold=1, user=USER_A)
+    theirs.end([rot[1]], user=USER_A)
+    prev = theirs.versions[-1]
+    kb = owners.keys_file(keys=[new().did], threshold=1, next_digests=[new().digest], next_threshold=1)
+    content = {names.GENESIS: theirs.genesis, owners.OBJ: owners.owner_object(theirs.owner, prev.digest),
+               owners.KEYS: kb}
+    inv = owners.inventory(json.loads(prev.inventory), theirs.id, 3, content, names.utc_now())
+    ib = owners.inventory_file(inv)
+    after = owners.Version(3, content, ib, owners.sidecar(ib))
+    with pytest.raises(owners.OwnerError, match="nothing follows an ending version"):
+        mine.record_fork([theirs.versions[1], after], user=USER_A)
+
+
 def test_rules_of_keys():
     v1 = authors_log(1).versions[0].keys
     def problems(**fields):

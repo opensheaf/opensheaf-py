@@ -705,7 +705,10 @@ signature files naming that version by its pin (section 6.1). The
 signatures are judged by the [signatures](08-signatures.md) module, which
 checks the rules of section 7.3 for signatures of key-log versions: a
 rotation key of the version named, the version before. Invalid signature
-files are reported as warnings, never fatal (section 7.2).
+files are reported as warnings, never fatal (section 7.2). Nothing follows
+an ending version (section 6.3), which commits to no rotation keys and has
+no `nextThreshold`: a version after it, held or carried by a fork record,
+is a problem of the key log, never a crash of the reader.
 
     # in owners: checking a key log:
     def lookup_held(self, side):
@@ -716,6 +719,10 @@ files are reported as warnings, never fatal (section 7.2).
 
     def _signature_problems(self, v, prev, lookup, warnings, where=None):
         where = where or f"v{v.number}"
+        need = (prev.keys or {}).get("nextThreshold")
+        if (prev.keys or {}).get("ended") or not isinstance(need, int) or isinstance(need, bool):
+            return [f"follows v{prev.number}, which ends the key log or commits to no rotation keys: "
+                    "nothing follows an ending version (section 6.3)"]
         good = set()
         for j in sign.judge_folder(v.witnesses, object_id=self.id, version=f"v{v.number}",
                                    inventory=v.digest, owner=self.owner, lookup=lookup, key_log=True):
@@ -723,7 +730,6 @@ files are reported as warnings, never fatal (section 7.2).
                 good.add(j.key)
             elif j.status != sign.GOOD:
                 warnings.append(f"{where}/{j.file}: {j.status}: {j.reason}")
-        need = prev.keys["nextThreshold"]
         if len(good) < need:
             return [f"signed by {len(good)} rotation key{'' if len(good) == 1 else 's'} of v{prev.number}, "
                     f"which needs {need} (section 6.1)"]

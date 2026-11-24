@@ -509,6 +509,28 @@ signed for it any more.
         with pytest.raises(owners.OwnerError):
             log.record_fork([other], user=USER_A)
 
+Nothing follows an ending version (section 6.3). A fork whose other side
+ends and then carries one more version is a problem of the fork record,
+reported, not a crash of whoever reads the key log.
+
+    # in identity tests: key logs:
+    def test_a_version_after_an_ending_one_is_a_problem():
+        new = keys.new_key
+        rot = [new(), new(), new()]
+        mine = owners.new_owner([new()], rot, threshold=1, next_threshold=1)
+        theirs = owners.KeyLog(mine.genesis)
+        mine.rotate([rot[0]], next_keys=[new()], next_threshold=1, user=USER_A)
+        theirs.end([rot[1]], user=USER_A)
+        prev = theirs.versions[-1]
+        kb = owners.keys_file(keys=[new().did], threshold=1, next_digests=[new().digest], next_threshold=1)
+        content = {names.GENESIS: theirs.genesis, owners.OBJ: owners.owner_object(theirs.owner, prev.digest),
+                   owners.KEYS: kb}
+        inv = owners.inventory(json.loads(prev.inventory), theirs.id, 3, content, names.utc_now())
+        ib = owners.inventory_file(inv)
+        after = owners.Version(3, content, ib, owners.sidecar(ib))
+        with pytest.raises(owners.OwnerError, match="nothing follows an ending version"):
+            mine.record_fork([theirs.versions[1], after], user=USER_A)
+
 The four rules of section 6.1 and those of ending versions, each broken
 once, through `key_rules` and through the operations that would write such
 a version, which refuse it.
