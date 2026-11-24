@@ -485,6 +485,8 @@ sheets gets no stray `style.css`.
         P.refuse_unread_pages()
         LINES.clear()
         KEEPERS.clear()
+        SOURCES.clear()
+        LOOKED_UP[0] = 0
         KEEPER_FETCH = keeper_fetch
         members = [m for m in members if not removed(m)]
         root_out = P.ROOT
@@ -1383,21 +1385,50 @@ names, makes the archive count as not answering, and the next one in `at`
 is tried; when none answers, the entry shows the cached citation, and the
 rest of the website is written.
 
+What one website reads of other archives is bounded, as the resolver's
+reading is (section 15.2): an `at` is read only if it is an `http` or
+`https` URL (`remote=True`), at most `MAX_MIRRORS` of a member's `at` are
+tried, at most `MAX_PINS` members elsewhere are looked up in one run (the
+others show their cached citation), each archive is opened once per run,
+its discovery document read once (or found not to answer once:
+`SOURCES` keeps the failure too), and every JSON file is read within
+`MAX_JSON` bytes.
+
     # in a member of another archive on the home page:
+    SOURCES = {}
+    LOOKED_UP = [0]
+
+
+    def source_at(at):
+        """The archive at AT, opened once per run of render; None if it does not answer."""
+        key = (at, remote.locate(at))
+        if key not in SOURCES:
+            src = remote.Source(at, remote=True)
+            try:
+                src.discovery()
+            except (remote.Unavailable, ValueError, TypeError, AttributeError):
+                src = None
+            SOURCES[key] = src
+        return SOURCES[key]
+
+
     def remote_view(m):
         """{archive, at, dc, pdf, state, title, by, abstract, landing, withdrawn} of member M,
         read at the first of its at that answers and whose copy matches the pin; {archive, at,
         mismatch} for a copy that does not match; None if none answers."""
-        if not pins_ok(m):
+        if not pins_ok(m) or not isinstance(m.get("at"), list) or LOOKED_UP[0] >= remote.MAX_PINS:
             return None
+        LOOKED_UP[0] += 1
         obj_id = names.object_id(m["name"], m["owner"])
         pin_ver, pin = P.member_pins(m)[-1][:2]
-        for at in m.get("at", []):
-            src = remote.Source(at)
+        for at in [a for a in m["at"] if isinstance(a, str)][:remote.MAX_MIRRORS]:
+            src = source_at(at)
+            if src is None:
+                continue
             try:
                 disc = src.discovery()
                 path = src.object_path(obj_id)
-                data = src.get(f"{path}/{pin_ver}/inventory.json")
+                data = src.get(f"{path}/{pin_ver}/inventory.json", remote.MAX_JSON)
                 if data is None:
                     continue
                 name = disc.get("name")
@@ -1409,7 +1440,7 @@ rest of the website is written.
                 def read(ver, logical, inv=inv):
                     dig = next((dg for dg, ps in inv["versions"][ver]["state"].items() if logical in ps), None)
                     cp = inv["manifest"][dig][0] if dig else None
-                    raw = src.get(f"{path}/{cp}") if cp and remote.safe_path(cp) else None
+                    raw = src.get(f"{path}/{cp}", remote.MAX_JSON) if cp and remote.safe_path(cp) else None
                     if raw is not None and names.sha512_hex(raw) != dig:
                         raise ValueError(f"{cp}: not the file its inventory names")
                     return names.json_value(raw) if raw else None
@@ -1469,7 +1500,7 @@ whose pages cannot be read does not answer.
     # in the status of a member elsewhere:
     entry = next((o for o in disc.get("objects", []) if isinstance(o, dict) and o.get("id") == obj_id), {})
     if entry.get("status") == "withdrawn":
-        root_inv = names.json_value(src.get(f"{path}/inventory.json") or b"{}")
+        root_inv = names.json_value(src.get(f"{path}/inventory.json", remote.MAX_JSON) or b"{}")
         state = read(root_inv.get("head", pin_ver), P.OBJ, root_inv) if root_inv.get("versions") else None
         view["state"] = state if state and state.get("status") == "withdrawn" else {"status": "withdrawn"}
 

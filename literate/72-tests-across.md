@@ -397,6 +397,97 @@ whole, with its witnesses, and resolves as its full URI does.
                 assert (found.status, found.version) == ("verified", "v2")
                 assert found.copy.statuses == [sign.SIGNED, sign.SIGNED]
 
+### What is read of addresses others give, and how much
+
+An address another archive gives (a member's `at`, the place in a URI) is
+read only if it is an `http` or `https` URL: never a folder of this disk,
+a `file:` URL, or `ftp:`; the user's own places may be folders. A URL
+mapped by the locations does not climb out of the folder it is mapped to.
+A redirect to `ftp:` is not followed. A JSON file larger than `MAX_JSON`,
+or a server that sends its answer a byte at a time past `DEADLINE`, makes
+its archive unavailable. At most `MAX_MIRRORS` places given by others are
+tried for a line, at most `MAX_PINS` pins resolved in one run, and at most
+`MAX_PROBES` prefixes of the URL of a parent version tried for its
+archive.
+
+    # in across: resolution:
+    def test_addresses_given_by_others(tmp_path, monkeypatch):
+        import time
+        a = make(tmp_path, "a")
+        deposit(a, "paper", "one", new=True)
+        _, nm, owner = line(a, "paper").split(":")
+        (tmp_path / "secret").mkdir()
+        (tmp_path / "secret" / "opensheaf.json").write_text('{"specification": "0.2"}')
+        assert remote.Source(str(a)).folder is not None
+        for given in (str(a), f"file://{a}", "ftp://127.0.0.1/a/", "a/"):
+            src = remote.Source(given, remote=True)
+            assert src.folder is None and src.url is None
+            with pytest.raises(remote.Unavailable, match="not an http or https"):
+                src.discovery()
+        with pytest.raises(remote.Unavailable, match="not an http or https"):
+            remote.Source("ftp://127.0.0.1/a/").discovery()
+        monkeypatch.setenv(remote.LOCATIONS, f"https://example.org/={tmp_path / 'a'}/")
+        for climb in ("https://example.org/../secret/", "https://example.org/%2e%2e/secret/",
+                      "https://example.org/x/..%2f..%2fsecret/"):
+            with pytest.raises(remote.Unavailable, match="climbs out"):
+                remote.Source(climb, remote=True).discovery()
+        monkeypatch.setenv(remote.LOCATIONS, f"https://example.org/={tmp_path}/")
+        P.configure(a)
+        with remote.Resolver(here=False) as r:
+            assert r.resolve(f"sheaf:{nm}:{owner}", [str(a)])[1].status == "unavailable"
+            assert r.resolve(f"sheaf:{nm}:{owner}", ["https://example.org/a/"])[1].status == "verified"
+        seen = []
+
+        class Answers(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                seen.append(self.path)
+                if self.path.startswith("/ftp/"):
+                    self.send_response(302)
+                    self.send_header("Location", "ftp://127.0.0.1/opensheaf.json")
+                    self.end_headers()
+                elif self.path.startswith("/slow/"):
+                    self.send_response(200)
+                    self.end_headers()
+                    try:
+                        for _ in range(40):
+                            self.wfile.write(b" ")
+                            self.wfile.flush()
+                            time.sleep(0.05)
+                    except OSError:              # the reader gave up
+                        pass
+                else:
+                    self.send_response(404)
+                    self.end_headers()
+
+            def log_message(self, *args):
+                pass
+        httpd = Server(("127.0.0.1", 0), Answers)
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        base = f"http://127.0.0.1:{httpd.server_address[1]}"
+        try:
+            with pytest.raises(remote.Unavailable, match="HTTP 302"):
+                remote.Source(f"{base}/ftp/", remote=True).discovery()
+            monkeypatch.setattr(remote, "DEADLINE", 0.5)
+            with pytest.raises(remote.Unavailable, match="not read in"):
+                remote.Source(f"{base}/slow/", remote=True).discovery()
+            monkeypatch.setattr(remote, "MAX_JSON", 10)
+            with pytest.raises(remote.Unavailable, match="more than 10 bytes"):
+                remote.Source(f"{base}/slow/", remote=True).discovery()
+            monkeypatch.setattr(remote, "MAX_JSON", 16 << 20)
+            seen.clear()
+            with remote.Resolver(here=False) as r:
+                deep = f"{base}/" + "x/" * 30 + "v1/"
+                assert r.archive_of(deep) == []
+                assert len(seen) == remote.MAX_PROBES
+                many = [f"{base}/m{k}/" for k in range(9)]
+                assert len(r.where(many)) == remote.MAX_MIRRORS
+                monkeypatch.setattr(remote, "MAX_PINS", 1)
+                d1 = head_digest(a, "paper", "v1")
+                assert r.pin(nm, owner, "v1", d1, ["https://example.org/a/"]).status == "verified"
+                assert r.pin(nm, owner, "v1", d1, ["https://example.org/a/"]).status == "unavailable"
+        finally:
+            httpd.shutdown()
+
 Collections
 -----------
 
@@ -524,14 +615,14 @@ alone, it is a mismatch.
         inv.write_bytes(inv.read_bytes() + b" ")
         (tampered / path / "v1" / "inventory.json.sha512").write_bytes(owners.sidecar(inv.read_bytes()))
         P.configure(a)
-        with remote.Resolver(here=False) as r:
-            assert r.pin(nm, owner, "v1", dig, [str(nocheck)]).status == "verified"
+        with remote.Resolver(here=False, places=[str(nocheck)]) as r:
+            assert r.pin(nm, owner, "v1", dig).status == "verified"
             assert remote.checksum_warning(str(nocheck), obj_id, 1) in [m for _, m in r.notes]
-        with remote.Resolver(here=False) as r:
-            assert r.pin(nm, owner, "v1", dig, [str(tampered), str(a)]).status == "verified"
+        with remote.Resolver(here=False, places=[str(tampered), str(a)]) as r:
+            assert r.pin(nm, owner, "v1", dig).status == "verified"
             assert f"{tampered}: {obj_id} v1 does not match the pin (section 12.3)" in [m for _, m in r.notes]
-        with remote.Resolver(here=False) as r:
-            assert r.pin(nm, owner, "v1", dig, [str(tampered)]).status == "mismatch"
+        with remote.Resolver(here=False, places=[str(tampered)]) as r:
+            assert r.pin(nm, owner, "v1", dig).status == "mismatch"
         warned, copy = [], tmp_path / "copy"
         remote.fetch_object(remote.Source(str(nocheck)), obj_id, copy, warn=warned.append)
         assert len(warned) == 1 and "checksum file" in warned[0]
@@ -749,7 +840,7 @@ and the website is written at once.
         class Evil:
             at = "https://evil.example/"
 
-            def __init__(self, at):
+            def __init__(self, at, remote=False):
                 pass
 
             def discovery(self):
@@ -758,9 +849,10 @@ and the website is written at once.
             def object_path(self, obj_id):
                 return "o"
 
-            def get(self, rel):
+            def get(self, rel, limit=None):
                 return inv if rel.endswith("inventory.json") else obj
         monkeypatch.setattr(html.remote, "Source", Evil)
+        html.SOURCES.clear()
         m = {"kind": "document", "name": "a" * 52, "owner": "b" * 52, "at": ["https://evil.example/"],
              "version": ver, "inventorySha512": names.sha512_hex(inv), "cite": {"title": "Cached"}}
         assert html.remote_view(m) is None
@@ -1053,14 +1145,14 @@ reported by the verifier.
                   "version": "v2", "inventorySha512": dig}
         collections.write(None, {"format": collections.FORMAT, "type": "catalogue", "order": "manual",
                                  "members": [member]}, message="test", title="Keys", owner=owner, label="keys")
-        with remote.Resolver(here=False) as r:
-            assert r.pin(owner, owner, "v2", dig, [str(a)]).status == "verified"
+        with remote.Resolver(here=False, places=[str(a)]) as r:
+            assert r.pin(owner, owner, "v2", dig).status == "verified"
         assert not [e for e in errors(a) if "not a version of the key log" in e]
         shutil.rmtree(kd / sign.WITNESSES / "v2")
         P.configure(a)
         assert P.key_log(owner).lookup(2, dig) is not None and P.key_log(owner).verified(2, dig) is None
-        with remote.Resolver(here=False) as r:
-            assert r.pin(owner, owner, "v2", dig, [str(a)]).status == "not a version"
+        with remote.Resolver(here=False, places=[str(a)]) as r:
+            assert r.pin(owner, owner, "v2", dig).status == "not a version"
         assert any("not a version of the key log" in e for e in errors(a))
 
 Signing again
@@ -1524,8 +1616,8 @@ pages go.
         assert P.LABELS["two"] == line(a, "two")
         line_id_two = line(a, "two")
         _, nm, owner = line_id_two.split(":")
-        with remote.Resolver(here=False) as r:
-            assert r.pin(nm, owner, "v1", head_digest(a, "two", "v1"), [str(a)]).status == "verified"
+        with remote.Resolver(here=False, places=[str(a)]) as r:
+            assert r.pin(nm, owner, "v1", head_digest(a, "two", "v1")).status == "verified"
         first = a / disc["objectPages"][0]
         saved = first.read_bytes()
         first.unlink()

@@ -421,7 +421,7 @@ fork; it is also how a key log is copied on its own (section 6.5).
         owner = getattr(args, "owner", None) or P.ARCHIVE["owner"]
         place = args.source
         folder = Path(place)
-        with remote.Resolver(places=[]) as r:
+        with remote.Resolver(places=[place]) as r:
             if folder.is_dir() and (folder / "inventory.json").is_file() and not (folder / "opensheaf.json").exists():
                 try:
                     other = owners.load_key_log(folder)

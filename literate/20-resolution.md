@@ -40,6 +40,9 @@ The module
     <<resolution: where an archive is read>>
 
 
+    <<resolution: fetching a URL>>
+
+
     <<resolution: an archive read through its discovery document>>
 
 
@@ -55,10 +58,21 @@ The module
     <<resolution: the command resolve>>
 
 The module reads files over HTTP with the standard library; nothing is
-cached between runs. `MAX_BYTES` bounds what one request may return,
-`TIMEOUT` how long it may take, and `MAX_FETCH_BYTES` and `MAX_FETCH_FILES`
-what one copy of an object may bring in all (section 15.2: tools treat
-what they fetch as untrusted, and bound it).
+cached between runs. What one reads is bounded (section 15.2: tools treat
+what they fetch as untrusted, and bound it), with the bounds of the
+JavaScript tools where they have one: `MAX_BYTES` what one request for a
+content file may return, held in memory, and `MAX_JSON` what one request
+for a JSON file (a discovery document, a page of objects, an inventory, a
+signature file) may; `TIMEOUT` how long one operation on the socket may
+wait, and `DEADLINE` how long one request may take in all, so that a
+server sending a byte at a time cannot hold a reader for ever;
+`MAX_FETCH_BYTES` and `MAX_FETCH_FILES` what one copy of an object may
+bring in all, and `MAX_RUN_BYTES` and `MAX_RUN_FILES` what all the copies
+of one resolver may; `MAX_MIRRORS` how many places given by others (the
+`at` of a member, the place of a URI) are tried for one line, and
+`MAX_PINS` how many pins one resolver resolves (a collection of a million
+members is not verified member by member); `MAX_PROBES` how many prefixes
+of the URL of a parent version are tried for its archive.
 
     # in resolution: the docstring and the imports:
     """Other archives and sheaf: URIs (section 12 of OpenSheaf 0.2): archives read through their
@@ -69,12 +83,14 @@ what they fetch as untrusted, and bound it).
         osheaf resolve URI [--at URL]... [--json]
     """
 
+    import http.client
     import json
     import os
     import re
     import shutil
     import sys
     import tempfile
+    import time
     import urllib.error
     import urllib.parse
     import urllib.request
@@ -85,9 +101,16 @@ what they fetch as untrusted, and bound it).
 
     UA = {"User-Agent": "opensheaf-py (https://github.com/opensheaf/opensheaf-py)"}
     TIMEOUT = 30
+    DEADLINE = 300
     MAX_BYTES = 1 << 30
+    MAX_JSON = 16 << 20
     MAX_FETCH_BYTES = 4 << 30
     MAX_FETCH_FILES = 20000
+    MAX_RUN_BYTES = 16 << 30
+    MAX_RUN_FILES = 200000
+    MAX_MIRRORS = 5
+    MAX_PINS = 2000
+    MAX_PROBES = 8
     LOCATIONS = "OPENSHEAF_LOCATIONS"
 
 
@@ -121,12 +144,24 @@ if it had been fetched from its URL.
 
 
     def locate(url):
-        """Where the base URL URL is read: its replacement by the longest prefix configured, or itself."""
+        """Where the base URL URL is read: its replacement by the longest prefix configured, or itself;
+        None if what follows the prefix would climb out of the place it is mapped to."""
         found = locations()
         for prefix in sorted(found, key=len, reverse=True):
             if url.startswith(prefix):
-                return found[prefix] + url[len(prefix):]
+                rest = url[len(prefix):]
+                segments = urllib.parse.unquote(rest.split("?")[0].split("#")[0]).replace("\\", "/").split("/")
+                if any(x in (".", "..") for x in segments):
+                    return None
+                return found[prefix] + rest
         return url
+
+The part of a URL that follows a prefix comes from whoever wrote the URL,
+which may be another archive: `https://mapped.example/../../` would climb
+out of the folder the prefix is mapped to, to any folder of the disk. A
+URL whose rest has a segment `.` or `..`, plain or percent-encoded, is
+mapped nowhere; and a folder reached through a location must still be
+below the folder of that location.
 
 An archive read
 ---------------
@@ -137,6 +172,14 @@ files below its base: from the folder, never following a path out of it,
 or over HTTP, where a missing file (404, 410) is `None` and any other
 failure makes the archive unavailable. Static servers cannot list
 folders, so a source over HTTP lists nothing; a folder lists its files.
+
+An address that another archive gave (the `at` of a member, the URL of a
+parent version, the place in a URI) is read only if it is an `http` or
+`https` URL (`remote=True`): never a folder of this disk, a `file:` URL,
+nor any other scheme, which only the user's own configuration (its places
+and locations) may name. The scheme of every URL fetched is `http` or
+`https`, and so is that of every redirect followed: `urllib` would follow
+one to `ftp`.
 
 A source also knows the base URL to *record*, `at`: collections and URIs
 record `https` URLs only (section 8.2). A source given by an `https` URL
@@ -149,15 +192,25 @@ one.
     class Source:
         """An archive as read from one place, through its discovery document (section 3.1)."""
 
-        def __init__(self, where):
+        def __init__(self, where, remote=False):
             self.given = str(where)
-            target = locate(self.given) if "://" in self.given else self.given
-            if target.startswith("file://"):
-                target = urllib.parse.unquote(urllib.parse.urlparse(target).path)
-            self.folder = None if "://" in target else Path(target).resolve()
-            self.url = None if self.folder else (target if target.endswith("/") else target + "/")
+            self.refused, self.folder, self.url, self._disc = None, None, None, None
+            scheme = self.given.split("://", 1)[0].lower() if "://" in self.given else None
+            target = locate(self.given) if scheme else self.given
+            if remote and scheme not in ("https", "http"):
+                self.refused = "an address given by another archive that is not an http or https URL"
+            elif target is None:
+                self.refused = "an address that climbs out of the location it is mapped to"
+            else:
+                if target.lower().startswith("file://"):
+                    target = urllib.parse.unquote(urllib.parse.urlparse(target).path)
+                if "://" not in target:
+                    self.folder = Path(target).resolve()
+                elif target.split("://", 1)[0].lower() in ("https", "http"):
+                    self.url = target if target.endswith("/") else target + "/"
+                else:
+                    self.refused = "not an http or https URL"
             self.at = self._hint()
-            self._disc = None
 
         def __str__(self):
             return self.given
@@ -186,29 +239,71 @@ hashed layout have names with `%` in them (`sheaf%3a...`, section 3.2),
 which are themselves encoded (`%253a`).
 
     # in resolution: reading a file of an archive:
-    def get(self, rel):
-        """The bytes of the file REL below the base, or None if there is none."""
+    def get(self, rel, limit=MAX_BYTES):
+        """The bytes of the file REL below the base, at most LIMIT of them, or None if there is none."""
+        if self.refused:
+            raise Unavailable(f"{self}: {self.refused}: not read")
         if self.folder is not None:
             p = self.folder / rel
             try:
                 p.resolve().relative_to(self.folder)
             except ValueError:
                 return None
-            return p.read_bytes() if p.is_file() else None
+            if not p.is_file():
+                return None
+            if p.stat().st_size > limit:
+                raise Unavailable(f"{p}: more than {limit} bytes")
+            return p.read_bytes()
         url = urllib.parse.urljoin(self.url, urllib.parse.quote(rel, safe="/"))
+        return fetch(url, limit)
+
+Over HTTP, a request is read piece by piece until its end, its limit, or
+its deadline. Redirects are followed by an opener that refuses any scheme
+but `http` and `https`.
+
+    # in resolution: fetching a URL:
+    class HTTPRedirects(urllib.request.HTTPRedirectHandler):
+        """Redirects followed only to http and https URLs."""
+
+        def redirect_request(self, req, fp, code, msg, headers, newurl):
+            if urllib.parse.urlsplit(newurl).scheme.lower() not in ("http", "https"):
+                return None
+            return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+    OPENER = urllib.request.build_opener(HTTPRedirects)
+
+
+    def fetch(url, limit=MAX_BYTES):
+        """The bytes at the http or https URL, at most LIMIT of them, read before DEADLINE; None if the
+        server has no such file (404, 410); Unavailable for any other failure."""
+        if urllib.parse.urlsplit(url).scheme.lower() not in ("http", "https"):
+            raise Unavailable(f"{url}: not an http or https URL: not read")
+        end = time.monotonic() + DEADLINE
         try:
-            with urllib.request.urlopen(urllib.request.Request(url, headers=UA), timeout=TIMEOUT) as r:
-                data = r.read(MAX_BYTES + 1)
+            with OPENER.open(urllib.request.Request(url, headers=UA), timeout=TIMEOUT) as r:
+                chunks, size = [], 0
+                while True:
+                    chunk = r.read(min(1 << 20, limit + 1 - size))
+                    if not chunk:
+                        break
+                    chunks.append(chunk)
+                    size += len(chunk)
+                    if size > limit:
+                        raise Unavailable(f"{url}: more than {limit} bytes")
+                    if time.monotonic() > end:
+                        raise Unavailable(f"{url}: not read in {DEADLINE} seconds")
         except urllib.error.HTTPError as e:
             if e.code in (404, 410):
                 return None
             raise Unavailable(f"{url}: HTTP {e.code}") from None
-        except (urllib.error.URLError, OSError, ValueError) as e:
+        except (urllib.error.URLError, OSError, ValueError, http.client.HTTPException) as e:
             raise Unavailable(f"{url}: {e}") from None
-        if len(data) > MAX_BYTES:
-            raise Unavailable(f"{url}: more than {MAX_BYTES} bytes")
-        return data
+        return b"".join(chunks)
 
+A folder lists its files; HTTP lists nothing.
+
+    # in resolution: reading a file of an archive:
     def listing(self, rel):
         """The names of the files of the folder REL, or None over HTTP, which lists nothing."""
         if self.folder is None:
@@ -232,7 +327,7 @@ makes the archive unavailable.
     def discovery(self):
         """The discovery document of the archive (Unavailable if there is none of 0.2)."""
         if self._disc is None:
-            data = self.get("opensheaf.json")
+            data = self.get("opensheaf.json", MAX_JSON)
             if data is None:
                 raise Unavailable(f"{self}: no discovery document opensheaf.json")
             try:
@@ -243,7 +338,7 @@ makes the archive unavailable.
                 raise Unavailable(f"{self}: not an archive of specification 0.2")
             if "objectPages" in disc:
                 try:
-                    disc["objects"] = P.listed_objects(disc, self.get)
+                    disc["objects"] = P.listed_objects(disc, lambda rel: self.get(rel, MAX_JSON))
                 except ValueError as e:
                     raise Unavailable(f"{self}: {e}") from None
             self._disc = disc
@@ -440,14 +535,15 @@ one copy brings `MAX_FETCH_FILES` files and `MAX_FETCH_BYTES` bytes at most
         return None
 
 
-    def fetch_object(src, obj_id, dest, *, upto=None, witness_names=None, warn=None, expect=None):
+    def fetch_object(src, obj_id, dest, *, upto=None, witness_names=None, warn=None, expect=None, budget=None):
         """Copy the object OBJ_ID of the archive SRC, v1 to UPTO (default: its head), into the new
         folder DEST, checking every file; WITNESS_NAMES(n, dest) names the witness files of vN
         to fetch over HTTP; WARN(message) hears of checksum files missing or wrong; EXPECT, if
-        given, {n: the digest of the inventory of vN} that each inventory fetched must have.
-        Returns the number of the last version copied."""
+        given, {n: the digest of the inventory of vN} that each inventory fetched must have;
+        BUDGET, if given, [files, bytes] fetched so far by the caller, bounded by MAX_RUN_FILES
+        and MAX_RUN_BYTES. Returns the number of the last version copied."""
         base = src.object_path(obj_id)
-        root = src.get(f"{base}/inventory.json")
+        root = src.get(f"{base}/inventory.json", MAX_JSON)
         if root is None:
             raise Unavailable(f"{src}: no object {obj_id}")
         try:
@@ -459,14 +555,18 @@ one copy brings `MAX_FETCH_FILES` files and `MAX_FETCH_BYTES` bytes at most
         (dest / "0=ocfl_object_1.1").write_text("ocfl_object_1.1\n")
         last, fetched, earlier = None, [0, 0], []
 
-        def get(rel):
-            data = src.get(rel)
+        def get(rel, limit=MAX_JSON):
+            data = src.get(rel, limit)
             if data is not None:
-                fetched[0] += 1
-                fetched[1] += len(data)
+                for count in (fetched, budget) if budget is not None else (fetched,):
+                    count[0] += 1
+                    count[1] += len(data)
                 if fetched[0] > MAX_FETCH_FILES or fetched[1] > MAX_FETCH_BYTES:
                     raise Unavailable(f"{src}: {obj_id} has more than {MAX_FETCH_FILES} files or "
                                       f"{MAX_FETCH_BYTES} bytes: not copied (section 15.2)")
+                if budget is not None and (budget[0] > MAX_RUN_FILES or budget[1] > MAX_RUN_BYTES):
+                    raise Unavailable(f"{src}: {obj_id}: not copied: the copies of this run have brought "
+                                      f"{MAX_RUN_FILES} files or {MAX_RUN_BYTES} bytes (section 15.2)")
             return data
 
         for n in range(1, upto + 1):
@@ -504,7 +604,7 @@ one copy brings `MAX_FETCH_FILES` files and `MAX_FETCH_BYTES` bytes at most
             for cp in paths:
                 if not owners.content_path(cp, inv, upto):
                     raise Unavailable(f"{src}: {obj_id}: a content path out of the object: {cp!r}")
-                data = get(f"{base}/{cp}")
+                data = get(f"{base}/{cp}", MAX_BYTES)
                 if data is None or names.sha512_hex(data) != dig:
                     raise Unavailable(f"{src}: {obj_id}: {cp} is missing, or does not have its digest")
                 (dest / cp).parent.mkdir(parents=True, exist_ok=True)
@@ -643,6 +743,7 @@ and the archive's own storage root when there is one.
             self.here = here and P.OCFL is not None
             self.cache = Path(tempfile.mkdtemp(prefix="osheaf-resolve-"))
             self.sources, self.fetched, self.logs, self.notes, self.bases = {}, {}, {}, [], {}
+            self.budget, self.pinned = [0, 0], 0
 
         def __enter__(self):
             return self
@@ -673,11 +774,18 @@ repetition. `folder` gives the folder holding an object at a place: the
 archive's own storage root ("here"), the folder of an archive on disk, or
 a copy fetched over HTTP, once per run.
 
+The places of the resolver are its user's (`--at`, the locations); every
+other place comes from what was read (the `at` of a member, of a URI) and
+is read as an address given by another archive (`Source(..., remote=True)`):
+an `http` or `https` URL only. At most `MAX_MIRRORS` of them are tried
+for one line, in their order, and what all the copies fetched bring in is
+bounded too (`MAX_RUN_FILES`, `MAX_RUN_BYTES`).
+
     # in resolution: the archives and the objects the resolver reads:
     def source(self, where):
         """The archive at WHERE, or None if it cannot be read (noted)."""
         if where not in self.sources:
-            src = Source(where)
+            src = Source(where, remote=where not in self.places)
             try:
                 src.discovery()
             except Unavailable as e:
@@ -687,10 +795,17 @@ a copy fetched over HTTP, once per run.
         return self.sources[where]
 
     def where(self, extra=()):
-        out = []
+        out, given = [], 0
         for w in list(extra) + self.places:
-            if w and w not in out:
-                out.append(w)
+            if not isinstance(w, str) or not w or w in out:
+                continue
+            if w not in self.places:
+                given += 1
+                if given > MAX_MIRRORS:
+                    self.note("warning", f"{w}: not tried: at most {MAX_MIRRORS} places given by an archive "
+                              "are tried for one line (section 15.2)")
+                    continue
+            out.append(w)
         return out
 
     def folder(self, where, obj_id, witness_names=None, upto=None):
@@ -720,7 +835,7 @@ a copy fetched over HTTP, once per run.
             dest = self.cache / str(len(self.fetched))
             try:
                 fetch_object(src, obj_id, dest, upto=upto, witness_names=witness_names,
-                             warn=lambda m: self.note("warning", m))
+                             warn=lambda m: self.note("warning", m), budget=self.budget)
                 self.fetched[key] = dest
             except Unavailable as e:
                 if "no object" not in str(e):
@@ -754,9 +869,9 @@ the archive found, which the resolution that follows reads.
                 guess = u.path.find("/ocfl/")
                 if guess >= 0:
                     cuts.insert(0, guess + 1)
-                for k in dict.fromkeys(cuts):
+                for k in list(dict.fromkeys(cuts))[:MAX_PROBES]:
                     base = origin + u.path[:k]
-                    src = self.sources.get(base) or Source(base)
+                    src = self.sources.get(base) or Source(base, remote=True)
                     try:
                         root = urllib.parse.urljoin(base, src.storage_root())
                     except Unavailable:
@@ -941,6 +1056,11 @@ the verification that asked.
             self.note("warning", f"sheaf:{nm}:{owner}: the pin {version!r} sha512={digest!r} is not a line, "
                       "an object version and a digest (section 8.5)")
             return Found("not a version", version=version if isinstance(version, str) else None)
+        self.pinned += 1
+        if self.pinned > MAX_PINS:
+            self.note("warning", f"at most {MAX_PINS} pins are resolved in one run (section 15.2): the others "
+                      "are not")
+            return Found("unavailable", version=version, digest=digest)
         if nm == owner:
             log = self.key_log(owner, self.where(where))
             v = log.lookup(int(version[1:]), digest) if log else None
