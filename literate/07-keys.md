@@ -459,26 +459,46 @@ updates its Python 3.13, the new one is asked once. Who prefers never to
 be asked keeps no key on the computer: `OPENSHEAF_KEY_STORE=none`, above.
 
 A retired key is no longer needed; `forget_current_key` removes it from
-every store, and from the memory of the command.
+every store, and from the memory of the command. A key that a store does
+not hold is not a failure (keyring's `PasswordDeleteError`, status 44 of
+`security`, "the item could not be found"); a store that refuses, or
+fails, is: the failures are returned, as (store, reason), so that the
+command does not say a key is gone that is still there. A store that is
+not there at all (no keyring installed) holds nothing.
 
     # in keys: where current keys are kept:
     def forget_current_key(owner, did):
-        """Remove the current key DID of OWNER from every store of this device."""
+        """Remove the current key DID of OWNER from every store of this device; [(store, reason)] of
+        the stores that failed to remove it."""
         kid = names.key_id(did)
+        failed = []
         for store in _stores():
             if store == "keyring":
                 try:
                     import keyring
-                    keyring.delete_password(SERVICE, _account(owner, kid))
-                except Exception:
-                    pass
+                    import keyring.errors
+                except ImportError:
+                    keyring = None
+                if keyring is not None:
+                    try:
+                        keyring.delete_password(SERVICE, _account(owner, kid))
+                    except keyring.errors.PasswordDeleteError:
+                        pass
+                    except Exception as e:      # a backend that refuses or fails
+                        failed.append((store, f"{type(e).__name__}: {e}"))
             elif store == "security" and sys.platform == "darwin" and shutil.which("security"):
-                subprocess.run(["security", "delete-generic-password", "-s", SERVICE, "-a", _account(owner, kid)],
-                               capture_output=True)
+                r = subprocess.run(["security", "delete-generic-password", "-s", SERVICE, "-a",
+                                    _account(owner, kid)], capture_output=True, text=True)
+                if r.returncode not in (0, 44):
+                    failed.append((store, (r.stderr or "").strip() or f"exit status {r.returncode}"))
             elif store == "file":
-                (key_folder(owner) / f"{kid}.key").unlink(missing_ok=True)
+                try:
+                    (key_folder(owner) / f"{kid}.key").unlink(missing_ok=True)
+                except OSError as e:
+                    failed.append((store, str(e)))
             _SEEN[_slot(store, owner, kid)] = None
         _SEEN.pop(_slot(NONE, owner, kid), None)
+        return failed
 
 Encrypting a seed
 -----------------

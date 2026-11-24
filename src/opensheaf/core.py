@@ -4726,9 +4726,14 @@ def key_import(args):
 
 
 def forget_here(owner, dids):
-    """Remove the current keys DIDS of OWNER from this computer, and say so."""
+    """Remove the current keys DIDS of OWNER from this computer, and say so; stop if a store
+    failed to remove one."""
+    failed = []
     for did in dids:
-        keys.forget_current_key(owner, did)
+        failed += [(did, store, why) for store, why in keys.forget_current_key(owner, did)]
+    if failed:
+        stop("not removed from this computer:\n" + "\n".join(
+            f"  {names.short(did)} in {store_name(store)}: {why}" for did, store, why in failed))
     if dids:
         print(f"This computer no longer holds {the_keys(len(dids), 'current key')} "
               f"{', '.join(names.short(d) for d in dids)} of {names.short(owner)}.")
@@ -4756,6 +4761,13 @@ def key_forget(args):
         except ValueError:
             stop(f"not a did:key URI of an Ed25519 key: {did}")
     if not getattr(args, "from_wallet", False):
+        print(f"Removing {the_keys(len(dids), 'current key')} of {who} from this computer:", file=sys.stderr)
+        for did in dids:
+            use = ("a current key of the latest version of the key log: without it, this computer "
+                   "may no longer sign" if did in listed else "not a current key of the latest version")
+            print(f"  {names.short(did)}  ({use})", file=sys.stderr)
+        if not confirmed("forget", args):
+            stop("not confirmed: nothing was removed")
         forget_here(owner, dids)
         return
     w = wallet_for(args, owner)

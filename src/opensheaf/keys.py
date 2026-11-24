@@ -254,22 +254,37 @@ def _write(store, owner, kid, text):
 
 
 def forget_current_key(owner, did):
-    """Remove the current key DID of OWNER from every store of this device."""
+    """Remove the current key DID of OWNER from every store of this device; [(store, reason)] of
+    the stores that failed to remove it."""
     kid = names.key_id(did)
+    failed = []
     for store in _stores():
         if store == "keyring":
             try:
                 import keyring
-                keyring.delete_password(SERVICE, _account(owner, kid))
-            except Exception:
-                pass
+                import keyring.errors
+            except ImportError:
+                keyring = None
+            if keyring is not None:
+                try:
+                    keyring.delete_password(SERVICE, _account(owner, kid))
+                except keyring.errors.PasswordDeleteError:
+                    pass
+                except Exception as e:      # a backend that refuses or fails
+                    failed.append((store, f"{type(e).__name__}: {e}"))
         elif store == "security" and sys.platform == "darwin" and shutil.which("security"):
-            subprocess.run(["security", "delete-generic-password", "-s", SERVICE, "-a", _account(owner, kid)],
-                           capture_output=True)
+            r = subprocess.run(["security", "delete-generic-password", "-s", SERVICE, "-a",
+                                _account(owner, kid)], capture_output=True, text=True)
+            if r.returncode not in (0, 44):
+                failed.append((store, (r.stderr or "").strip() or f"exit status {r.returncode}"))
         elif store == "file":
-            (key_folder(owner) / f"{kid}.key").unlink(missing_ok=True)
+            try:
+                (key_folder(owner) / f"{kid}.key").unlink(missing_ok=True)
+            except OSError as e:
+                failed.append((store, str(e)))
         _SEEN[_slot(store, owner, kid)] = None
     _SEEN.pop(_slot(NONE, owner, kid), None)
+    return failed
 
 
 OPSLIMIT, MEMLIMIT = pwhash.argon2id.OPSLIMIT_MODERATE, pwhash.argon2id.MEMLIMIT_MODERATE

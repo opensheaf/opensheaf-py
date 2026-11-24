@@ -213,6 +213,34 @@ def test_github_wallet_refuses(tmp_path, monkeypatch):
     assert in_repo(tmp_path, "me/open") == {} and in_repo(tmp_path, "me/papers") == {}
 
 
+def test_forget_asks_and_reports(tmp_path, monkeypatch, capsys):
+    import types
+    root = make_archive(tmp_path, "--export", str(tmp_path / "usb"), "--no-passphrase")
+    owner = P.ARCHIVE["owner"]
+    current = P.key_log(owner).latest().keys["keys"][0]
+    r = ["--root", str(root)]
+    monkeypatch.setattr("builtins.input", lambda prompt: "no")
+    with pytest.raises(SystemExit, match="(?i)not confirmed"):
+        run(*r, "key", "forget", current)
+    assert local_keys(tmp_path, owner) != []
+    assert "a current key of the latest version" in capsys.readouterr().err
+    folder = tmp_path / "config" / "opensheaf" / "keys" / owner
+    folder.chmod(0o500)
+    try:
+        with pytest.raises(SystemExit, match="(?i)not removed from this computer"):
+            run(*r, "key", "forget", current, "--yes")
+    finally:
+        folder.chmod(0o700)
+    monkeypatch.setenv(keys.KEY_STORE, "security")
+    monkeypatch.setattr(keys.sys, "platform", "darwin")
+    monkeypatch.setattr(keys.shutil, "which", lambda name: "/stub/" + name)
+    answers = iter([types.SimpleNamespace(returncode=44, stderr=""),
+                    types.SimpleNamespace(returncode=51, stderr="User interaction is not allowed.")])
+    monkeypatch.setattr(keys.subprocess, "run", lambda cmd, **kw: next(answers))
+    assert keys.forget_current_key(owner, current) == []
+    assert keys.forget_current_key(owner, current) == [("security", "User interaction is not allowed.")]
+
+
 def test_push_pull_list(tmp_path, monkeypatch, capsys):
     root = make_archive(tmp_path, "--export", str(tmp_path / "usb"), "--no-passphrase")
     owner = P.ARCHIVE["owner"]
@@ -237,12 +265,12 @@ def test_push_pull_list(tmp_path, monkeypatch, capsys):
     assert out[1].split() == ["Owner", "Kind", "Key", "Version", "Locks"]
     assert out[2].split() == [names.short(owner), "current", names.short(current), "v1", "passphrase"]
     seed = (tmp_path / "config" / "opensheaf" / "keys" / owner / f"{kid}.key").read_text().strip()
-    run(*r, "key", "forget", current)
+    run(*r, "key", "forget", current, "--yes")
     assert local_keys(tmp_path, owner) == []
     run(*r, "key", "pull", "--wallet", "github:me/keys")
     assert local_keys(tmp_path, owner) == [f"{kid}.key"]
     assert "Pulled 1 current key of" in capsys.readouterr().out
-    run(*r, "key", "forget", current)
+    run(*r, "key", "forget", current, "--yes")
     run(*r, "key", "wallet", "--remove", "github:me/keys")
     with pytest.raises(SystemExit, match="holds 0 of the current keys"):
         deposit(root, "p", "one", new=True)
@@ -413,13 +441,13 @@ def test_clipboard_round_trip(tmp_path, monkeypatch, capsys):
     clip = (tmp_path / "clipboard.txt").read_text()
     assert clip.startswith(f"opensheaf-key-text/0.2\nkind current\nowner {owner}\nkey {current}\n")
     assert out == "" and "on the clipboard" in err and "one key per device" in err
-    run(*r, "key", "forget", current)
+    run(*r, "key", "forget", current, "--yes")
     run(*r, "key", "import", "--clipboard")
     assert local_keys(tmp_path, owner) == [f"{names.key_id(current)}.key"]
     monkeypatch.setenv(P.PASSPHRASE, "correct horse")
     run(*r, "key", "export", "--clipboard", "--encrypt")
     assert "encryption argon2id-secretbox" in (tmp_path / "clipboard.txt").read_text()
-    run(*r, "key", "forget", current)
+    run(*r, "key", "forget", current, "--yes")
     monkeypatch.delenv(P.PASSPHRASE)
     monkeypatch.setattr("getpass.getpass", lambda prompt: "wrong horse")
     with pytest.raises(SystemExit, match="Wrong passphrase"):
@@ -667,7 +695,7 @@ def test_enroll_and_unlock(tmp_path, monkeypatch, capsys):
                                    for t in files.values())
     run(*r, "key", "enroll")
     assert "already" in capsys.readouterr().out and len(opened) == 4 and len(asked) == 1
-    run(*r, "key", "forget", current)
+    run(*r, "key", "forget", current, "--yes")
     monkeypatch.setattr("getpass.getpass", lambda prompt: pytest.fail("the passphrase was asked"))
     capsys.readouterr()
     run(*r, "key", "unlock")
@@ -729,7 +757,7 @@ def test_forged_answers_are_not_kept(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr("getpass.getpass", lambda prompt: asked.append(prompt) or "correct horse")
     forged_kek = keys.passkey_kek(names.sha256(b"forged"))
     for answer, said in (("forged", "opens no key"), ("tampered", "damaged")):
-        run(*r, "key", "forget", current)
+        run(*r, "key", "forget", current, "--yes")
         monkeypatch.setattr(passkey, "OPEN", fake_browser(opened, answer))
         capsys.readouterr()
         run(*r, "key", "pull")
@@ -768,7 +796,7 @@ def test_move_from_the_first_relying_party(tmp_path, monkeypatch, capsys):
     asked = []
     monkeypatch.setattr("getpass.getpass", lambda prompt: asked.append(prompt) or "correct horse")
     r = ["--root", str(root)]
-    run(*r, "key", "forget", current)
+    run(*r, "key", "forget", current, "--yes")
     capsys.readouterr()
     run(*r, "key", "pull")
     err = capsys.readouterr().err
@@ -819,12 +847,12 @@ def test_unlock_falls_back_to_the_passphrase(tmp_path, monkeypatch, capsys):
     capsys.readouterr()
     for answer, said in (("error", "the page says: NotAllowedError"), ("wrong state", "no answer"),
                          ("none", "no answer"), ("x25519-unavailable", "Safari 17+")):
-        run(*r, "key", "forget", current)
+        run(*r, "key", "forget", current, "--yes")
         monkeypatch.setattr(passkey, "OPEN", fake_browser(opened, answer))
         run(*r, "key", "pull")
         assert said in capsys.readouterr().err and local_keys(tmp_path, owner) != []
     assert len(asked) == 4 and {"status": 403} in opened
-    run(*r, "key", "forget", current)
+    run(*r, "key", "forget", current, "--yes")
     monkeypatch.setenv(passkey.UNLOCK, "passphrase")
     monkeypatch.setattr(passkey, "OPEN", lambda url: pytest.fail("a browser was opened"))
     run(*r, "key", "pull")
@@ -899,7 +927,7 @@ def test_passphrase_command(tmp_path, monkeypatch, capsys):
     assert keys.read_key(next(iter(in_repo(tmp_path).values())), "correct horse").owner == owner
     current = P.key_log(owner).latest().keys["keys"][0]
     r = ["--root", str(root)]
-    run(*r, "key", "forget", current)
+    run(*r, "key", "forget", current, "--yes")
     monkeypatch.setenv(P.PASSPHRASE_COMMAND, "false")
     asked = []
     monkeypatch.setattr("getpass.getpass", lambda prompt: asked.append(prompt) or "correct horse")
@@ -961,7 +989,7 @@ def test_one_read_per_key_and_command(tmp_path, monkeypatch, capsys):
     deposit(root, "p", "three")
     assert reads == [(owner, kid)] and (owner, kid) in held
     reads.clear()
-    run(*r, "key", "forget", current)
+    run(*r, "key", "forget", current, "--yes")
     assert reads == []
     assert P.verify_errors() == []
 
@@ -975,7 +1003,7 @@ def test_no_key_store(tmp_path, monkeypatch, capsys):
     current = P.key_log(owner).latest().keys["keys"][0]
     r = ["--root", str(root)]
     run(*r, "key", "enroll")
-    run(*r, "key", "forget", current)
+    run(*r, "key", "forget", current, "--yes")
     monkeypatch.delenv(P.PASSPHRASE)
     monkeypatch.setattr("getpass.getpass", lambda prompt: pytest.fail("the passphrase was asked"))
     reads = counting_store(monkeypatch, {})
