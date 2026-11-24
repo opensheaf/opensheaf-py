@@ -315,3 +315,18 @@ def test_an_interrupted_version_is_named(archive):
     (d / "v2").rmdir()
     put("paper-a", 2, FILES2)
     assert finish() == []
+
+
+def test_options_that_would_do_nothing_are_refused(archive, tmp_path, capsys):
+    with pytest.raises(SystemExit, match="--print"):
+        run("--root", str(archive), "owner", "rotate", "--print", "--keys", "command")
+    (tmp_path / "two.yaml").write_text(
+        "- {name: A, base-url: 'https://example.org/a/', curator: 'Doe, J', new-owner: true}\n"
+        "- {name: B, base-url: 'https://example.org/b/', curator: 'Doe, J', new-owner: true}\n")
+    with pytest.raises(SystemExit):
+        run("init", str(tmp_path / "a"), "--from", str(tmp_path / "two.yaml"))
+    assert "one archive" in capsys.readouterr().err and not (tmp_path / "a").exists()
+    (tmp_path / "dep.yaml").write_text(f"root: {tmp_path}\nid: x\ntitle: T\nauthor: Doe, J\n")
+    with pytest.raises(SystemExit):
+        run("--root", str(archive), "deposit", "--from", str(tmp_path / "dep.yaml"))
+    assert "give --root on the command line" in capsys.readouterr().err

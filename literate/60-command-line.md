@@ -778,7 +778,7 @@ osheaf init papers --name "Papers of Jane Doe" --base-url https://example.org/pa
                    help="with --index texmacs: the template of the index, copied into the archive "
                         "(default: a minimal one)")
     n.add_argument("--from", dest="from_file", metavar="FILE",
-                    help="take the options from a YAML or JSON file (a list: several, in order)")
+                    help="take the options from a YAML or JSON file (one mapping: one archive)")
     n.set_defaults(func=None)
 
 ### Owners and keys: `osheaf owner` and `osheaf key`
@@ -1140,6 +1140,9 @@ when it ends.
         if args.cmd in REQUIRED:
             todo = runs(p, args)
             if args.cmd == "init":
+                if len(todo) != 1:
+                    p.error(f"init: {args.from_file} holds {len(todo)} entries: osheaf init makes one archive, "
+                            "from one mapping of options")
                 return core.init(todo[0])
             configure(args)
             for ns in todo:
@@ -1388,10 +1391,13 @@ the options of the command are known.
 ### Merging with the command line
 
 `merge` returns a new namespace, leaving the parsed command line as it is
-for the next entry. A key that is not an option of the command is an error
-(a typing mistake such as `titel` would otherwise be silently ignored);
-so are the names `argparse` uses for its own bookkeeping (`cmd`, `func`,
-`from_file`), which no file should set.
+for the next entry. `root` is refused: the archive is configured from
+`--root` before the file is read, and one run works on one archive, so a
+`root` of the file would be ignored. A key that is not an option of the
+command is an error (a typing mistake such as `titel` would otherwise be
+silently ignored); so are the names `argparse` uses for its own
+bookkeeping (`cmd`, `func`, `from_file`), which no file should set.
+`osheaf init` makes one archive, and takes a file of one mapping only.
 
 A value of the file is taken unless the option was given on the command
 line, which is when its value differs from its default. The defaults are
@@ -1415,6 +1421,9 @@ disagree.
         if "date" in entry and "date" not in known and "available" in known:
             entry = {("available" if k == "date" else k): v for k, v in entry.items()}
         unknown = [k for k in entry if k not in known]
+        if "root" in entry:
+            parser.error(f"{command}: root in the file: the archive is chosen before the file is read; "
+                         "give --root on the command line")
         if unknown:
             parser.error(f"{command}: unknown option(s) in the file: {', '.join(sorted(unknown))}")
         sub = next(a for a in parser._actions if isinstance(a, argparse._SubParsersAction)).choices[command]

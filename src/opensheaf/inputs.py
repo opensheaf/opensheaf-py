@@ -96,6 +96,9 @@ def merge(args, entry, parser, command):
     if "date" in entry and "date" not in known and "available" in known:
         entry = {("available" if k == "date" else k): v for k, v in entry.items()}
     unknown = [k for k in entry if k not in known]
+    if "root" in entry:
+        parser.error(f"{command}: root in the file: the archive is chosen before the file is read; "
+                     "give --root on the command line")
     if unknown:
         parser.error(f"{command}: unknown option(s) in the file: {', '.join(sorted(unknown))}")
     sub = next(a for a in parser._actions if isinstance(a, argparse._SubParsersAction)).choices[command]

@@ -4058,6 +4058,9 @@ def owner_init(args, done=True):
     keeper = getattr(args, "keeper", None)
     if keeper and not names.keeper_valid(keeper, strict=True):
         stop(f"a keeper is an ORCID iD (with its check digit) or https://<domain>/: {keeper}")
+    if getattr(args, "print", False) and not getattr(args, "export", None):
+        stop("--print prints the sheets of the rotation keys exported with --export DIR: give "
+             "--export DIR with it (in a wallet, the keys are not exported, and no sheet is printed)")
     w = level_wallet(args)
     if w is None and not getattr(args, "export", None):
         stop("give --export DIR, a folder outside the archive where the rotation keys are written "
@@ -4143,6 +4146,9 @@ def owner_rotate(args, exposed=()):
     prev = log.latest()
     if prev is None:
         stop(f"the owner {who} has ended (section 6.3): its key log takes no new version")
+    if getattr(args, "print", False) and not getattr(args, "export", None):
+        stop("--print prints the sheets of the rotation keys exported with --export DIR: give "
+             "--export DIR with it (in a wallet, the keys are not exported, and no sheet is printed)")
     w = level_wallet(args, owner)
     if w is None and not getattr(args, "export", None):
         stop("give --export DIR, a folder outside the archive where the new rotation keys are written "

@@ -275,7 +275,7 @@ def build_parser():
                    help="with --index texmacs: the template of the index, copied into the archive "
                         "(default: a minimal one)")
     n.add_argument("--from", dest="from_file", metavar="FILE",
-                    help="take the options from a YAML or JSON file (a list: several, in order)")
+                    help="take the options from a YAML or JSON file (one mapping: one archive)")
     n.set_defaults(func=None)
 
     ow = sub.add_parser("owner", help="make an owner, change its keys, end it, show its key log")
@@ -556,6 +556,9 @@ def dispatch(p, args):
     if args.cmd in REQUIRED:
         todo = runs(p, args)
         if args.cmd == "init":
+            if len(todo) != 1:
+                p.error(f"init: {args.from_file} holds {len(todo)} entries: osheaf init makes one archive, "
+                        "from one mapping of options")
             return core.init(todo[0])
         configure(args)
         for ns in todo:
