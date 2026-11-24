@@ -252,3 +252,34 @@ def test_the_verifier_reports_what_it_cannot_read(archive, case):
             P.LAYOUT = monkey
     assert any(expected in e for e in errors), errors
     assert not any("stopped on a file" in e for e in errors), [e for e in errors if "stopped" in e]
+
+
+@pytest.mark.parametrize("text", ['{"format": "opensheaf-archive/0.2", "objects": [', "[]",
+                                  '{"objects": 5, "owners": "x", "tombstones": 3}'],
+                         ids=["cut", "list", "fields"])
+def test_a_broken_discovery_document(archive, capsys, text):
+    put("paper-a", 1, FILES1)
+    finish()
+    (archive / "opensheaf.json").write_text(text)
+    r = ["--root", str(archive)]
+    with pytest.raises(SystemExit) as e:
+        run(*r, "verify")
+    assert e.value.code == 1
+    if text.startswith('{"objects": 5'):
+        return
+    assert "opensheaf.json" in capsys.readouterr().out
+    with pytest.raises(SystemExit, match="nothing is written"):
+        run(*r, "collect")
+    run(*r, "index")
+    assert "without the labels" in capsys.readouterr().err
+    disc = json.loads((archive / "opensheaf.json").read_text())
+    assert disc["format"] == "opensheaf-archive/0.2" and len(disc["objects"]) >= 2
+
+
+def test_a_broken_configuration_is_a_message(archive):
+    (archive / "osheaf.json").write_text('{"owner": ')
+    with pytest.raises(SystemExit, match="cannot be read"):
+        P.configure(archive)
+    (archive / "osheaf.json").write_text('[]')
+    with pytest.raises(SystemExit, match="mapping"):
+        P.configure(archive)

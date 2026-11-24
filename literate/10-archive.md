@@ -259,6 +259,7 @@ the discovery document could not be read, when one could not (#19).
     TOMBSTONES = []
     OLD = False
     UNREAD_PAGES = None
+    UNREAD_DISCOVERY = None
 
 The fixed values: the version of the specification written into every file;
 the two storage layouts of section 3.2, by their names in the discovery
@@ -322,10 +323,21 @@ as are all the YAML inputs of the tools (see the
         for n in CONFIG_NAMES:
             p = Path(root) / n
             if p.exists():
-                if n.endswith(".json"):
-                    return json.loads(p.read_text(encoding="utf-8"))
-                import yaml
-                return yaml.load(p.read_text(encoding="utf-8"), Loader=yaml.BaseLoader)
+                try:
+                    if n.endswith(".json"):
+                        cfg = json.loads(p.read_text(encoding="utf-8"))
+                    else:
+                        import yaml
+                        cfg = yaml.load(p.read_text(encoding="utf-8"), Loader=yaml.BaseLoader)
+                except (ValueError, ImportError) as e:
+                    sys.exit(f"{p}: cannot be read ({e})")
+                except Exception as e:      # yaml.YAMLError, without importing yaml for JSON
+                    if type(e).__module__.startswith("yaml"):
+                        sys.exit(f"{p}: not valid YAML ({e})")
+                    raise
+                if not isinstance(cfg, dict):
+                    sys.exit(f"{p}: the configuration is a mapping of settings")
+                return cfg
         sys.exit(f"no {CONFIG_NAME} or osheaf.yaml in {root}")
 
 Configuring splits the configuration into its three parts. Everything
@@ -357,6 +369,14 @@ discovery document would have none) and remove every landing page under
 changes anything; the command line calls it for every command that
 writes, and `write_discovery` and `render` call it again.
 
+The same holds for a discovery document that cannot be read at all (not
+JSON, not a JSON object, cut short by an editor or a merge): configuring
+succeeds without it, so that `osheaf verify` reports it, and the commands
+that write stop. One command may write it then: `osheaf index`, which
+writes the discovery document again from the storage root, the only way
+out short of restoring it (from git, say); the labels it held are lost,
+which the command says, and `osheaf label` gives them again.
+
     # in load the configuration and set the paths of the archive:
     def set_paths(root, layout=OWNER_NAME_LAYOUT):
         """Set the folders of the archive in ROOT and its storage layout."""
@@ -369,9 +389,9 @@ writes, and `write_discovery` and `render` call it again.
     def configure(root):
         """Load the archive configuration and set the paths."""
         global ARCHIVE, TEXMACS, INDEX, TEXMACS_VERSION, LABELS, CATALOGUES, TOMBSTONES, OLD, UNREAD_PAGES
+        global UNREAD_DISCOVERY
         cfg = read_config(root)
-        disc_path = Path(root) / "opensheaf.json"
-        disc = json.loads(disc_path.read_text(encoding="utf-8")) if disc_path.exists() else {}
+        disc, UNREAD_DISCOVERY = read_discovery(Path(root) / "opensheaf.json")
         OLD = "archiveId" in cfg or disc.get("specification") == "0.1"
         set_paths(root, cfg.get("storageLayout", OWNER_NAME_LAYOUT))
         ARCHIVE = {k: v for k, v in cfg.items() if k not in ("texmacs", "index")}
@@ -388,14 +408,29 @@ writes, and `write_discovery` and `render` call it again.
         TEXMACS_VERSION = TEXMACS.get("version", TEXMACS_VERSION)
         INDEX = cfg.get("index", {})
         try:
-            listed, UNREAD_PAGES = listed_objects(disc, local_page), None
+            listed, UNREAD_PAGES = listed_objects(disc, local_page), UNREAD_DISCOVERY
         except ValueError as e:
             listed, UNREAD_PAGES = [], str(e)
         LABELS = labels_of(listed)
-        CATALOGUES = {e["owner"]: e["catalogue"] for e in disc.get("owners", [])
+        owners_ = disc.get("owners") if isinstance(disc.get("owners"), list) else []
+        CATALOGUES = {e["owner"]: e["catalogue"] for e in owners_
                       if isinstance(e, dict) and e.get("owner") and e.get("catalogue")}
-        TOMBSTONES = list(disc.get("tombstones", []))
+        tombstones = disc.get("tombstones") if isinstance(disc.get("tombstones"), list) else []
+        TOMBSTONES = [t for t in tombstones if isinstance(t, dict)]
         return ROOT
+
+
+    def read_discovery(path):
+        """(the discovery document at PATH, or {}, and why it cannot be read, or None)."""
+        if not path.exists():
+            return {}, None
+        try:
+            disc = names.json_value(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as e:
+            return {}, f"the discovery document cannot be read ({e})"
+        if not isinstance(disc, dict):
+            return {}, "the discovery document is not a JSON object"
+        return disc, None
 
 
     def labels_of(listed):
@@ -425,7 +460,9 @@ writes, and `write_discovery` and `render` call it again.
         if UNREAD_PAGES:
             sys.exit(f"opensheaf.json: {UNREAD_PAGES}: the labels of the lines are not known, and writing "
                      "the discovery document or the website now would lose them; nothing is written "
-                     "(restore the pages of objects, from git for instance, and run the command again)")
+                     "(restore it, or its pages of objects, from git for instance, and run the command again"
+                     + ("; osheaf index writes it again from the storage root, without the labels)"
+                        if UNREAD_DISCOVERY else ")"))
 
 The owners of the archive are the owner of the configuration and the
 others it hosts: each has its owner catalogue, which lists the documents of

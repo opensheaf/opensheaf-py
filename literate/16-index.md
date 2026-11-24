@@ -165,9 +165,13 @@ the document: relative, without `.`, `..` or a scheme.
         """The entries of objects of the discovery document DISC (section 3.1), from its pages if it
         pages them, READ(path) giving the bytes of a page or None; ValueError if a page is not found."""
         if "objectPages" not in disc:
-            return [o for o in disc.get("objects") or [] if isinstance(o, dict)]
+            objs = disc.get("objects")
+            return [o for o in objs if isinstance(o, dict)] if isinstance(objs, list) else []
         out = []
-        for path in disc.get("objectPages") or []:
+        pages = disc.get("objectPages")
+        if not isinstance(pages, list):
+            raise ValueError("objectPages is not a list of pages")
+        for path in pages:
             if not page_path_ok(path):
                 raise ValueError(f"{path!r} is not the path of a page below the discovery document (section 3.1)")
             data = read(path)
@@ -392,6 +396,11 @@ converter not to touch the archive's files (appendix A.2).
 
     # in write the discovery document and the index:
     def index(args):
+        global UNREAD_PAGES
+        if UNREAD_DISCOVERY and UNREAD_PAGES == UNREAD_DISCOVERY:
+            print(f"warning: opensheaf.json: {UNREAD_DISCOVERY}: it is written again from the storage root, "
+                  "without the labels it held (osheaf label gives them again)", file=sys.stderr)
+            UNREAD_PAGES = None
         write_discovery()
         if INDEX.get("html") or INDEX.get("template"):
             readable_index(args)

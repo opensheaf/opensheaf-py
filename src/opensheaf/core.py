@@ -89,6 +89,7 @@ CATALOGUES = {}
 TOMBSTONES = []
 OLD = False
 UNREAD_PAGES = None
+UNREAD_DISCOVERY = None
 
 SPEC = "0.2"
 OWNER_NAME_LAYOUT = "opensheaf-owner-name-storage-layout"
@@ -119,10 +120,21 @@ def read_config(root):
     for n in CONFIG_NAMES:
         p = Path(root) / n
         if p.exists():
-            if n.endswith(".json"):
-                return json.loads(p.read_text(encoding="utf-8"))
-            import yaml
-            return yaml.load(p.read_text(encoding="utf-8"), Loader=yaml.BaseLoader)
+            try:
+                if n.endswith(".json"):
+                    cfg = json.loads(p.read_text(encoding="utf-8"))
+                else:
+                    import yaml
+                    cfg = yaml.load(p.read_text(encoding="utf-8"), Loader=yaml.BaseLoader)
+            except (ValueError, ImportError) as e:
+                sys.exit(f"{p}: cannot be read ({e})")
+            except Exception as e:      # yaml.YAMLError, without importing yaml for JSON
+                if type(e).__module__.startswith("yaml"):
+                    sys.exit(f"{p}: not valid YAML ({e})")
+                raise
+            if not isinstance(cfg, dict):
+                sys.exit(f"{p}: the configuration is a mapping of settings")
+            return cfg
     sys.exit(f"no {CONFIG_NAME} or osheaf.yaml in {root}")
 
 
@@ -137,9 +149,9 @@ def set_paths(root, layout=OWNER_NAME_LAYOUT):
 def configure(root):
     """Load the archive configuration and set the paths."""
     global ARCHIVE, TEXMACS, INDEX, TEXMACS_VERSION, LABELS, CATALOGUES, TOMBSTONES, OLD, UNREAD_PAGES
+    global UNREAD_DISCOVERY
     cfg = read_config(root)
-    disc_path = Path(root) / "opensheaf.json"
-    disc = json.loads(disc_path.read_text(encoding="utf-8")) if disc_path.exists() else {}
+    disc, UNREAD_DISCOVERY = read_discovery(Path(root) / "opensheaf.json")
     OLD = "archiveId" in cfg or disc.get("specification") == "0.1"
     set_paths(root, cfg.get("storageLayout", OWNER_NAME_LAYOUT))
     ARCHIVE = {k: v for k, v in cfg.items() if k not in ("texmacs", "index")}
@@ -156,14 +168,29 @@ def configure(root):
     TEXMACS_VERSION = TEXMACS.get("version", TEXMACS_VERSION)
     INDEX = cfg.get("index", {})
     try:
-        listed, UNREAD_PAGES = listed_objects(disc, local_page), None
+        listed, UNREAD_PAGES = listed_objects(disc, local_page), UNREAD_DISCOVERY
     except ValueError as e:
         listed, UNREAD_PAGES = [], str(e)
     LABELS = labels_of(listed)
-    CATALOGUES = {e["owner"]: e["catalogue"] for e in disc.get("owners", [])
+    owners_ = disc.get("owners") if isinstance(disc.get("owners"), list) else []
+    CATALOGUES = {e["owner"]: e["catalogue"] for e in owners_
                   if isinstance(e, dict) and e.get("owner") and e.get("catalogue")}
-    TOMBSTONES = list(disc.get("tombstones", []))
+    tombstones = disc.get("tombstones") if isinstance(disc.get("tombstones"), list) else []
+    TOMBSTONES = [t for t in tombstones if isinstance(t, dict)]
     return ROOT
+
+
+def read_discovery(path):
+    """(the discovery document at PATH, or {}, and why it cannot be read, or None)."""
+    if not path.exists():
+        return {}, None
+    try:
+        disc = names.json_value(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+        return {}, f"the discovery document cannot be read ({e})"
+    if not isinstance(disc, dict):
+        return {}, "the discovery document is not a JSON object"
+    return disc, None
 
 
 def labels_of(listed):
@@ -193,7 +220,9 @@ def refuse_unread_pages():
     if UNREAD_PAGES:
         sys.exit(f"opensheaf.json: {UNREAD_PAGES}: the labels of the lines are not known, and writing "
                  "the discovery document or the website now would lose them; nothing is written "
-                 "(restore the pages of objects, from git for instance, and run the command again)")
+                 "(restore it, or its pages of objects, from git for instance, and run the command again"
+                 + ("; osheaf index writes it again from the storage root, without the labels)"
+                    if UNREAD_DISCOVERY else ")"))
 
 
 def archive_owners():
@@ -1987,9 +2016,13 @@ def listed_objects(disc, read):
     """The entries of objects of the discovery document DISC (section 3.1), from its pages if it
     pages them, READ(path) giving the bytes of a page or None; ValueError if a page is not found."""
     if "objectPages" not in disc:
-        return [o for o in disc.get("objects") or [] if isinstance(o, dict)]
+        objs = disc.get("objects")
+        return [o for o in objs if isinstance(o, dict)] if isinstance(objs, list) else []
     out = []
-    for path in disc.get("objectPages") or []:
+    pages = disc.get("objectPages")
+    if not isinstance(pages, list):
+        raise ValueError("objectPages is not a list of pages")
+    for path in pages:
         if not page_path_ok(path):
             raise ValueError(f"{path!r} is not the path of a page below the discovery document (section 3.1)")
         data = read(path)
@@ -2296,6 +2329,11 @@ def index_entry(member):
 
 
 def index(args):
+    global UNREAD_PAGES
+    if UNREAD_DISCOVERY and UNREAD_PAGES == UNREAD_DISCOVERY:
+        print(f"warning: opensheaf.json: {UNREAD_DISCOVERY}: it is written again from the storage root, "
+              "without the labels it held (osheaf label gives them again)", file=sys.stderr)
+        UNREAD_PAGES = None
     write_discovery()
     if INDEX.get("html") or INDEX.get("template"):
         readable_index(args)
