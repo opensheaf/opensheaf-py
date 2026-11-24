@@ -3722,14 +3722,15 @@ def passphrase(confirm=True, where=None):
     """The passphrase of the keys (of the wallet WHERE, if given), asked once per command."""
     if os.environ.get(PASSPHRASE):
         return os.environ[PASSPHRASE]
-    if "passphrase" in _ASKED:
-        return _ASKED["passphrase"]
+    asked = _ASKED.setdefault("passphrases", {})
+    if where in asked:
+        return asked[where]
     command = os.environ.get(PASSPHRASE_COMMAND, "").strip()
     if command:
         r = subprocess.run(command, shell=True, capture_output=True, text=True)
         given = r.stdout[:-1] if r.stdout.endswith("\n") else r.stdout
         if r.returncode == 0 and given:
-            _ASKED["passphrase"] = given
+            asked[where] = given
             return given
         warn(f"{PASSPHRASE_COMMAND} gave no passphrase: {r.stderr.strip()}")
     import getpass
@@ -3738,7 +3739,7 @@ def passphrase(confirm=True, where=None):
         stop("an empty passphrase: give --no-passphrase to export the keys without a passphrase lock")
     if confirm and getpass.getpass("The passphrase again: ") != first:
         stop("the two passphrases differ")
-    _ASKED["passphrase"] = first
+    asked[where] = first
     return first
 
 
@@ -4583,7 +4584,7 @@ def wallet_passphrase(w, owner):
     """The passphrase, for keys written after a passkey has opened others: asked once, and checked
     against a key of OWNER in the wallet W, so that the new keys are under the same passphrase."""
     from . import wallet
-    if os.environ.get(PASSPHRASE) or "passphrase" in _ASKED:
+    if os.environ.get(PASSPHRASE) or w.name in _ASKED.get("passphrases", {}):
         return passphrase(where=w.name)
     try:
         texts = [t for _, t in wallet_entries(w, owner) if keys.wraps_of(t)]

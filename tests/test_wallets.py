@@ -474,6 +474,18 @@ def test_an_explicit_wallet_wins(monkeypatch, capsys):
     assert "reading from github:me/conf" in capsys.readouterr().err
 
 
+def test_a_passphrase_per_place(monkeypatch):
+    import getpass
+    typed = iter(["for the files", "for the wallet"])
+    monkeypatch.setattr(getpass, "getpass", lambda prompt: next(typed))
+    P.forget_passphrase()
+    assert P.passphrase(confirm=False) == "for the files"
+    assert P.passphrase(confirm=False) == "for the files"
+    assert P.passphrase(confirm=False, where="github:me/keys") == "for the wallet"
+    assert P.passphrase(confirm=False, where="github:me/keys") == "for the wallet"
+    P.forget_passphrase()
+
+
 def test_clipboard_round_trip(tmp_path, monkeypatch, capsys):
     root = make_archive(tmp_path, "--export", str(tmp_path / "usb"), "--no-passphrase")
     owner = P.ARCHIVE["owner"]

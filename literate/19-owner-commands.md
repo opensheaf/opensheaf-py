@@ -242,10 +242,14 @@ op://Private/opensheaf/password` from 1Password. A command that fails or
 prints nothing is said so, and the passphrase is asked. An empty
 passphrase is refused: an owner who wants plain files says so, with
 `--no-passphrase`.
-It is asked once per command, however many keys it encrypts or decrypts,
-naming the wallet whose keys it opens, if any:
+It is asked once per command and per place of keys, however many keys it
+encrypts or decrypts there, naming the wallet whose keys it opens, if any:
 a rotation that reads the rotation keys from a wallet and keeps new ones
-there asks once. The command line forgets it when the command ends
+there asks once. Keys in two places are asked for twice: a rotation that
+reads its rotation keys from files (`--rotation-key FILE`) and keeps the
+new ones in a wallet (`--keys`) asks for the passphrase of the files, then
+for that of the wallet, which the new keys get, so that the wallet's keys
+are never locked, unseen, with the passphrase of other files. The command line forgets it when the command ends
 (`forget_passphrase`), together with what the command has read from the
 stores of current keys ([chapter 7](07-keys.md)). A good place for it is a password manager, such as
 the Passwords app of macOS: a different provider from the wallet, so that
@@ -261,14 +265,15 @@ neither alone gives the keys.
         """The passphrase of the keys (of the wallet WHERE, if given), asked once per command."""
         if os.environ.get(PASSPHRASE):
             return os.environ[PASSPHRASE]
-        if "passphrase" in _ASKED:
-            return _ASKED["passphrase"]
+        asked = _ASKED.setdefault("passphrases", {})
+        if where in asked:
+            return asked[where]
         command = os.environ.get(PASSPHRASE_COMMAND, "").strip()
         if command:
             r = subprocess.run(command, shell=True, capture_output=True, text=True)
             given = r.stdout[:-1] if r.stdout.endswith("\n") else r.stdout
             if r.returncode == 0 and given:
-                _ASKED["passphrase"] = given
+                asked[where] = given
                 return given
             warn(f"{PASSPHRASE_COMMAND} gave no passphrase: {r.stderr.strip()}")
         import getpass
@@ -277,7 +282,7 @@ neither alone gives the keys.
             stop("an empty passphrase: give --no-passphrase to export the keys without a passphrase lock")
         if confirm and getpass.getpass("The passphrase again: ") != first:
             stop("the two passphrases differ")
-        _ASKED["passphrase"] = first
+        asked[where] = first
         return first
 
 
@@ -1325,7 +1330,7 @@ new keys: `osheaf key enroll` again, which uses the same passkey.
         """The passphrase, for keys written after a passkey has opened others: asked once, and checked
         against a key of OWNER in the wallet W, so that the new keys are under the same passphrase."""
         from . import wallet
-        if os.environ.get(PASSPHRASE) or "passphrase" in _ASKED:
+        if os.environ.get(PASSPHRASE) or w.name in _ASKED.get("passphrases", {}):
             return passphrase(where=w.name)
         try:
             texts = [t for _, t in wallet_entries(w, owner) if keys.wraps_of(t)]

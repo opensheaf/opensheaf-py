@@ -624,6 +624,21 @@ the one configured.
         assert P.rotation_signers(args("github:me/given"), "o", prev)[1] is configured
         assert "reading from github:me/conf" in capsys.readouterr().err
 
+The passphrase is asked once per place of keys: the files of the rotation
+keys, then the wallet, each once, never the one for the other.
+
+    # in wallet tests: the wallet of each owner:
+    def test_a_passphrase_per_place(monkeypatch):
+        import getpass
+        typed = iter(["for the files", "for the wallet"])
+        monkeypatch.setattr(getpass, "getpass", lambda prompt: next(typed))
+        P.forget_passphrase()
+        assert P.passphrase(confirm=False) == "for the files"
+        assert P.passphrase(confirm=False) == "for the files"
+        assert P.passphrase(confirm=False, where="github:me/keys") == "for the wallet"
+        assert P.passphrase(confirm=False, where="github:me/keys") == "for the wallet"
+        P.forget_passphrase()
+
 The clipboard
 -------------
 
