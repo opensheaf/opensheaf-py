@@ -83,8 +83,6 @@ def normalise(entry, base):
             v = [x if isinstance(x, str) else "=".join(next(iter(x.items()))) for x in v]
         elif k in PATHS and isinstance(v, str):
             v = str(base / v)
-        elif k == "after":
-            v = int(v)
         out[k] = v
     return out
 
@@ -101,7 +99,45 @@ def merge(args, entry, parser, command):
     if unknown:
         parser.error(f"{command}: unknown option(s) in the file: {', '.join(sorted(unknown))}")
     sub = next(a for a in parser._actions if isinstance(a, argparse._SubParsersAction)).choices[command]
+    actions = {a.dest: a for a in sub._actions}
     for k, v in entry.items():
         if getattr(ns, k) == sub.get_default(k):
-            setattr(ns, k, v)
+            setattr(ns, k, value_of(actions[k], v, parser, command) if k in actions else v)
     return ns
+
+
+BOOLEAN = {"true": True, "yes": True, "false": False, "no": False}
+
+
+def value_of(action, v, parser, command):
+    """The value V of a file of options for ACTION, converted as argparse converts it."""
+    import argparse
+    name = action.dest.replace("_", "-")
+
+    def bad(why):
+        parser.error(f"{command}: {name} in the file: {why}")
+
+    if isinstance(action, (argparse._StoreTrueAction, argparse._StoreFalseAction,
+                           argparse._StoreConstAction)):
+        b = v if isinstance(v, bool) else BOOLEAN.get(v) if isinstance(v, str) else None
+        if b is None:
+            bad(f"true or false, not {v!r}")
+        return action.const if b else action.default
+
+    def one(x):
+        if isinstance(x, (list, dict)) or isinstance(x, bool) and action.type is None:
+            bad(f"a value, not {x!r}")
+        if action.type is not None:
+            try:
+                x = action.type(x if isinstance(x, int) and action.type is int else str(x))
+            except (ValueError, TypeError, argparse.ArgumentTypeError) as e:
+                bad(f"not {x!r} ({e})")
+        elif not isinstance(x, str):
+            x = str(x)
+        if action.choices is not None and x not in action.choices:
+            bad(f"one of {', '.join(map(str, action.choices))}, not {x!r}")
+        return x
+
+    if isinstance(action, argparse._AppendAction) or action.nargs in ("*", "+"):
+        return [one(x) for x in (v if isinstance(v, list) else [v])]
+    return one(v)

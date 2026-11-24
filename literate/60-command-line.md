@@ -1348,9 +1348,11 @@ option becomes a list of one. Then some values are rewritten:
   file of options, the logical path inside the document stays as it is;
 - a tool may be a string `NAME=VERSION` or a mapping of one name to its
   version;
-- a path is made relative to the folder of the file;
-- `after` becomes an integer, as `--after` has `type=int`, since YAML
-  gave text.
+- a path is made relative to the folder of the file.
+
+The other values are converted when the entry is merged, as the command
+line converts them (`after` becomes an integer, as `--after` has
+`type=int`).
 
 Unknown keys are kept: they are refused when the entry is merged, where
 the options of the command are known.
@@ -1374,8 +1376,6 @@ the options of the command are known.
                 v = [x if isinstance(x, str) else "=".join(next(iter(x.items()))) for x in v]
             elif k in PATHS and isinstance(v, str):
                 v = str(base / v)
-            elif k == "after":
-                v = int(v)
             out[k] = v
         return out
 
@@ -1412,7 +1412,57 @@ disagree.
         if unknown:
             parser.error(f"{command}: unknown option(s) in the file: {', '.join(sorted(unknown))}")
         sub = next(a for a in parser._actions if isinstance(a, argparse._SubParsersAction)).choices[command]
+        actions = {a.dest: a for a in sub._actions}
         for k, v in entry.items():
             if getattr(ns, k) == sub.get_default(k):
-                setattr(ns, k, v)
+                setattr(ns, k, value_of(actions[k], v, parser, command) if k in actions else v)
         return ns
+
+A file of YAML holds text only (it is read with `BaseLoader`), and the
+command line would have converted it: `no-passphrase: false` is the text
+`false`, which Python takes for true, and `stage: BOGUS` would pass where
+`--stage BOGUS` is refused. `value_of` converts each value as `argparse`
+does for its option. A switch (`store_true`, `store_false`) takes `true`,
+`yes`, `false` or `no` exactly (or a boolean of JSON); `true` gives the
+option, `false` leaves it out, and any other value is an error. An option
+with a type (`int`, the licence of `--rights`) gets its value through the
+type, an option with choices one of them, and a repeated option a list,
+each item converted. A list or a mapping where one value is expected is an
+error, and a number of JSON where text is expected becomes its text.
+
+    # in merging an entry with the command line:
+    BOOLEAN = {"true": True, "yes": True, "false": False, "no": False}
+
+
+    def value_of(action, v, parser, command):
+        """The value V of a file of options for ACTION, converted as argparse converts it."""
+        import argparse
+        name = action.dest.replace("_", "-")
+
+        def bad(why):
+            parser.error(f"{command}: {name} in the file: {why}")
+
+        if isinstance(action, (argparse._StoreTrueAction, argparse._StoreFalseAction,
+                               argparse._StoreConstAction)):
+            b = v if isinstance(v, bool) else BOOLEAN.get(v) if isinstance(v, str) else None
+            if b is None:
+                bad(f"true or false, not {v!r}")
+            return action.const if b else action.default
+
+        def one(x):
+            if isinstance(x, (list, dict)) or isinstance(x, bool) and action.type is None:
+                bad(f"a value, not {x!r}")
+            if action.type is not None:
+                try:
+                    x = action.type(x if isinstance(x, int) and action.type is int else str(x))
+                except (ValueError, TypeError, argparse.ArgumentTypeError) as e:
+                    bad(f"not {x!r} ({e})")
+            elif not isinstance(x, str):
+                x = str(x)
+            if action.choices is not None and x not in action.choices:
+                bad(f"one of {', '.join(map(str, action.choices))}, not {x!r}")
+            return x
+
+        if isinstance(action, argparse._AppendAction) or action.nargs in ("*", "+"):
+            return [one(x) for x in (v if isinstance(v, list) else [v])]
+        return one(v)

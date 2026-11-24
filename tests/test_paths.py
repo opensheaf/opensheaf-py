@@ -81,3 +81,22 @@ def test_a_label_that_is_a_path_is_left_out(archive, tmp_path, capsys):
     assert not (tmp_path / "escaped").exists()
     assert not any(o.get("label") == "../../escaped"
                    for o in json.loads((archive / "opensheaf.json").read_text())["objects"])
+
+
+def test_values_of_a_file_of_options_are_converted(tmp_path):
+    from opensheaf import cli
+    p = cli.build_parser()
+    (tmp_path / "init.yaml").write_text(
+        "name: Test\nbase-url: https://example.org/\ncurator: Doe, Jane\nnew-owner: true\n"
+        "no-passphrase: false\nplain-current: 'no'\nyes: false\nrotation: 3\n")
+    ns = cli.runs(p, p.parse_args(["init", "--from", str(tmp_path / "init.yaml")]))[0]
+    assert (ns.new_owner, ns.no_passphrase, ns.plain_current, ns.yes, ns.rotation) == \
+        (True, False, False, False, 3)
+    for bad, what in (("i-know: maybe\n", "true or false"), ("stage: BOGUS\n", "one of"),
+                      ("after: two\n", "after"), ("title: [a, b]\n", "a value")):
+        (tmp_path / "dep.yaml").write_text("id: x\ntitle: T\nauthor: Doe, J\n" + bad)
+        with pytest.raises(SystemExit):
+            cli.runs(p, p.parse_args(["deposit", "--from", str(tmp_path / "dep.yaml")]))
+    (tmp_path / "dep.yaml").write_text("id: x\ntitle: T\nauthor: Doe, J\ni-know: no\nnew: yes\nstage: AM\n")
+    ns = cli.runs(p, p.parse_args(["deposit", "--from", str(tmp_path / "dep.yaml")]))[0]
+    assert (ns.i_know, ns.new, ns.stage, ns.author) == (False, True, "AM", ["Doe, J"])
