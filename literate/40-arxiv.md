@@ -278,6 +278,10 @@ as one TeX file), or a PDF (a paper submitted as PDF only, or whose source
 arXiv does not distribute). The HTTP answer does not say which, so we look
 at the first bytes and name the file accordingly, `vN-source.tar.gz`,
 `vN-source.gz` or `vN-source.pdf`; anything else is kept as `.bin`.
+Telling a tar archive from a single file needs only the first block of
+the decompressed data, its first header: no more is decompressed, so that
+a small download that expands without bound (a gzip bomb) costs nothing
+here; unpacking it later stops at `MAX_UNPACKED` (below).
 
     # in arXiv: the kind of an e-print:
     def _source_kind(data):
@@ -285,11 +289,12 @@ at the first bytes and name the file accordingly, `vN-source.tar.gz`,
             return "pdf"
         if data[:2] == b"\x1f\x8b":
             try:
-                raw = gzip.decompress(data)
-            except OSError:
+                with gzip.GzipFile(fileobj=io.BytesIO(data)) as g:
+                    head = g.read(tarfile.BLOCKSIZE)
+            except (OSError, EOFError):
                 return "gz"
             try:
-                tarfile.open(fileobj=io.BytesIO(raw)).getmembers()
+                tarfile.TarInfo.frombuf(head, tarfile.ENCODING, "surrogateescape")
                 return "tar.gz"
             except tarfile.TarError:
                 return "gz"

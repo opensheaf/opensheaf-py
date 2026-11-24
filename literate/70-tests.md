@@ -939,6 +939,32 @@ thousand bytes.
         with pytest.raises(SystemExit, match="expands to more than"):
             arxiv.unpack(bomb, tmp_path / "bomb-out", "2611.14296")
 
+The kind of a downloaded e-print is told from its first header alone:
+the bomb is not decompressed further than one tar block.
+
+    # in test: small functions:
+    def test_source_kind_reads_one_block(tmp_path, monkeypatch):
+        import gzip
+        import io
+        import tarfile
+        buf = io.BytesIO()
+        with tarfile.open(fileobj=buf, mode="w") as tf:
+            ti = tarfile.TarInfo("main.tex")
+            ti.size = 3
+            tf.addfile(ti, io.BytesIO(b"abc"))
+        asked = []
+
+        class Counting(gzip.GzipFile):
+            def read(self, size=-1):
+                asked.append(size)
+                return super().read(size)
+        monkeypatch.setattr(arxiv.gzip, "GzipFile", Counting)
+        assert arxiv._source_kind(gzip.compress(buf.getvalue())) == "tar.gz"
+        assert arxiv._source_kind(gzip.compress(b"\\documentclass{article}")) == "gz"
+        assert arxiv._source_kind(gzip.compress(b"\0" * 10_000_000)) == "gz"
+        assert arxiv._source_kind(b"%PDF-1.4") == "pdf" and arxiv._source_kind(b"\x1f\x8bbroken") == "gz"
+        assert asked and all(0 < n <= tarfile.BLOCKSIZE for n in asked)
+
 The Zenodo token is looked for in the environment, then through keyring,
 then, on macOS, with `security`. The test replaces keyring by a module of
 its own and `security` by a stub, and checks the order, that a failing

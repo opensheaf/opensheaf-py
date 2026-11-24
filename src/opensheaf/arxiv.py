@@ -703,11 +703,12 @@ def _source_kind(data):
         return "pdf"
     if data[:2] == b"\x1f\x8b":
         try:
-            raw = gzip.decompress(data)
-        except OSError:
+            with gzip.GzipFile(fileobj=io.BytesIO(data)) as g:
+                head = g.read(tarfile.BLOCKSIZE)
+        except (OSError, EOFError):
             return "gz"
         try:
-            tarfile.open(fileobj=io.BytesIO(raw)).getmembers()
+            tarfile.TarInfo.frombuf(head, tarfile.ENCODING, "surrogateescape")
             return "tar.gz"
         except tarfile.TarError:
             return "gz"
