@@ -417,6 +417,11 @@ a keeper is an ORCID iD with its check digit, or a domain.
         assert names.keeper_valid(ORCID_A) and names.keeper_valid("https://journal.example.org/")
         assert not names.keeper_valid("https://orcid.org/0000-0002-1234-5678")
         assert not names.keeper_valid("https://journal.example.org")
+        for no_domain in ("https://127.0.0.1/", "https://localhost/", "https://./", "https://a..b/",
+                          "https://example/", "https://-a.org/", "https://10.0.0.1/"):
+            assert not names.keeper_valid(no_domain, strict=True), no_domain
+        assert names.keeper_valid("https://127.0.0.1/")            # what the schema lets through
+        assert names.keeper_valid("https://unlock.opensheaf.org/", strict=True)
 
 Key logs
 --------
@@ -792,6 +797,11 @@ without a keeper has no link.
         assert owners.keeper_link(journal, fetch(None)).reason.startswith("there is no ")
         bare = owners.new_owner([K1], [R[1]], next_threshold=1, created="2026-01-15T10:00:00Z", nonce=nonce("B"))
         assert owners.keeper_link(bare, lambda url: pytest.fail(url)).status == owners.ABSENT
+        with pytest.raises(ValueError, match="DNS name"):
+            owners.new_owner([K1], [R[1]], next_threshold=1, keeper="https://127.0.0.1/")
+        local = owners.KeyLog(journal.genesis.replace(b"journal.example.org", b"127.0.0.1"))
+        assert owners.keeper_of(local) == "https://127.0.0.1/"
+        assert owners.keeper_link(local, lambda url: pytest.fail(url)).status == owners.NOT_CHECKED
 
 Signatures
 ----------

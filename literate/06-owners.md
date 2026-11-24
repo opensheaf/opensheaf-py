@@ -1250,6 +1250,8 @@ ignored, and a record without links confirms nothing.
         if keeper is None:
             return KeeperLink(None, ABSENT, "the owner names no keeper")
         orcid = keeper.startswith("https://orcid.org/")
+        if not orcid and not names.keeper_domain(keeper):
+            return KeeperLink(keeper, NOT_CHECKED, "not a DNS name (an address, localhost): not fetched")
         url = ORCID_API.format(keeper.rsplit("/", 1)[1]) if orcid else keeper + ".well-known/opensheaf"
         try:
             data = fetch(url)

@@ -151,7 +151,7 @@ would be lost when the command ends.
         if not 1 <= next_threshold <= n_rot or not 1 <= threshold <= 1 + len(others):
             stop("a threshold is at least 1, and at most the number of keys (section 6.1, rule 1)")
         keeper = getattr(args, "keeper", None)
-        if keeper and not names.keeper_valid(keeper):
+        if keeper and not names.keeper_valid(keeper, strict=True):
             stop(f"a keeper is an ORCID iD (with its check digit) or https://<domain>/: {keeper}")
         w = level_wallet(args)
         if w is None and not getattr(args, "export", None):

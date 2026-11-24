@@ -277,8 +277,8 @@ keeper, a list of one URI (section 6.6).
                 raise ValueError("; ".join(problems))
             if keeper is not None:
                 rec["keeper"] = [keeper] if isinstance(keeper, str) else list(keeper)
-                if len(rec["keeper"]) != 1 or not keeper_valid(rec["keeper"][0]):
-                    raise ValueError(f"a keeper is one ORCID iD or https://<domain>/: {keeper!r}")
+                if len(rec["keeper"]) != 1 or not keeper_valid(rec["keeper"][0], strict=True):
+                    raise ValueError(f"a keeper is one ORCID iD or https://<domain>/, a DNS name: {keeper!r}")
             if extensions:
                 rec["extensions"] = extensions
         else:
@@ -759,9 +759,33 @@ refuse to write a keeper whose check digit is wrong.
         return orcid_check_digit(digits[:15]) == digits[15]
 
 
-    def keeper_valid(uri):
+    def keeper_valid(uri, strict=False):
         """Whether URI is a keeper (section 6.6): https://orcid.org/<iD> with its check digit,
-        or https://<domain>/."""
+        or https://<domain>/; STRICT: the domain a DNS name (keeper_domain)."""
         if uri.startswith("https://orcid.org/"):
             return orcid_valid(uri)
-        return bool(KEEPER_DOMAIN.match(uri))
+        return bool(KEEPER_DOMAIN.match(uri)) and (not strict or keeper_domain(uri))
+
+The pattern of the schema lets through what is no domain: an IP address
+(`https://127.0.0.1/`), `localhost`, empty labels (`https://./`,
+`https://a..b/`). A verifier reads what the schema accepts; but the tools
+write a keeper only if its domain is a name of the DNS, `keeper_domain`:
+labels of 1 to 63 letters, digits and inner hyphens, at least two of them,
+the last not all digits (so no IPv4 address), and not `localhost`; and they
+fetch a keeper's `.well-known/opensheaf` only from such a domain (the
+chapter on [owners](06-owners.md)), never from a host of the reader's own
+network named by a key log from elsewhere.
+
+    # in names: ORCID iDs and keepers:
+    DNS_LABEL = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\Z")
+
+
+    def keeper_domain(uri):
+        """Whether the keeper URI https://<domain>/ names a DNS name: no IP address, no localhost,
+        no empty label, at least two labels."""
+        m = KEEPER_DOMAIN.match(uri)
+        if not m:
+            return False
+        labels = uri[len("https://"):-1].split(".")
+        return (len(labels) >= 2 and all(DNS_LABEL.match(x) for x in labels) and not labels[-1].isdigit()
+                and labels[-1] != "localhost" and len(uri) - len("https:///") <= 253)
