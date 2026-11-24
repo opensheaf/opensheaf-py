@@ -1425,7 +1425,7 @@ def notice(args):
     if args.about not in numbers:
         sys.exit(f"{args.id} has no document version {args.about}")
     note, add = note_from(args.text, args.file, "notices")
-    note.update(documentVersion=args.about, date=args.date or TODAY)
+    note.update(documentVersion=args.about, date=iso_date(args.date))
     earlier = read_json(d, inv, OBJ).get("notices", [])
     r = getattr(args, "replaces", None)
     if r is not None:
@@ -1451,7 +1451,7 @@ def withdraw(args):
     status withdrawn, the reason, and the Withdrawn date in datacite.json. The
     content stays."""
     reason, add = note_from(args.reason, args.file, "withdrawal")
-    date = args.date or TODAY
+    date = iso_date(args.date)
 
     def change(dc, obj):
         if obj.get("status") == "withdrawn":
@@ -1553,7 +1553,7 @@ def relicense(args):
             sys.exit(f"{args.id} already has {args.rights}")
         dc["rightsList"] = [new]
         obj["agreement"] = {"by": [c["name"] for c in dc["creators"]],
-                            "date": args.date or TODAY, "method": args.method}
+                            "date": iso_date(args.date), "method": args.method}
     inv = description_version(args.id, change, args.message or
                               f"Licence: {new['rights']} (description-only version; content unchanged)", None, ack(args))
     print(f"{args.id}: {inv['head']} ({new['rights']})")
@@ -1999,15 +1999,40 @@ def tm_with_math(s):
     return "".join(out)
 
 
+DATE_SHOWN = re.compile(r"(\d{4})(?:-(\d{2})(?:-(\d{2})(?:T.*)?)?)?", re.S)
+
+
 def fmt_date(iso):
-    """'2026-06-03' -> '3 June 2026' (approximate dates: '2019-03' -> 'March 2019')."""
-    parts = iso.split("/")[0].split("-")
-    if len(parts) == 3:
-        d = datetime.date.fromisoformat("-".join(parts))
-        return f"{d.day} {d.strftime('%B %Y')}"
-    if len(parts) == 2:
-        return datetime.date(int(parts[0]), int(parts[1]), 1).strftime("%B %Y")
-    return parts[0]
+    """'2026-06-03' -> '3 June 2026' (approximate dates: '2019-03' -> 'March 2019'; with a
+    time, its date; in another form, as it is)."""
+    text = str(iso)
+    m = DATE_SHOWN.fullmatch(text.split("/")[0].strip())
+    if not m:
+        return text
+    year, month, day = m.groups()
+    try:
+        if day:
+            d = datetime.date(int(year), int(month), int(day))
+            return f"{d.day} {d.strftime('%B %Y')}"
+        if month:
+            return datetime.date(int(year), int(month), 1).strftime("%B %Y")
+    except ValueError:
+        return text
+    return year
+
+
+def iso_date(text, option="--date"):
+    """The date TEXT, given with OPTION, as YYYY-MM-DD (default: today); stops on any other."""
+    if text is None or text == "":
+        return TODAY
+    if isinstance(text, datetime.date) and not isinstance(text, datetime.datetime):
+        return text.isoformat()
+    try:
+        if isinstance(text, str) and re.fullmatch(r"\d{4}-\d{2}-\d{2}", text):
+            return datetime.date.fromisoformat(text).isoformat()
+    except ValueError:
+        pass
+    sys.exit(f"{option}: a date, YYYY-MM-DD, not {text!r}")
 
 
 def version_line(obj, dc, inv, ver):

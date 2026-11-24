@@ -1008,6 +1008,30 @@ def test_complete_an_earlier_version(tmp_path):
     assert P.verify_errors() == []
 
 
+def test_dates_given_and_shown(tmp_path):
+    root = tmp_path / "a"
+    make_archive(root)
+    pdf = tmp_path / "p.pdf"
+    pdf.write_bytes(b"%PDF-1.4 p")
+    r = ["--root", str(root)]
+    run(*r, "deposit", "p", "--new", "--pdf", str(pdf), "--no-source", "lost", "--title", "T",
+        "--author", "Doe, J", "--available", "2026-06-03T10:00:00Z")
+    for bad in ("2026-06-03T10:00:00Z", "3 June 2026", "2026-02-30", "2026-6-3"):
+        with pytest.raises(SystemExit, match="a date, YYYY-MM-DD"):
+            run(*r, "notice", "p", "--about", "1", "--text", "A remark.", "--date", bad)
+        with pytest.raises(SystemExit, match="a date, YYYY-MM-DD"):
+            run(*r, "withdraw", "p", "--reason", "wrong", "--date", bad)
+        with pytest.raises(SystemExit, match="a date, YYYY-MM-DD"):
+            run(*r, "relicense", "p", "--rights", "cc0-1.0", "--method", "by email", "--date", bad)
+    assert P.load_inventory(P.obj_dir(P.resolve("p")))["head"] == "v1"
+    run(*r, "notice", "p", "--about", "1", "--text", "A remark.", "--date", "2026-06-04")
+    assert P.fmt_date("2026-06-03T10:00:00Z") == "3 June 2026"
+    assert P.fmt_date("2026-02-30") == "2026-02-30" and P.fmt_date("soon") == "soon"
+    assert P.fmt_date("2019-03/2019-05") == "March 2019" and P.fmt_date("2019") == "2019"
+    run(*r, "collect")
+    assert "3 June 2026" in (root / "paper" / "p" / "index.html").read_text()
+
+
 def test_describe(tmp_path):
     root = tmp_path / "a"
     make_archive(root)

@@ -595,18 +595,46 @@ escaped with a backslash are not delimiters.
 ### Dates and versions
 
 Dates are shown as people write them, also when approximate (section 4.4
-allows `2019-03`, or a range, of which the start is shown).
+allows `2019-03`, or a range, of which the start is shown). DataCite also
+allows a date with a time (`2026-06-03T10:00:00Z`), of which the date is
+shown; a date in no form it knows is shown as it is written, never
+stopping the page that shows it.
 
     # in a date as readers write it:
+    DATE_SHOWN = re.compile(r"(\d{4})(?:-(\d{2})(?:-(\d{2})(?:T.*)?)?)?", re.S)
+
+
     def fmt_date(iso):
-        """'2026-06-03' -> '3 June 2026' (approximate dates: '2019-03' -> 'March 2019')."""
-        parts = iso.split("/")[0].split("-")
-        if len(parts) == 3:
-            d = datetime.date.fromisoformat("-".join(parts))
-            return f"{d.day} {d.strftime('%B %Y')}"
-        if len(parts) == 2:
-            return datetime.date(int(parts[0]), int(parts[1]), 1).strftime("%B %Y")
-        return parts[0]
+        """'2026-06-03' -> '3 June 2026' (approximate dates: '2019-03' -> 'March 2019'; with a
+        time, its date; in another form, as it is)."""
+        text = str(iso)
+        m = DATE_SHOWN.fullmatch(text.split("/")[0].strip())
+        if not m:
+            return text
+        year, month, day = m.groups()
+        try:
+            if day:
+                d = datetime.date(int(year), int(month), int(day))
+                return f"{d.day} {d.strftime('%B %Y')}"
+            if month:
+                return datetime.date(int(year), int(month), 1).strftime("%B %Y")
+        except ValueError:
+            return text
+        return year
+
+
+    def iso_date(text, option="--date"):
+        """The date TEXT, given with OPTION, as YYYY-MM-DD (default: today); stops on any other."""
+        if text is None or text == "":
+            return TODAY
+        if isinstance(text, datetime.date) and not isinstance(text, datetime.datetime):
+            return text.isoformat()
+        try:
+            if isinstance(text, str) and re.fullmatch(r"\d{4}-\d{2}-\d{2}", text):
+                return datetime.date.fromisoformat(text).isoformat()
+        except ValueError:
+            pass
+        sys.exit(f"{option}: a date, YYYY-MM-DD, not {text!r}")
 
 The version line tells the reader which version this is: the document
 version, its label on the service it was imported from (arXiv's `v4` is

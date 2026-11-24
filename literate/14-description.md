@@ -137,7 +137,9 @@ number: notice 1, 2, ... of the line. A notice is never edited: a later
 notice corrects or withdraws it by naming its number in `replaces`
 (`--replaces`), and must then be about the same document version; a notice
 is replaced at most once. Its `date` is the date its author issued it,
-today unless `--date` says otherwise.
+today unless `--date` says otherwise: a date, `YYYY-MM-DD`, as the schema
+requires of `notices`, `withdrawal` and `agreement`; any other value
+stops the command (`iso_date`, with the [dates of the index](16-index.md)).
 
     # in add a notice about a document version:
     def notice(args):
@@ -151,7 +153,7 @@ today unless `--date` says otherwise.
         if args.about not in numbers:
             sys.exit(f"{args.id} has no document version {args.about}")
         note, add = note_from(args.text, args.file, "notices")
-        note.update(documentVersion=args.about, date=args.date or TODAY)
+        note.update(documentVersion=args.about, date=iso_date(args.date))
         earlier = read_json(d, inv, OBJ).get("notices", [])
         r = getattr(args, "replaces", None)
         if r is not None:
@@ -189,7 +191,7 @@ withdrawn staying withdrawn.
         status withdrawn, the reason, and the Withdrawn date in datacite.json. The
         content stays."""
         reason, add = note_from(args.reason, args.file, "withdrawal")
-        date = args.date or TODAY
+        date = iso_date(args.date)
 
         def change(dc, obj):
             if obj.get("status") == "withdrawn":
@@ -248,7 +250,7 @@ is given as to a deposit: a licence known by its SPDX key, or a statement.
                 sys.exit(f"{args.id} already has {args.rights}")
             dc["rightsList"] = [new]
             obj["agreement"] = {"by": [c["name"] for c in dc["creators"]],
-                                "date": args.date or TODAY, "method": args.method}
+                                "date": iso_date(args.date), "method": args.method}
         inv = description_version(args.id, change, args.message or
                                   f"Licence: {new['rights']} (description-only version; content unchanged)", None, ack(args))
         print(f"{args.id}: {inv['head']} ({new['rights']})")
