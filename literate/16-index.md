@@ -110,7 +110,7 @@ their genesis record), and in the `object.json` of the heads.
         if folder.is_dir():
             for f in folder.glob("*.json"):
                 if f"{OBJECT_PAGES}/{f.name}" not in pages:
-                    f.unlink()
+                    unlinked(f).unlink()
             if not any(folder.iterdir()):
                 folder.rmdir()
         if pages:
@@ -320,7 +320,7 @@ takedown removes the name from `owners/`.
             want = files.get(index, {})
             for p in sorted(folder.glob("*.json")) if folder.is_dir() else []:
                 if p.stem not in want:
-                    p.unlink()
+                    unlinked(p).unlink()
             for prefix, data in want.items():
                 write_json(folder / f"{prefix}.json", data)
 
@@ -481,10 +481,11 @@ out of `index.tm`, with a warning.
                   f"{'is' if len(members) - len(here) == 1 else 'are'} left out of index.tm (the website shows "
                   "them).", file=sys.stderr)
         entries = "\n\n".join(index_entry(m) for m in here)
-        with open(ROOT / "index.tm", "w", encoding="latin-1", newline="") as f:
+        with open(unlinked(ROOT / "index.tm"), "w", encoding="latin-1", newline="") as f:
             f.write(template.replace(line, entries + "\n"))
-        (ROOT / ".texmacs-noconvert").touch()
+        unlinked(ROOT / ".texmacs-noconvert").touch()
         if not getattr(args, "no_html", False):
+            unlinked(ROOT / "index.html")
             scratch = Path(tempfile.mkdtemp())
             run_texmacs(export_calls(ROOT / "index.tm", pdf=scratch / "index.pdf",
                                      html=ROOT / "index.html"))

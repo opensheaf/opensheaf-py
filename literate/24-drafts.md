@@ -91,9 +91,9 @@ finds it, and `drop_head` rewrites it, removing its head version.
         """Remove the head version of the draft in D: the draft may be rewritten (section 10.1)."""
         n = int(inv["head"][1:])
         if n == 1:
-            shutil.rmtree(d)
+            shutil.rmtree(P.unlinked(d))
             return
-        shutil.rmtree(d / f"v{n}")
+        shutil.rmtree(P.unlinked(d / f"v{n}"))
         for name in ("inventory.json", "inventory.json.sha512"):
             shutil.copyfile(d / f"v{n - 1}" / name, d / f"{name}.tmp")
             os.replace(d / f"{name}.tmp", d / name)
@@ -102,7 +102,7 @@ finds it, and `drop_head` rewrites it, removing its head version.
     def delete(args):
         """osheaf draft delete ID: the draft goes, and leaves no tombstone (section 10.1)."""
         obj_id, d, _ = draft_dir(args.id)
-        shutil.rmtree(d)
+        shutil.rmtree(P.unlinked(d))
         if d.parent != P.OCFL and not any(d.parent.iterdir()):
             d.parent.rmdir()
         P.write_discovery()
@@ -159,6 +159,6 @@ record added and the two descriptions rewritten; `add_version` signs it.
         new = P.add_version(line, files, obj, getattr(args, "message", None) or f"Sealed from the draft {args.id}")
         P.LABELS[label] = line
         if getattr(args, "delete_draft", False):
-            shutil.rmtree(d)
+            shutil.rmtree(P.unlinked(d))
         P.write_discovery()
         print(f"{label}: {new['head']} (document version 1) {line}, sealed from the draft {args.id}")

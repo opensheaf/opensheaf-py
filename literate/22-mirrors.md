@@ -186,7 +186,7 @@ tombstone is then dropped.
             elif what == "reported":
                 print(f"key log of {owner}: the copy at {w} forks at v{n}; a fork record is held already, "
                       "so it is reported, not recorded (section 6.3)")
-        owners.write_key_log(P.obj_dir(oid), local)
+        owners.write_key_log(P.unlinked(P.obj_dir(oid)), local)
         return P.key_log(owner)
 
 Mirroring a line
@@ -328,6 +328,7 @@ copied.
                         f.unlink(missing_ok=True)
         if sign.latest_signed(P.line_statuses(new, P.load_inventory(new), log)[1]) != target:
             sys.exit(f"{obj_id}: the copy at {source.where} is no longer signed up to v{target}: not copied")
+        P.unlinked(d / sign.WITNESSES)
         if not held:
             d.parent.mkdir(parents=True, exist_ok=True)
             os.rename(new, d)
@@ -369,7 +370,7 @@ does not show them.
         if all(w in known for w in where):
             return
         known += [w for w in where if w not in known]
-        cfg_path.write_text(json.dumps(cfg, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        P.write_file(cfg_path, json.dumps(cfg, indent=2, ensure_ascii=False) + "\n")
         P.ARCHIVE["mirrors"] = cfg["mirrors"]
 
 The commands

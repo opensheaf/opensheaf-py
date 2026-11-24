@@ -639,15 +639,13 @@ place is in the way only if it is more than such a page.
         if dst.exists():
             if not redirect_only(dst, after):
                 sys.exit(f"{dst} is in the way of the HTML version of {obj_id}")
-            shutil.rmtree(dst)
-        src.rename(dst)
-        (dst / f"{before}.html").rename(dst / f"{after}.html")
+            shutil.rmtree(unlinked(dst))
+        unlinked(src).rename(unlinked(dst))
+        (dst / f"{before}.html").rename(unlinked(dst / f"{after}.html"))
         for address, i in former.items():
             if i == obj_id and LABEL_RE.match(address):
-                (SITE / address).mkdir(parents=True, exist_ok=True)
-                (SITE / address / f"{address}.html").write_text(
-                    html.redirect_page(f"../{after}/{after}.html", f"{ARCHIVE['baseUrl']}site/{after}/{after}.html"),
-                    encoding="utf-8")
+                write_file(SITE / address / f"{address}.html", html.redirect_page(
+                    f"../{after}/{after}.html", f"{ARCHIVE['baseUrl']}site/{after}/{after}.html"))
 
 
     def redirect_only(folder, address):
@@ -778,9 +776,69 @@ staged before they are written.
 
 
     def write_json(path, data):
+        write_file(path, json_bytes(data))
+
+Every file the tools write in the archive goes through `write_file`, and
+every file or folder they delete or move through `unlinked`. A symbolic
+link in the archive (`site/<label>` pointing to a folder of the user's, an
+object folder pointing elsewhere, a file of an index pointing to a file
+outside) would otherwise carry the write, or the deletion, out of the
+archive: `osheaf deposit` empties the folder of the HTML version before
+writing it again, and through a link it would empty the folder linked to.
+The tools refuse any write or deletion whose path, below the archive root,
+passes through a symbolic link, as the JavaScript port does; paths outside
+the archive (temporary folders, the exported keys) are not checked. The one
+link the tools make themselves, `texmacs_home/plugins`, is only read
+through.
+
+`write_file` writes a temporary file next to the file and then renames it
+over the file, so that a file is either the old or the new one, never cut
+short by an error or an interruption; the rename replaces a link at the
+place of the file instead of writing through it. The temporary file is
+given the permissions a new file would have (`mkstemp` makes it readable by
+its owner only, and the website must be readable by the server).
+
+    # in write a JSON file of the archive:
+    def unlinked(path):
+        """PATH, after checking that no folder on its way from the archive root, nor PATH itself,
+        is a symbolic link; stops otherwise. A path outside the archive is not checked."""
+        p = Path(path)
+        if ROOT is None:
+            return p
+        full = p if p.is_absolute() else Path.cwd() / p
+        try:
+            rel = full.relative_to(ROOT)
+        except ValueError:
+            return p
+        if ".." in rel.parts:
+            stop(f"{rel}: a path of the archive with .. in it: nothing is written there")
+        at = ROOT
+        for part in rel.parts:
+            at = at / part
+            if at.is_symlink():
+                stop(f"{at.relative_to(ROOT)} is a symbolic link: the tools write and delete nothing "
+                     "through links in the archive (remove the link, or put the folder in its place)")
+        return p
+
+
+    def write_file(path, data):
+        """Write DATA (bytes or text, in UTF-8) to the file PATH of the archive, atomically."""
+        path = unlinked(path)
         path.parent.mkdir(parents=True, exist_ok=True)
-        with open(path, "wb") as f:
-            f.write(json_bytes(data))
+        if isinstance(data, str):
+            data = data.encode("utf-8")
+        fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
+        try:
+            with os.fdopen(fd, "wb") as f:
+                f.write(data)
+            umask = os.umask(0)
+            os.umask(umask)
+            os.chmod(tmp, 0o666 & ~umask)
+            os.replace(tmp, path)
+        except BaseException:
+            if os.path.exists(tmp):
+                os.unlink(tmp)
+            raise
 
 Times are in UTC, to the second, with a `Z`, as OCFL writes the `created`
 time of a version.
@@ -847,15 +905,16 @@ layout, is authoritative. Creating the root is idempotent.
 
     # in create the OCFL storage root:
     def init_storage_root():
-        OCFL.mkdir(parents=True, exist_ok=True)
-        (OCFL / "0=ocfl_1.1").write_text("ocfl_1.1\n")
+        unlinked(OCFL).mkdir(parents=True, exist_ok=True)
+        if not (OCFL / "0=ocfl_1.1").is_file():
+            write_file(OCFL / "0=ocfl_1.1", "ocfl_1.1\n")
         if LAYOUT == HASHED_LAYOUT:
             write_json(OCFL / "ocfl_layout.json", {
                 "extension": HASHED_LAYOUT,
                 "description": "Hashed n-tuple storage layout with its default parameters "
                                "(OpenSheaf 0.2, section 3.2)"})
         elif not (OCFL / LAYOUT_FILE).exists():
-            (OCFL / LAYOUT_FILE).write_text(LAYOUT_TEXT, encoding="utf-8")
+            write_file(OCFL / LAYOUT_FILE, LAYOUT_TEXT)
 
 The root inventory of an object, or `None` for an object not yet created
 or one whose inventory cannot be read, which [verification](17-verify.md)
@@ -1109,16 +1168,16 @@ witness folder of the version, then the new root inventory.
                 os.rename(wdir, new / sign.WITNESSES / ver)
             (new / "inventory.json").write_bytes(data)
             (new / "inventory.json.sha512").write_bytes(sidecar)
-            d.parent.mkdir(parents=True, exist_ok=True)
+            unlinked(d).parent.mkdir(parents=True, exist_ok=True)
             os.rename(new, d)
         else:
-            os.rename(stage / ver, d / ver)
+            os.rename(stage / ver, unlinked(d / ver))
             if not draft:
-                (d / sign.WITNESSES).mkdir(parents=True, exist_ok=True)
-                os.rename(wdir, d / sign.WITNESSES / ver)
+                unlinked(d / sign.WITNESSES).mkdir(parents=True, exist_ok=True)
+                os.rename(wdir, unlinked(d / sign.WITNESSES / ver))
             for name, b in (("inventory.json", data), ("inventory.json.sha512", sidecar)):
                 (stage / name).write_bytes(b)
-                os.replace(stage / name, d / name)
+                os.replace(stage / name, unlinked(d / name))
 
 A version built in a staging folder is added only if the line has not
 moved meanwhile: its head must still be the version before. The staging

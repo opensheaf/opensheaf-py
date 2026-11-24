@@ -119,8 +119,9 @@ The command line and the tests
     files.
 29. [The tests](70-tests.md),
 30. [the tests of names, owners, keys and signatures](71-tests-identity.md),
-31. [the tests across archives](72-tests-across.md), and
-32. [the tests of key wallets](73-tests-wallets.md).
+31. [the tests across archives](72-tests-across.md),
+32. [the tests of key wallets](73-tests-wallets.md), and
+33. [the tests of paths, links and malformed files](74-tests-paths.md).
 
 The literate tools, tangling and weaving, are described in their own
 literate program, [opensheaf-literate](https://opensheaf.org/literate/).

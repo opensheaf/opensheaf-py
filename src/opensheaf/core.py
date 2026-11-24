@@ -327,15 +327,13 @@ def move_html_version(obj_id, before, after, former):
     if dst.exists():
         if not redirect_only(dst, after):
             sys.exit(f"{dst} is in the way of the HTML version of {obj_id}")
-        shutil.rmtree(dst)
-    src.rename(dst)
-    (dst / f"{before}.html").rename(dst / f"{after}.html")
+        shutil.rmtree(unlinked(dst))
+    unlinked(src).rename(unlinked(dst))
+    (dst / f"{before}.html").rename(unlinked(dst / f"{after}.html"))
     for address, i in former.items():
         if i == obj_id and LABEL_RE.match(address):
-            (SITE / address).mkdir(parents=True, exist_ok=True)
-            (SITE / address / f"{address}.html").write_text(
-                html.redirect_page(f"../{after}/{after}.html", f"{ARCHIVE['baseUrl']}site/{after}/{after}.html"),
-                encoding="utf-8")
+            write_file(SITE / address / f"{address}.html", html.redirect_page(
+                f"../{after}/{after}.html", f"{ARCHIVE['baseUrl']}site/{after}/{after}.html"))
 
 
 def redirect_only(folder, address):
@@ -358,9 +356,49 @@ def json_bytes(data):
 
 
 def write_json(path, data):
+    write_file(path, json_bytes(data))
+
+
+def unlinked(path):
+    """PATH, after checking that no folder on its way from the archive root, nor PATH itself,
+    is a symbolic link; stops otherwise. A path outside the archive is not checked."""
+    p = Path(path)
+    if ROOT is None:
+        return p
+    full = p if p.is_absolute() else Path.cwd() / p
+    try:
+        rel = full.relative_to(ROOT)
+    except ValueError:
+        return p
+    if ".." in rel.parts:
+        stop(f"{rel}: a path of the archive with .. in it: nothing is written there")
+    at = ROOT
+    for part in rel.parts:
+        at = at / part
+        if at.is_symlink():
+            stop(f"{at.relative_to(ROOT)} is a symbolic link: the tools write and delete nothing "
+                 "through links in the archive (remove the link, or put the folder in its place)")
+    return p
+
+
+def write_file(path, data):
+    """Write DATA (bytes or text, in UTF-8) to the file PATH of the archive, atomically."""
+    path = unlinked(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "wb") as f:
-        f.write(json_bytes(data))
+    if isinstance(data, str):
+        data = data.encode("utf-8")
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
+        umask = os.umask(0)
+        os.umask(umask)
+        os.chmod(tmp, 0o666 & ~umask)
+        os.replace(tmp, path)
+    except BaseException:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+        raise
 
 
 def now():
@@ -392,15 +430,16 @@ def obj_dir(obj_id):
 
 
 def init_storage_root():
-    OCFL.mkdir(parents=True, exist_ok=True)
-    (OCFL / "0=ocfl_1.1").write_text("ocfl_1.1\n")
+    unlinked(OCFL).mkdir(parents=True, exist_ok=True)
+    if not (OCFL / "0=ocfl_1.1").is_file():
+        write_file(OCFL / "0=ocfl_1.1", "ocfl_1.1\n")
     if LAYOUT == HASHED_LAYOUT:
         write_json(OCFL / "ocfl_layout.json", {
             "extension": HASHED_LAYOUT,
             "description": "Hashed n-tuple storage layout with its default parameters "
                            "(OpenSheaf 0.2, section 3.2)"})
     elif not (OCFL / LAYOUT_FILE).exists():
-        (OCFL / LAYOUT_FILE).write_text(LAYOUT_TEXT, encoding="utf-8")
+        write_file(OCFL / LAYOUT_FILE, LAYOUT_TEXT)
 
 
 def load_inventory(obj_dir):
@@ -705,16 +744,16 @@ def move_staged(d, stage, ver, draft):
             os.rename(wdir, new / sign.WITNESSES / ver)
         (new / "inventory.json").write_bytes(data)
         (new / "inventory.json.sha512").write_bytes(sidecar)
-        d.parent.mkdir(parents=True, exist_ok=True)
+        unlinked(d).parent.mkdir(parents=True, exist_ok=True)
         os.rename(new, d)
     else:
-        os.rename(stage / ver, d / ver)
+        os.rename(stage / ver, unlinked(d / ver))
         if not draft:
-            (d / sign.WITNESSES).mkdir(parents=True, exist_ok=True)
-            os.rename(wdir, d / sign.WITNESSES / ver)
+            unlinked(d / sign.WITNESSES).mkdir(parents=True, exist_ok=True)
+            os.rename(wdir, unlinked(d / sign.WITNESSES / ver))
         for name, b in (("inventory.json", data), ("inventory.json.sha512", sidecar)):
             (stage / name).write_bytes(b)
-            os.replace(stage / name, d / name)
+            os.replace(stage / name, unlinked(d / name))
 
 
 def install_version(obj_id, stage):
@@ -830,7 +869,7 @@ def check_before_extending(obj_id, d, inv, acknowledged=False):
 def run_texmacs(calls):
     """Run Scheme CALLS in a headless TeXmacs with the private profile."""
     tm = os.environ.get("TEXMACS_BIN", "/Applications/TeXmacs.app/Contents/MacOS/TeXmacs")
-    TM_HOME.mkdir(exist_ok=True)
+    unlinked(TM_HOME).mkdir(exist_ok=True)
     if not (TM_HOME / "plugins").exists():
         (TM_HOME / "plugins").symlink_to(USER_PLUGINS)
     for p in TEXMACS.get("plugins", []):
@@ -842,10 +881,10 @@ def run_texmacs(calls):
         # the first start sets the profile up and would discard preferences
         subprocess.run([tm, "-headless", "-x", "(quit-TeXmacs)"], env=env,
                        capture_output=True, timeout=600, cwd=tempfile.gettempdir())
-    (TM_HOME / "system" / "preferences.scm").write_text(
-        '("texmacs->html:images" "off")\n'
-        '("texmacs->html:mathjax" "on")\n'
-        '("texmacs->html:mathml" "off")\n')
+    write_file(TM_HOME / "system" / "preferences.scm",
+               '("texmacs->html:images" "off")\n'
+               '("texmacs->html:mathjax" "on")\n'
+               '("texmacs->html:mathml" "off")\n')
     # style-clear-cache: TeXmacs caches style environments in the profile.
     init = f"(load \"{ROOT / TEXMACS['init']}\") " if TEXMACS.get("init") else ""
     cmd = (f"(begin {init}(catch #t (lambda () (style-clear-cache) {calls}) (lambda args"
@@ -905,9 +944,9 @@ def typeset(source, obj_id, pdf, html_dir):
                                     html=out / f"{obj_id}.html")
     run_texmacs(calls)
     if html_dir is not None:
-        html_dir.mkdir(parents=True, exist_ok=True)
+        unlinked(html_dir).mkdir(parents=True, exist_ok=True)
         for old in html_dir.iterdir():
-            old.unlink()
+            unlinked(old).unlink()
         for f in out.iterdir():
             shutil.copyfile(f, html_dir / f.name)
         for r in TEXMACS.get("htmlResources", []):
@@ -1789,7 +1828,7 @@ def write_discovery():
     if folder.is_dir():
         for f in folder.glob("*.json"):
             if f"{OBJECT_PAGES}/{f.name}" not in pages:
-                f.unlink()
+                unlinked(f).unlink()
         if not any(folder.iterdir()):
             folder.rmdir()
     if pages:
@@ -1945,7 +1984,7 @@ def write_indexes():
         want = files.get(index, {})
         for p in sorted(folder.glob("*.json")) if folder.is_dir() else []:
             if p.stem not in want:
-                p.unlink()
+                unlinked(p).unlink()
         for prefix, data in want.items():
             write_json(folder / f"{prefix}.json", data)
 
@@ -2200,10 +2239,11 @@ def readable_index(args):
               f"{'is' if len(members) - len(here) == 1 else 'are'} left out of index.tm (the website shows "
               "them).", file=sys.stderr)
     entries = "\n\n".join(index_entry(m) for m in here)
-    with open(ROOT / "index.tm", "w", encoding="latin-1", newline="") as f:
+    with open(unlinked(ROOT / "index.tm"), "w", encoding="latin-1", newline="") as f:
         f.write(template.replace(line, entries + "\n"))
-    (ROOT / ".texmacs-noconvert").touch()
+    unlinked(ROOT / ".texmacs-noconvert").touch()
     if not getattr(args, "no_html", False):
+        unlinked(ROOT / "index.html")
         scratch = Path(tempfile.mkdtemp())
         run_texmacs(export_calls(ROOT / "index.tm", pdf=scratch / "index.pdf",
                                  html=ROOT / "index.html"))
@@ -3304,13 +3344,13 @@ def init(args):
             stop(f"{args.key_log} is not a valid key log of {names.short(args.owner)}: " + "; ".join(errors))
         if log.ended:
             stop(f"the owner {names.short(log.owner)} has ended (section 6.3)")
-        owners.write_key_log(obj_dir(log.id), log)
+        owners.write_key_log(unlinked(obj_dir(log.id)), log)
     cfg["owner"] = log.owner
     if getattr(args, "new_owner", False) and wallet_config(args, log.owner):
         cfg["keys"] = wallet_config(args, log.owner)
-    (root / CONFIG_NAME).write_text(json.dumps(cfg, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    write_file(root / CONFIG_NAME, json.dumps(cfg, indent=2, ensure_ascii=False) + "\n")
     if not (root / ".gitattributes").exists():
-        (root / ".gitattributes").write_text(GITATTRIBUTES, encoding="utf-8")
+        write_file(root / ".gitattributes", GITATTRIBUTES)
     if kind == "website":
         from . import html
         (root / "templates").mkdir(exist_ok=True)
@@ -3348,8 +3388,8 @@ def index_template(root, args):
     given = getattr(args, "index_template", None)
     if not given:
         if not (root / "index-template.tm").exists():
-            (root / "index-template.tm").write_text(
-                TEXMACS_INDEX_TEMPLATE.format(title=tm_escape(args.name)), encoding="latin-1")
+            write_file(root / "index-template.tm",
+                       TEXMACS_INDEX_TEMPLATE.format(title=tm_escape(args.name)).encode("latin-1"))
         return "index-template.tm"
     src = Path(given).resolve()
     if not src.is_file():
@@ -3460,7 +3500,7 @@ def wallet_for(args, owner=None):
 
 def write_config(cfg):
     """Write CFG to osheaf.json, and to the settings of this run."""
-    (ROOT / CONFIG_NAME).write_text(json.dumps(cfg, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    write_file(ROOT / CONFIG_NAME, json.dumps(cfg, indent=2, ensure_ascii=False) + "\n")
     for k in ("keys", "formerAddresses", "index"):
         if k in cfg:
             ARCHIVE[k] = cfg[k]
@@ -3721,7 +3761,7 @@ def owner_init(args, done=True):
         store = keys.store_current_key(log.owner, current)
     except (keys.KeyStoreError, OSError) as e:
         stop(str(e))
-    owners.write_key_log(obj_dir(log.id), log)
+    owners.write_key_log(unlinked(obj_dir(log.id)), log)
     kept = f"{w.name} only ({keys.KEY_STORE}=none)" if store == keys.NONE else store_name(store)
     print(f"{'Done: the' if done else 'The'} owner {names.short(log.owner)} is made, with v1 of its key log:")
     print(f"  owner          {log.owner}")
@@ -3744,7 +3784,7 @@ def owner_init_command(args):
             ARCHIVE.setdefault("owners", []).append(log.owner)
             changed = True
         if changed:
-            cfg_path.write_text(json.dumps(cfg, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+            write_file(cfg_path, json.dumps(cfg, indent=2, ensure_ascii=False) + "\n")
         record_wallet(log.owner, getattr(args, "keys", None))
         if log.owner in archive_owners() and log.owner not in CATALOGUES:
             collect(argparse_namespace(owner=log.owner))
@@ -3805,7 +3845,7 @@ def owner_rotate(args, exposed=()):
         except keys.KeyStoreError:
             here = []
         keep_in_wallet(w, owner, new, v.number, args, current=[(k, version_listing(log, k.did)) for k in here])
-    owners.write_key_log(obj_dir(log.id), log)
+    owners.write_key_log(unlinked(obj_dir(log.id)), log)
     write_discovery()
     print(f"Done: v{v.number} of the key log of {who}, signed by {plural(len(signers), 'rotation key')} "
           f"of v{prev.number}:")
@@ -3841,7 +3881,7 @@ def owner_end(args):
                     message=getattr(args, "message", None) or "Owner ended", user=depositor())
     except owners.OwnerError as e:
         stop(str(e))
-    owners.write_key_log(obj_dir(log.id), log)
+    owners.write_key_log(unlinked(obj_dir(log.id)), log)
     write_discovery()
     print(f"Done: the owner {who} has ended, at v{v.number} of its key log" +
           (f"; its successor is {successor}." if successor else "."))
@@ -4602,7 +4642,7 @@ def sign_again(args):
         print(f"Sign it again only if {who} made this version.")
         if not confirmed(dig[:8]):
             stop("not confirmed: nothing was signed")
-    wdir = d / sign.WITNESSES / ver
+    wdir = unlinked(d / sign.WITNESSES / ver)
     wdir.mkdir(parents=True, exist_ok=True)
     pin = log.pin(latest.number)
     for key in fresh:

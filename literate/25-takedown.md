@@ -181,13 +181,13 @@ here. The owner catalogue keeps its member, a pin of a version now removed
         gone = [a for a, i in former.items() if i == obj_id]
         for folder in [P.ROOT / "paper" / home, P.ROOT / "paper" / (label or nm), P.SITE / (label or nm)] + \
                 [P.SITE / a for a in gone if P.LABEL_RE.match(a)]:
-            shutil.rmtree(folder, ignore_errors=True)
+            shutil.rmtree(P.unlinked(folder), ignore_errors=True)
         if gone:
             cfg["formerAddresses"] = {a: i for a, i in former.items() if i != obj_id}
             if not cfg["formerAddresses"]:
                 del cfg["formerAddresses"]
             P.write_config(cfg)
-        shutil.rmtree(d)
+        shutil.rmtree(P.unlinked(d))
         parent = d.parent
         while parent != P.OCFL and not any(parent.iterdir()):
             parent.rmdir()

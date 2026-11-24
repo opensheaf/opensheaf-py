@@ -152,9 +152,9 @@ The command itself:
         cfg["owner"] = log.owner
         if getattr(args, "new_owner", False) and wallet_config(args, log.owner):
             cfg["keys"] = wallet_config(args, log.owner)
-        (root / CONFIG_NAME).write_text(json.dumps(cfg, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        write_file(root / CONFIG_NAME, json.dumps(cfg, indent=2, ensure_ascii=False) + "\n")
         if not (root / ".gitattributes").exists():
-            (root / ".gitattributes").write_text(GITATTRIBUTES, encoding="utf-8")
+            write_file(root / ".gitattributes", GITATTRIBUTES)
         if kind == "website":
             from . import html
             (root / "templates").mkdir(exist_ok=True)
@@ -199,8 +199,8 @@ minimal template is written only if the archive has no
         given = getattr(args, "index_template", None)
         if not given:
             if not (root / "index-template.tm").exists():
-                (root / "index-template.tm").write_text(
-                    TEXMACS_INDEX_TEMPLATE.format(title=tm_escape(args.name)), encoding="latin-1")
+                write_file(root / "index-template.tm",
+                           TEXMACS_INDEX_TEMPLATE.format(title=tm_escape(args.name)).encode("latin-1"))
             return "index-template.tm"
         src = Path(given).resolve()
         if not src.is_file():
@@ -235,7 +235,7 @@ root at the path of its identifier.
             stop(f"{args.key_log} is not a valid key log of {names.short(args.owner)}: " + "; ".join(errors))
         if log.ended:
             stop(f"the owner {names.short(log.owner)} has ended (section 6.3)")
-        owners.write_key_log(obj_dir(log.id), log)
+        owners.write_key_log(unlinked(obj_dir(log.id)), log)
 
 `init` and the commands of owners call other commands directly, which
 expect the arguments of their command. A namespace with the needed

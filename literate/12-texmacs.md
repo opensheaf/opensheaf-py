@@ -90,7 +90,7 @@ images for formulas. TeXmacs itself is the macOS application, unless
 
     # in prepare the private TeXmacs profile of the archive:
     tm = os.environ.get("TEXMACS_BIN", "/Applications/TeXmacs.app/Contents/MacOS/TeXmacs")
-    TM_HOME.mkdir(exist_ok=True)
+    unlinked(TM_HOME).mkdir(exist_ok=True)
     if not (TM_HOME / "plugins").exists():
         (TM_HOME / "plugins").symlink_to(USER_PLUGINS)
     for p in TEXMACS.get("plugins", []):
@@ -102,10 +102,10 @@ images for formulas. TeXmacs itself is the macOS application, unless
         # the first start sets the profile up and would discard preferences
         subprocess.run([tm, "-headless", "-x", "(quit-TeXmacs)"], env=env,
                        capture_output=True, timeout=600, cwd=tempfile.gettempdir())
-    (TM_HOME / "system" / "preferences.scm").write_text(
-        '("texmacs->html:images" "off")\n'
-        '("texmacs->html:mathjax" "on")\n'
-        '("texmacs->html:mathml" "off")\n')
+    write_file(TM_HOME / "system" / "preferences.scm",
+               '("texmacs->html:images" "off")\n'
+               '("texmacs->html:mathjax" "on")\n'
+               '("texmacs->html:mathml" "off")\n')
 
 The Scheme code exporting a document loads it into a buffer and exports
 the buffer to PDF, to HTML, or both, in this order: the PDF export
@@ -191,9 +191,9 @@ the copy is the same bytes as the source but for the style line.
                                         html=out / f"{obj_id}.html")
         run_texmacs(calls)
         if html_dir is not None:
-            html_dir.mkdir(parents=True, exist_ok=True)
+            unlinked(html_dir).mkdir(parents=True, exist_ok=True)
             for old in html_dir.iterdir():
-                old.unlink()
+                unlinked(old).unlink()
             for f in out.iterdir():
                 shutil.copyfile(f, html_dir / f.name)
             for r in TEXMACS.get("htmlResources", []):

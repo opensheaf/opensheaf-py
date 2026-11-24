@@ -187,7 +187,7 @@ would be lost when the command ends.
             store = keys.store_current_key(log.owner, current)
         except (keys.KeyStoreError, OSError) as e:
             stop(str(e))
-        owners.write_key_log(obj_dir(log.id), log)
+        owners.write_key_log(unlinked(obj_dir(log.id)), log)
         kept = f"{w.name} only ({keys.KEY_STORE}=none)" if store == keys.NONE else store_name(store)
         print(f"{'Done: the' if done else 'The'} owner {names.short(log.owner)} is made, with v1 of its key log:")
         print(f"  owner          {log.owner}")
@@ -219,7 +219,7 @@ commands find the keys there.
                 ARCHIVE.setdefault("owners", []).append(log.owner)
                 changed = True
             if changed:
-                cfg_path.write_text(json.dumps(cfg, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+                write_file(cfg_path, json.dumps(cfg, indent=2, ensure_ascii=False) + "\n")
             record_wallet(log.owner, getattr(args, "keys", None))
             if log.owner in archive_owners() and log.owner not in CATALOGUES:
                 collect(argparse_namespace(owner=log.owner))
@@ -356,7 +356,7 @@ command wallet is never recorded
     # in the security level and the wallet of a command:
     def write_config(cfg):
         """Write CFG to osheaf.json, and to the settings of this run."""
-        (ROOT / CONFIG_NAME).write_text(json.dumps(cfg, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        write_file(ROOT / CONFIG_NAME, json.dumps(cfg, indent=2, ensure_ascii=False) + "\n")
         for k in ("keys", "formerAddresses", "index"):
             if k in cfg:
                 ARCHIVE[k] = cfg[k]
@@ -698,7 +698,7 @@ rotation keys are exported and confirmed, and only then is it written.
             except keys.KeyStoreError:
                 here = []
             keep_in_wallet(w, owner, new, v.number, args, current=[(k, version_listing(log, k.did)) for k in here])
-        owners.write_key_log(obj_dir(log.id), log)
+        owners.write_key_log(unlinked(obj_dir(log.id)), log)
         write_discovery()
         print(f"Done: v{v.number} of the key log of {who}, signed by {plural(len(signers), 'rotation key')} "
               f"of v{prev.number}:")
@@ -744,7 +744,7 @@ the wallet, as for a rotation.
                         message=getattr(args, "message", None) or "Owner ended", user=depositor())
         except owners.OwnerError as e:
             stop(str(e))
-        owners.write_key_log(obj_dir(log.id), log)
+        owners.write_key_log(unlinked(obj_dir(log.id)), log)
         write_discovery()
         print(f"Done: the owner {who} has ended, at v{v.number} of its key log" +
               (f"; its successor is {successor}." if successor else "."))
@@ -1775,7 +1775,7 @@ and are added to the witness folder, never replacing one.
             print(f"Sign it again only if {who} made this version.")
             if not confirmed(dig[:8]):
                 stop("not confirmed: nothing was signed")
-        wdir = d / sign.WITNESSES / ver
+        wdir = unlinked(d / sign.WITNESSES / ver)
         wdir.mkdir(parents=True, exist_ok=True)
         pin = log.pin(latest.number)
         for key in fresh:

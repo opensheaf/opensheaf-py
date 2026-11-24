@@ -533,9 +533,7 @@ def render(members, home=True, featured=None, keeper_fetch=None, groups=None):
                 "pdf": esc(pdf_address(root, line, cur, obj) or f"#v{number(obj['documentVersion'])}"),
                 "html_link": html_link}))
         for address in dict.fromkeys([line.home, line.slug]):
-            out = root_out / "paper" / address / "index.html"
-            out.parent.mkdir(parents=True, exist_ok=True)
-            out.write_text(page, encoding="utf-8")
+            P.write_file(root_out / "paper" / address / "index.html", page)
             written.append(address)
         lastmod = str(line.inv["versions"][line.inv["head"]].get("created", ""))[:10]
         lastmod = lastmod if DAY.match(lastmod) else None
@@ -593,19 +591,18 @@ def render(members, home=True, featured=None, keeper_fetch=None, groups=None):
             "papers_heading": papers_heading or ("<h2>In this archive</h2>" if featured else ""),
             "count": str(len(entries)), "updated": esc(fmt_date(datetime.date.today().isoformat())),
         })
-        (root_out / "index.html").write_text(index, encoding="utf-8")
-        shutil.copyfile(template_path("style.css"), root_out / "style.css")
-        (root_out / ".nojekyll").touch()
+        P.write_file(root_out / "index.html", index)
+        P.write_file(root_out / "style.css", template_path("style.css").read_bytes())
+        if not (root_out / ".nojekyll").is_file():
+            P.write_file(root_out / ".nojekyll", b"")
     elif "style.css" in page_t:
-        shutil.copyfile(template_path("style.css"), root_out / "style.css")
+        P.write_file(root_out / "style.css", template_path("style.css").read_bytes())
     owner_pages = []
     for owner in seen_owners:
         if P.key_log(owner) is None:
             continue
         lines = [LINES[i] for i in pages if LINES[i].owner == owner]
-        out = root_out / "owner" / owner / "index.html"
-        out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text(owner_page(owner, lines), encoding="utf-8")
+        P.write_file(root_out / "owner" / owner / "index.html", owner_page(owner, lines))
         owner_pages.append(owner)
         urls.append((f"{base}owner/{owner}/", None))
     sm = ['<?xml version="1.0" encoding="UTF-8"?>',
@@ -613,20 +610,19 @@ def render(members, home=True, featured=None, keeper_fetch=None, groups=None):
     for url, last in urls:
         sm.append(f"  <url><loc>{esc(url)}</loc>" + (f"<lastmod>{last}</lastmod>" if last else "") + "</url>")
     sm.append("</urlset>")
-    (root_out / "sitemap.xml").write_text("\n".join(sm) + "\n", encoding="utf-8")
+    P.write_file(root_out / "sitemap.xml", "\n".join(sm) + "\n")
     moved = []
     for address, obj_id in sorted((P.ARCHIVE.get("formerAddresses") or {}).items()):
         if address in written or obj_id not in pages or not P.LABEL_RE.match(address):
             continue
         slug = LINES[obj_id].slug
-        out = root_out / "paper" / address / "index.html"
-        out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text(redirect_page(f"../{slug}/", f"{base}paper/{slug}/"), encoding="utf-8")
+        P.write_file(root_out / "paper" / address / "index.html",
+                     redirect_page(f"../{slug}/", f"{base}paper/{slug}/"))
         moved.append(address)
     for folder, keep in (("paper", set(written) | set(moved)), ("owner", set(owner_pages))):
         for p in (root_out / folder).glob("*") if (root_out / folder).exists() else []:
-            if p.is_dir() and p.name not in keep:
-                shutil.rmtree(p)
+            if p.is_dir() and not p.is_symlink() and p.name not in keep:
+                shutil.rmtree(P.unlinked(p))
     return len(written)
 
 
