@@ -391,11 +391,33 @@ writes, and `write_discovery` and `render` call it again.
             listed, UNREAD_PAGES = listed_objects(disc, local_page), None
         except ValueError as e:
             listed, UNREAD_PAGES = [], str(e)
-        LABELS = {o["label"]: o["id"] for o in listed if o.get("label")}
+        LABELS = labels_of(listed)
         CATALOGUES = {e["owner"]: e["catalogue"] for e in disc.get("owners", [])
                       if isinstance(e, dict) and e.get("owner") and e.get("catalogue")}
         TOMBSTONES = list(disc.get("tombstones", []))
         return ROOT
+
+
+    def labels_of(listed):
+        """{label: identifier} of the entries LISTED of the discovery document; a label that is not
+        one (section 3.1), or that labels no line or draft, is left out with a warning."""
+        out = {}
+        for o in listed:
+            label, obj_id = o.get("label"), o.get("id")
+            if label is None:
+                continue
+            try:
+                ok = (isinstance(label, str) and LABEL_RE.match(label) and len(label) <= 64
+                      and isinstance(obj_id, str) and path_of(obj_id, OWNER_NAME_LAYOUT))
+            except ValueError:
+                ok = False
+            if not ok:
+                print(f"warning: opensheaf.json: the label {label!r} of {obj_id!r} is not a label of a line "
+                      "(^[a-z0-9]+(-[a-z0-9]+)*$, at most 64 characters): left out (osheaf label gives "
+                      "the line another one)", file=sys.stderr)
+                continue
+            out[label] = obj_id
+        return out
 
 
     def refuse_unread_pages():
@@ -416,6 +438,16 @@ which the index presents them (appendix A.3).
         """The owner names of the owners the archive hosts, its own first."""
         out = [ARCHIVE["owner"]]
         return out + [o for o in ARCHIVE.get("owners", []) if o not in out]
+
+The labels come from the discovery document, which the tools write but
+anyone may edit, and they become paths: `paper/<label>/`, `site/<label>/`,
+links of the TeXmacs index. A label that is not one (`../../escaped`, say)
+would make `osheaf index` write outside the archive. `labels_of` keeps only
+the labels of the form of section 3.1, of the identifier of a line or a
+draft (`path_of` checks it, in the owner-name layout whatever the archive's,
+since only the form of the identifier matters); the others are left out,
+with a warning, and the next discovery document written has them no
+more.
 
 Commands name lines by their labels; a full identifier is accepted too.
 

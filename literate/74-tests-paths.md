@@ -18,6 +18,9 @@ in `tests/test_paths.py`.
 
     <<path tests: symbolic links in the archive>>
 
+
+    <<path tests: labels of the discovery document>>
+
 The imports
 -----------
 
@@ -97,3 +100,27 @@ to a file outside is not overwritten.
         os.umask(umask)
         assert (archive / "x" / "y.txt").stat().st_mode & 0o777 == 0o666 & ~umask
         assert [p.name for p in (archive / "x").iterdir()] == ["y.txt"]
+
+Labels
+------
+
+A label of the discovery document that is not one is left out when the
+archive is configured, with a warning; the index then writes nothing
+outside the archive.
+
+    # in path tests: labels of the discovery document:
+    def test_a_label_that_is_a_path_is_left_out(archive, tmp_path, capsys):
+        put("paper-a", 1, FILES1)
+        finish()
+        disc = json.loads((archive / "opensheaf.json").read_text())
+        for o in disc["objects"]:
+            if o.get("label") == "paper-a":
+                o["label"] = "../../escaped"
+        (archive / "opensheaf.json").write_text(json.dumps(disc))
+        P.configure(archive)
+        assert "../../escaped" not in P.LABELS
+        assert "not a label of a line" in capsys.readouterr().err
+        P.index(P.argparse_namespace(no_html=True))
+        assert not (tmp_path / "escaped").exists()
+        assert not any(o.get("label") == "../../escaped"
+                       for o in json.loads((archive / "opensheaf.json").read_text())["objects"])

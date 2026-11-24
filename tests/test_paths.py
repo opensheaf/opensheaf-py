@@ -64,3 +64,20 @@ def test_files_are_written_whole_with_the_usual_permissions(archive):
     os.umask(umask)
     assert (archive / "x" / "y.txt").stat().st_mode & 0o777 == 0o666 & ~umask
     assert [p.name for p in (archive / "x").iterdir()] == ["y.txt"]
+
+
+def test_a_label_that_is_a_path_is_left_out(archive, tmp_path, capsys):
+    put("paper-a", 1, FILES1)
+    finish()
+    disc = json.loads((archive / "opensheaf.json").read_text())
+    for o in disc["objects"]:
+        if o.get("label") == "paper-a":
+            o["label"] = "../../escaped"
+    (archive / "opensheaf.json").write_text(json.dumps(disc))
+    P.configure(archive)
+    assert "../../escaped" not in P.LABELS
+    assert "not a label of a line" in capsys.readouterr().err
+    P.index(P.argparse_namespace(no_html=True))
+    assert not (tmp_path / "escaped").exists()
+    assert not any(o.get("label") == "../../escaped"
+                   for o in json.loads((archive / "opensheaf.json").read_text())["objects"])

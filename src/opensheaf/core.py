@@ -159,11 +159,33 @@ def configure(root):
         listed, UNREAD_PAGES = listed_objects(disc, local_page), None
     except ValueError as e:
         listed, UNREAD_PAGES = [], str(e)
-    LABELS = {o["label"]: o["id"] for o in listed if o.get("label")}
+    LABELS = labels_of(listed)
     CATALOGUES = {e["owner"]: e["catalogue"] for e in disc.get("owners", [])
                   if isinstance(e, dict) and e.get("owner") and e.get("catalogue")}
     TOMBSTONES = list(disc.get("tombstones", []))
     return ROOT
+
+
+def labels_of(listed):
+    """{label: identifier} of the entries LISTED of the discovery document; a label that is not
+    one (section 3.1), or that labels no line or draft, is left out with a warning."""
+    out = {}
+    for o in listed:
+        label, obj_id = o.get("label"), o.get("id")
+        if label is None:
+            continue
+        try:
+            ok = (isinstance(label, str) and LABEL_RE.match(label) and len(label) <= 64
+                  and isinstance(obj_id, str) and path_of(obj_id, OWNER_NAME_LAYOUT))
+        except ValueError:
+            ok = False
+        if not ok:
+            print(f"warning: opensheaf.json: the label {label!r} of {obj_id!r} is not a label of a line "
+                  "(^[a-z0-9]+(-[a-z0-9]+)*$, at most 64 characters): left out (osheaf label gives "
+                  "the line another one)", file=sys.stderr)
+            continue
+        out[label] = obj_id
+    return out
 
 
 def refuse_unread_pages():
