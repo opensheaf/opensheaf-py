@@ -444,7 +444,10 @@ TeXmacs index lists them together, in the order of the owners.
 Only members held here can be shown in a TeXmacs index: its entries are
 read from the local storage root. A curated owner catalogue with members of
 other archives needs the website, and the members held elsewhere are left
-out of `index.tm`, with a warning.
+out of `index.tm`, with a warning. The text of `index.tm` is made whole,
+in Latin-1 (the entries are escaped into it), before the file is replaced
+(`write_file`): an entry that cannot be written leaves the previous index
+as it was, rather than a file cut short.
 
     # in write the discovery document and the index:
     def readable_index(args):
@@ -481,8 +484,7 @@ out of `index.tm`, with a warning.
                   f"{'is' if len(members) - len(here) == 1 else 'are'} left out of index.tm (the website shows "
                   "them).", file=sys.stderr)
         entries = "\n\n".join(index_entry(m) for m in here)
-        with open(unlinked(ROOT / "index.tm"), "w", encoding="latin-1", newline="") as f:
-            f.write(template.replace(line, entries + "\n"))
+        write_file(ROOT / "index.tm", template.replace(line, entries + "\n").encode("latin-1"))
         unlinked(ROOT / ".texmacs-noconvert").touch()
         if not getattr(args, "no_html", False):
             unlinked(ROOT / "index.html")
@@ -730,6 +732,14 @@ source is linked as such, and the PDF is the one named among the
 renditions, if any. The arXiv identifier gives a link to arXiv. The
 change note of the version, labelled, follows the dates.
 
+Every value taken from the files of the object is text, escaped by
+`tm_escape` before it enters the markup: the label and the service of an
+external record, a date that `fmt_date` leaves as it is, the arXiv
+identifier, the content paths and the label of the line in the links, the
+pin. A label of arXiv such as `v1>><html-javascript|...>` would otherwise
+close the tags around it and add markup of its own to the index and to the
+HTML exported from it.
+
     # in the TeXmacs index entry of a member:
     def index_entry(member):
         obj_id = names.object_id(member["name"], member["owner"])
@@ -741,35 +751,36 @@ change note of the version, labelled, follows the dates.
         dc = read_json(d, inv, "datacite.json", ver)
         pdf = content_path(inv, ver, pdf_of(obj)) if pdf_of(obj) else None
         src = f"ocfl/{at}/" + content_path(inv, ver, obj["mainSource"]) if obj.get("mainSource") else None
-        html = f"site/{label}/{label}.html"
+        x = tm_escape
+        html = x(f"site/{label}/{label}.html")
         texmacs = obj.get("sourceFormat") == "application/x-texmacs"
         title = tm_with_math(dc["titles"][0]["title"])
         authors = tm_escape(authors_of(dc))
         if not authors.endswith("."):
             authors += "."
-        links = [f"<hlink|PDF|ocfl/{at}/{pdf}>"] if pdf else []
+        links = [f"<hlink|PDF|{x(f'ocfl/{at}/{pdf}')}>"] if pdf else []
         if texmacs:
             # links to .tm files become .html links in the HTML export; the source
             # is linked once for TeXmacs and once (.texmacs, exported as .tm) for HTML
             links = [f"<hlink|HTML|{html}>"] + links + [
-                f"<specific|texmacs|<hlink|TeXmacs source|{src}>><specific|html*|<hlink|TeXmacs"
-                f" source|{src[:-3]}.texmacs>>"]
+                f"<specific|texmacs|<hlink|TeXmacs source|{x(src)}>><specific|html*|<hlink|TeXmacs"
+                f" source|{x(src[:-3])}.texmacs>>"]
         elif src:
-            links.append(f"<hlink|LaTeX source|{src}>")
+            links.append(f"<hlink|LaTeX source|{x(src)}>")
         arxiv = arxiv_id(obj, dc)
         if arxiv:
-            links.append(f"<hlink|arXiv:{arxiv}|https://arxiv.org/abs/{arxiv}>")
+            links.append(f"<hlink|arXiv:{x(arxiv)}|{x(f'https://arxiv.org/abs/{arxiv}')}>")
         paras = []
         for desc in dc.get("descriptions", []):
             if desc["descriptionType"] == "Abstract":
                 paras = [tm_with_math(" ".join(p.split())) for p in desc["description"].split("\n\n")]
         abstract = abstract_block(paras) if paras else ""
         first = date_of(dc, "Issued")
-        when = (f"first issued {fmt_date(first)}; " if first else "") + version_line(obj, dc, inv, ver)
+        when = x((f"first issued {fmt_date(first)}; " if first else "") + version_line(obj, dc, inv, ver))
         if changes_note(obj):
             when += f"<next-line>{tm_escape(changes_note(obj))}"
         sep = " \\<cdot\\> "
-        head = f"<hlink|{title}|paper/{label}/>"
+        head = f"<hlink|{title}|{x(f'paper/{label}/')}>"
         return f"""  <\\notes-news-item>
         <with|font-series|bold|{head}>
 
@@ -778,5 +789,5 @@ change note of the version, labelled, follows the dates.
         {sep.join(links)}
 
     {abstract}    <with|font-size|0.84|par-mode|left|{when}<next-line>pin:
-        <hlink|<verbatim|{pin[:32]}...>|ocfl/{at}/{pin_ver}/inventory.json>>
+        <hlink|<verbatim|{x(str(pin)[:32])}...>|{x(f'ocfl/{at}/{pin_ver}/inventory.json')}>>
       </notes-news-item>"""

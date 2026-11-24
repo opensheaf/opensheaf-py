@@ -30,6 +30,9 @@ in `tests/test_paths.py`.
 
     <<path tests: the settings of TeXmacs>>
 
+
+    <<path tests: the TeXmacs index>>
+
 The imports
 -----------
 
@@ -231,3 +234,22 @@ profile and the staging folders out of git.
 
     def test_init_keeps_the_profile_out_of_git(archive):
         assert {"texmacs_home/", ".staging-*"} <= set((archive / ".gitignore").read_text().splitlines())
+
+The TeXmacs index
+-----------------
+
+Metadata of an object enters the TeXmacs index as text: the label of an
+external record that holds markup is escaped, and no tag of its own
+reaches the index.
+
+    # in path tests: the TeXmacs index:
+    def test_metadata_is_escaped_in_the_texmacs_index(archive):
+        put("paper-a", 1, FILES1, available="not a date <b|x>", extra_obj={"external": [
+            {"role": "source", "service": "arXiv", "label": "v1>><html-javascript|alert(1)><with|x|<x",
+             "record": "https://arxiv.org/abs/2601.00001v1>|<x"}]})
+        finish()
+        cdir = P.obj_dir(P.LABELS["main"])
+        m = P.read_json(cdir, P.load_inventory(cdir), "members.json")["members"][0]
+        entry = P.index_entry(m)
+        assert "<html-javascript" not in entry and "<b|x>" not in entry and "<with|x|<x" not in entry
+        assert "v1<gtr><gtr><less>html-javascript" in entry
