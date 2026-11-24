@@ -272,8 +272,11 @@ def unpack(src, dest, base_id):
     notes, files = [], []
     if data[:4] == b"%PDF":
         return "pdf", [], notes
-    with gzip.GzipFile(fileobj=io.BytesIO(data)) as g:
-        raw = g.read(MAX_UNPACKED + 1)
+    try:
+        with gzip.GzipFile(fileobj=io.BytesIO(data)) as g:
+            raw = g.read(MAX_UNPACKED + 1)
+    except (OSError, EOFError, ValueError) as e:
+        sys.exit(f"{src}: neither a PDF nor a gzip file ({e}); refused")
     if len(raw) > MAX_UNPACKED:
         sys.exit(f"{src}: expands to more than {MAX_UNPACKED >> 20} MiB; refused (section 15)")
     try:
@@ -290,7 +293,7 @@ def unpack(src, dest, base_id):
         return "single", [(f"source/{name}", p)], notes
     if sum(m.size for m in members if m.isfile()) > MAX_UNPACKED:
         sys.exit(f"{src}: its files add up to more than {MAX_UNPACKED >> 20} MiB; refused (section 15)")
-    seen = set()
+    seen, folders = set(), set()
     for m in members:
         if m.isdir():
             continue
@@ -301,10 +304,16 @@ def unpack(src, dest, base_id):
         if logical is None:
             notes.append(f"skipped unsafe path {m.name}")
             continue
-        if logical.lower() in seen:
-            notes.append(f"skipped {m.name}: differs only in case from another file")
+        key = unicodedata.normalize("NFC", logical).lower()
+        if key in seen:
+            notes.append(f"skipped {m.name}: differs only in case or Unicode normalisation from another file")
             continue
-        seen.add(logical.lower())
+        parents = ["/".join(key.split("/")[:k]) for k in range(1, key.count("/") + 1)]
+        if key in folders or any(x in seen for x in parents):
+            notes.append(f"skipped {m.name}: a file and a folder of the same name")
+            continue
+        seen.add(key)
+        folders.update(parents)
         p = dest / "f" / logical
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_bytes(tf.extractfile(m).read())
@@ -447,147 +456,149 @@ def import_paper(folder, taken, report, dry, texmacs=None, licences=None, existi
             continue
         docn += 1
         tmp = Path(tempfile.mkdtemp())
-        if srcs:
-            kind, files, notes = unpack(srcs[0], tmp, aid)
-        else:
-            kind, files, notes = "pdf", [], ["source withheld on arXiv"]
-        tm_spec = texmacs.get(f"{aid}{vid}")
-        alongside = False
-        if tm_spec:
-            notes = notes + [x for x in (tm_spec.get("adjusted"), tm_spec.get("bibNote")) if x]
-            if kind == "pdf":
-                kind, files = "texmacs", texmacs_files(tm_spec, tmp)
-            elif tm_spec.get("mode") == "alongside":
-                # arXiv has the LaTeX export: keep it in source/, the TeXmacs
-                # original goes to texmacs/ and becomes the main source
-                alongside = True
-                latex_files = files
-                tm_files = texmacs_files(tm_spec, tmp, "texmacs")
-                files = latex_files + tm_files
+        try:
+            if srcs:
+                kind, files, notes = unpack(srcs[0], tmp, aid)
             else:
-                sys.exit(f"{aid}{vid}: a TeXmacs source is given but arXiv has a {kind} source")
-        vinfo.update(kind=kind, files=len(files), notes=notes)
-        main = main_tex(files) if kind == "tar" else (files[0][0] if files else None)
-        if alongside:
-            vinfo["latexMain"] = main_tex(latex_files) if kind == "tar" else latex_files[0][0]
-            main, fmt = tm_files[0][0], "application/x-texmacs"
-        elif kind == "texmacs":
-            fmt = "application/x-texmacs"
-        elif kind == "pdf":
-            main, fmt = None, None
-        else:
-            fmt = "application/x-tex"
-            if main is None:
-                vinfo["notes"].append("no main TeX file found")
-                main = files[0][0]
-        vinfo["main"] = main
-        content = {lg: p for lg, p in files}
-        content["paper.pdf"] = pdf
-        received = [pdf] + srcs
-        formats = ["application/pdf"] + {"pdf": [], "texmacs": ["application/x-texmacs", "application/x-bibtex"]
-                                         if len(files) > 1 else ["application/x-texmacs"]}.get(kind, ["application/x-tex"])
-        if alongside:
-            formats += ["application/x-texmacs"] + (["application/x-bibtex"] if len(tm_files) > 1 else [])
-        related = [{"relatedIdentifier": f"arXiv:{aid}{vid}", "relatedIdentifierType": "arXiv",
-                    "relationType": "IsIdenticalTo"},
-                   {"relatedIdentifier": f"10.48550/arXiv.{aid}", "relatedIdentifierType": "DOI",
-                    "relationType": "IsVersionOf"}]
-        comments = licences[f"{aid}{vid}"].get("comments")
-        if rec["doi"]:
-            # the last arXiv version may be the published version itself
-            published = (n == len(rec["versions"]) and comments
-                         and re.search(r"published version", comments, re.I))
-            for doi in rec["doi"].split():
-                related.append({"relatedIdentifier": doi, "relatedIdentifierType": "DOI",
-                                "relationType": "IsIdenticalTo" if published else "IsPreprintOf"})
-        # titles and abstracts: plain text with mathematics in $...$; the
-        # authors' macros are replaced from the preamble of this version's source
-        tex_main = main if fmt == "application/x-tex" else vinfo.get("latexMain")
-        macros = {}
-        if tex_main:
-            macros = preamble_macros(dict(files)[tex_main].read_text(encoding="latin-1"))
-        title, abstract = clean_text(rec["title"], macros), clean_text(rec["abstract"], macros)
-        left = unknown_macros(abstract)
-        if left:
-            vinfo["notes"].append("macros in the abstract not defined in the source: " + ", ".join(left))
-        datacite = {
-            "titles": [{"title": title}],
-            "creators": [creator(a) for a in rec["authors"]],
-            "publisher": {"name": P.ARCHIVE["name"]},
-            "publicationYear": int(first_date[:4]),
-            "types": {"resourceTypeGeneral": "Preprint"},
-            "version": str(docn),
-            "url": P.landing_url(obj_id) if obj_id else None,
-            "dates": [{"date": first_date, "dateType": "Issued"},
-                      {"date": v["date"][:10], "dateType": "Available"}],
-            "language": "en",
-            "formats": formats,
-            "subjects": [{"subject": c, "subjectScheme": "arXiv"} for c in rec["categories"]],
-            "rightsList": [rights],
-            "descriptions": [{"description": abstract, "descriptionType": "Abstract"}],
-            "relatedIdentifiers": related,
-        }
-        if rec["journal"]:
-            datacite["descriptions"].append({"description": f"Journal reference: {rec['journal']}",
-                                             "descriptionType": "SeriesInformation"})
-        owner = obj_id.split(":")[2] if obj_id else P.ARCHIVE["owner"]
-        obj = {
-            "format": P.OBJ_FORMAT, "specification": P.SPEC, "kind": "document",
-            "name": obj_id.split(":")[1] if obj_id else None, "owner": owner, "documentVersion": docn,
-        }
-        if main:
-            obj.update(mainSource=main, sourceFormat=fmt)
-        else:
-            obj["sourcesMissing"] = {"text": "arXiv keeps only the PDF of this version"
-                                     if srcs else "the source of this version is withheld on arXiv"}
-        obj["renditions"] = [{"path": "paper.pdf", "mediaType": "application/pdf"}]
-        if tm_spec:
-            obj["toolchain"] = [{"name": "TeXmacs", "version": tm_version(tm_spec)}]
-        if comments:
-            obj["changes"] = {"text": clean_text(comments)}
-        obj["external"] = [{"role": "source", "service": "arXiv", "record": f"https://arxiv.org/abs/{aid}{vid}",
-                            "doi": f"10.48550/arXiv.{aid}", "label": vid,
-                            "files": [{"name": f.name, "sha512": sha(f, "sha512"), "md5": sha(f, "md5"),
-                                       "bytes": f.stat().st_size} for f in received]}]
-        obj["status"] = "active"
-        if agreement:
-            obj["agreement"] = {"by": agreement.get("by") or [c["name"] for c in datacite["creators"]],
-                                "date": P.TODAY, "method": agreement["method"]}
-        if not dry:
-            if obj_id is None:
-                genesis, obj_id = P.seal("document", owner)
-                obj["name"] = obj_id.split(":")[1]
-                P.LABELS[label] = obj_id
-            datacite["url"] = P.landing_url(obj_id)
-            d = P.obj_dir(obj_id)
-            inv0 = P.load_inventory(d)
-            if inv0 is not None:
-                genesis = P.read_logical(d, inv0, P.GENESIS).read_bytes()
-            content[P.GENESIS] = genesis
-            P.carry_forward(P.read_json(d, inv0, P.OBJ) if inv0 else None, obj, inv0, P.next_object_version(inv0))
-            for lp, f in P.carried_files(obj_id, inv0).items():
-                content.setdefault(lp, f)
-            content["datacite.json"] = P.json_bytes(datacite)
-            msg = f"Imported from arXiv: {aid}{vid} of {v['date'][:10]}"
-            if tm_spec and alongside:
-                msg += ("; with the TeXmacs original, from the authors' files, in texmacs/ (arXiv's"
-                        " source in source/ is its LaTeX export)")
-            elif tm_spec:
-                msg += ("; the TeXmacs source, from the authors' files, replaces the PDF that arXiv"
-                        " has as source (the PDF is arXiv's)")
-            if tm_spec and tm_spec.get("adjusted"):
-                msg += "; the TeXmacs file was adjusted to match the submission: " + tm_spec["adjusted"]
-            inv = P.add_version(obj_id, content, obj, msg)
-            P.write_discovery()
-            vinfo["object_version"] = inv["head"]
-            if tm_spec and n == len(rec["versions"]):
-                # the HTML version of the head, as for the archive's TeXmacs deposits
-                P.typeset(Path(tm_spec["tm"]), label, tmp / "check.pdf", P.SITE / label)
-                vinfo["html"] = True
-            elif n == len(rec["versions"]) and (P.SITE / label).exists():
-                # the head has no TeXmacs source: no HTML version of it
-                shutil.rmtree(P.SITE / label)
-        shutil.rmtree(tmp, ignore_errors=True)
+                kind, files, notes = "pdf", [], ["source withheld on arXiv"]
+            tm_spec = texmacs.get(f"{aid}{vid}")
+            alongside = False
+            if tm_spec:
+                notes = notes + [x for x in (tm_spec.get("adjusted"), tm_spec.get("bibNote")) if x]
+                if kind == "pdf":
+                    kind, files = "texmacs", texmacs_files(tm_spec, tmp)
+                elif tm_spec.get("mode") == "alongside":
+                    # arXiv has the LaTeX export: keep it in source/, the TeXmacs
+                    # original goes to texmacs/ and becomes the main source
+                    alongside = True
+                    latex_files = files
+                    tm_files = texmacs_files(tm_spec, tmp, "texmacs")
+                    files = latex_files + tm_files
+                else:
+                    sys.exit(f"{aid}{vid}: a TeXmacs source is given but arXiv has a {kind} source")
+            vinfo.update(kind=kind, files=len(files), notes=notes)
+            main = main_tex(files) if kind == "tar" else (files[0][0] if files else None)
+            if alongside:
+                vinfo["latexMain"] = main_tex(latex_files) if kind == "tar" else latex_files[0][0]
+                main, fmt = tm_files[0][0], "application/x-texmacs"
+            elif kind == "texmacs":
+                fmt = "application/x-texmacs"
+            elif kind == "pdf":
+                main, fmt = None, None
+            else:
+                fmt = "application/x-tex"
+                if main is None:
+                    vinfo["notes"].append("no main TeX file found")
+                    main = files[0][0]
+            vinfo["main"] = main
+            content = {lg: p for lg, p in files}
+            content["paper.pdf"] = pdf
+            received = [pdf] + srcs
+            formats = ["application/pdf"] + {"pdf": [], "texmacs": ["application/x-texmacs", "application/x-bibtex"]
+                                             if len(files) > 1 else ["application/x-texmacs"]}.get(kind, ["application/x-tex"])
+            if alongside:
+                formats += ["application/x-texmacs"] + (["application/x-bibtex"] if len(tm_files) > 1 else [])
+            related = [{"relatedIdentifier": f"arXiv:{aid}{vid}", "relatedIdentifierType": "arXiv",
+                        "relationType": "IsIdenticalTo"},
+                       {"relatedIdentifier": f"10.48550/arXiv.{aid}", "relatedIdentifierType": "DOI",
+                        "relationType": "IsVersionOf"}]
+            comments = licences[f"{aid}{vid}"].get("comments")
+            if rec["doi"]:
+                # the last arXiv version may be the published version itself
+                published = (n == len(rec["versions"]) and comments
+                             and re.search(r"published version", comments, re.I))
+                for doi in rec["doi"].split():
+                    related.append({"relatedIdentifier": doi, "relatedIdentifierType": "DOI",
+                                    "relationType": "IsIdenticalTo" if published else "IsPreprintOf"})
+            # titles and abstracts: plain text with mathematics in $...$; the
+            # authors' macros are replaced from the preamble of this version's source
+            tex_main = main if fmt == "application/x-tex" else vinfo.get("latexMain")
+            macros = {}
+            if tex_main:
+                macros = preamble_macros(dict(files)[tex_main].read_text(encoding="latin-1"))
+            title, abstract = clean_text(rec["title"], macros), clean_text(rec["abstract"], macros)
+            left = unknown_macros(abstract)
+            if left:
+                vinfo["notes"].append("macros in the abstract not defined in the source: " + ", ".join(left))
+            datacite = {
+                "titles": [{"title": title}],
+                "creators": [creator(a) for a in rec["authors"]],
+                "publisher": {"name": P.ARCHIVE["name"]},
+                "publicationYear": int(first_date[:4]),
+                "types": {"resourceTypeGeneral": "Preprint"},
+                "version": str(docn),
+                "url": P.landing_url(obj_id) if obj_id else None,
+                "dates": [{"date": first_date, "dateType": "Issued"},
+                          {"date": v["date"][:10], "dateType": "Available"}],
+                "language": "en",
+                "formats": formats,
+                "subjects": [{"subject": c, "subjectScheme": "arXiv"} for c in rec["categories"]],
+                "rightsList": [rights],
+                "descriptions": [{"description": abstract, "descriptionType": "Abstract"}],
+                "relatedIdentifiers": related,
+            }
+            if rec["journal"]:
+                datacite["descriptions"].append({"description": f"Journal reference: {rec['journal']}",
+                                                 "descriptionType": "SeriesInformation"})
+            owner = obj_id.split(":")[2] if obj_id else P.ARCHIVE["owner"]
+            obj = {
+                "format": P.OBJ_FORMAT, "specification": P.SPEC, "kind": "document",
+                "name": obj_id.split(":")[1] if obj_id else None, "owner": owner, "documentVersion": docn,
+            }
+            if main:
+                obj.update(mainSource=main, sourceFormat=fmt)
+            else:
+                obj["sourcesMissing"] = {"text": "arXiv keeps only the PDF of this version"
+                                         if srcs else "the source of this version is withheld on arXiv"}
+            obj["renditions"] = [{"path": "paper.pdf", "mediaType": "application/pdf"}]
+            if tm_spec:
+                obj["toolchain"] = [{"name": "TeXmacs", "version": tm_version(tm_spec)}]
+            if comments:
+                obj["changes"] = {"text": clean_text(comments)}
+            obj["external"] = [{"role": "source", "service": "arXiv", "record": f"https://arxiv.org/abs/{aid}{vid}",
+                                "doi": f"10.48550/arXiv.{aid}", "label": vid,
+                                "files": [{"name": f.name, "sha512": sha(f, "sha512"), "md5": sha(f, "md5"),
+                                           "bytes": f.stat().st_size} for f in received]}]
+            obj["status"] = "active"
+            if agreement:
+                obj["agreement"] = {"by": agreement.get("by") or [c["name"] for c in datacite["creators"]],
+                                    "date": P.TODAY, "method": agreement["method"]}
+            if not dry:
+                if obj_id is None:
+                    genesis, obj_id = P.seal("document", owner)
+                    obj["name"] = obj_id.split(":")[1]
+                    P.LABELS[label] = obj_id
+                datacite["url"] = P.landing_url(obj_id)
+                d = P.obj_dir(obj_id)
+                inv0 = P.load_inventory(d)
+                if inv0 is not None:
+                    genesis = P.read_logical(d, inv0, P.GENESIS).read_bytes()
+                content[P.GENESIS] = genesis
+                P.carry_forward(P.read_json(d, inv0, P.OBJ) if inv0 else None, obj, inv0, P.next_object_version(inv0))
+                for lp, f in P.carried_files(obj_id, inv0).items():
+                    content.setdefault(lp, f)
+                content["datacite.json"] = P.json_bytes(datacite)
+                msg = f"Imported from arXiv: {aid}{vid} of {v['date'][:10]}"
+                if tm_spec and alongside:
+                    msg += ("; with the TeXmacs original, from the authors' files, in texmacs/ (arXiv's"
+                            " source in source/ is its LaTeX export)")
+                elif tm_spec:
+                    msg += ("; the TeXmacs source, from the authors' files, replaces the PDF that arXiv"
+                            " has as source (the PDF is arXiv's)")
+                if tm_spec and tm_spec.get("adjusted"):
+                    msg += "; the TeXmacs file was adjusted to match the submission: " + tm_spec["adjusted"]
+                inv = P.add_version(obj_id, content, obj, msg)
+                P.write_discovery()
+                vinfo["object_version"] = inv["head"]
+                if tm_spec and n == len(rec["versions"]):
+                    # the HTML version of the head, as for the archive's TeXmacs deposits
+                    P.typeset(Path(tm_spec["tm"]), label, tmp / "check.pdf", P.SITE / label)
+                    vinfo["html"] = True
+                elif n == len(rec["versions"]) and (P.SITE / label).exists():
+                    # the head has no TeXmacs source: no HTML version of it
+                    shutil.rmtree(P.SITE / label)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
     info["id"] = obj_id
     report.append(info)
     kinds = ",".join(x.get("kind", "?") for x in info["versions"])

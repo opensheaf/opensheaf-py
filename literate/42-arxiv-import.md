@@ -130,7 +130,14 @@ An archive from elsewhere is untrusted (section 15 of the specification).
 Only regular files are extracted: links and devices are skipped and noted.
 A path containing `..` is refused, and a leading `/` is dropped; a path
 that differs only in case from one already extracted is skipped too, since
-the archive may be kept on a file system that does not distinguish them.
+the archive may be kept on a file system that does not distinguish them,
+and so is one that differs only in its Unicode normalisation (`é` as one
+character or as `e` and an accent), which the file systems of macOS do not
+distinguish either: paths are compared in NFC, lower case. A file whose
+path is a folder of another one already extracted (a file `a` and a file
+`a/b`), or the other way round, is skipped as well: both cannot be written.
+An e-print that is neither a PDF nor gzip (an HTML page of errors, say) is
+refused with a message.
 
 An archive may also be made to expand to an excessive size, a few
 kilobytes of gzip giving gigabytes of zeros, or to hold a very large
@@ -155,8 +162,11 @@ otherwise decompress without limit, is kept as a single file.
         notes, files = [], []
         if data[:4] == b"%PDF":
             return "pdf", [], notes
-        with gzip.GzipFile(fileobj=io.BytesIO(data)) as g:
-            raw = g.read(MAX_UNPACKED + 1)
+        try:
+            with gzip.GzipFile(fileobj=io.BytesIO(data)) as g:
+                raw = g.read(MAX_UNPACKED + 1)
+        except (OSError, EOFError, ValueError) as e:
+            sys.exit(f"{src}: neither a PDF nor a gzip file ({e}); refused")
         if len(raw) > MAX_UNPACKED:
             sys.exit(f"{src}: expands to more than {MAX_UNPACKED >> 20} MiB; refused (section 15)")
         try:
@@ -173,7 +183,7 @@ otherwise decompress without limit, is kept as a single file.
             return "single", [(f"source/{name}", p)], notes
         if sum(m.size for m in members if m.isfile()) > MAX_UNPACKED:
             sys.exit(f"{src}: its files add up to more than {MAX_UNPACKED >> 20} MiB; refused (section 15)")
-        seen = set()
+        seen, folders = set(), set()
         for m in members:
             if m.isdir():
                 continue
@@ -184,10 +194,16 @@ otherwise decompress without limit, is kept as a single file.
             if logical is None:
                 notes.append(f"skipped unsafe path {m.name}")
                 continue
-            if logical.lower() in seen:
-                notes.append(f"skipped {m.name}: differs only in case from another file")
+            key = unicodedata.normalize("NFC", logical).lower()
+            if key in seen:
+                notes.append(f"skipped {m.name}: differs only in case or Unicode normalisation from another file")
                 continue
-            seen.add(logical.lower())
+            parents = ["/".join(key.split("/")[:k]) for k in range(1, key.count("/") + 1)]
+            if key in folders or any(x in seen for x in parents):
+                notes.append(f"skipped {m.name}: a file and a folder of the same name")
+                continue
+            seen.add(key)
+            folders.update(parents)
             p = dest / "f" / logical
             p.parent.mkdir(parents=True, exist_ok=True)
             p.write_bytes(tf.extractfile(m).read())
@@ -310,15 +326,18 @@ printed line per paper.
         <<arXiv: the last document version deposited>>
         for n, v in enumerate(rec["versions"], 1):
             <<arXiv: skip a version, or note its licence>>
-            <<arXiv: the sources of a version>>
-            <<arXiv: the main source and its format>>
-            <<arXiv: the content and the files received>>
-            <<arXiv: the relations of a version>>
-            <<arXiv: the title and abstract of a version>>
-            <<arXiv: the datacite.json of a version>>
-            <<arXiv: the object.json of a version>>
-            <<arXiv: commit an imported version>>
-            shutil.rmtree(tmp, ignore_errors=True)
+            tmp = Path(tempfile.mkdtemp())
+            try:
+                <<arXiv: the sources of a version>>
+                <<arXiv: the main source and its format>>
+                <<arXiv: the content and the files received>>
+                <<arXiv: the relations of a version>>
+                <<arXiv: the title and abstract of a version>>
+                <<arXiv: the datacite.json of a version>>
+                <<arXiv: the object.json of a version>>
+                <<arXiv: commit an imported version>>
+            finally:
+                shutil.rmtree(tmp, ignore_errors=True)
         info["id"] = obj_id
         report.append(info)
         kinds = ",".join(x.get("kind", "?") for x in info["versions"])
@@ -388,7 +407,8 @@ takes no document version number.
         continue
     docn += 1
 
-The sources are unpacked into a temporary folder. A version without an
+The sources are unpacked into a temporary folder, removed however the
+version ends, an import stopped by an e-print it refuses included. A version without an
 e-print is taken to be one whose source arXiv withholds. A TeXmacs original
 found elsewhere either takes the place of the missing sources, when arXiv
 has only a PDF, or, in mode `alongside`, joins arXiv's LaTeX export: the
@@ -398,7 +418,6 @@ arXiv has, without `alongside`, the import stops: one of the two would be
 lost.
 
     # in arXiv: the sources of a version:
-    tmp = Path(tempfile.mkdtemp())
     if srcs:
         kind, files, notes = unpack(srcs[0], tmp, aid)
     else:

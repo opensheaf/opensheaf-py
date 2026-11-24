@@ -609,6 +609,28 @@ def test_unpack_limits(tmp_path, monkeypatch):
         arxiv.unpack(bomb, tmp_path / "bomb-out", "2611.14296")
 
 
+def test_unpack_names_that_collide(tmp_path):
+    import gzip
+    import io
+    import tarfile
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w") as tf:
+        for n in ("a", "a/b", "c/d", "c", "\u00e9.tex", "e\u0301.tex", "E\u0301.TEX", "main.tex"):
+            ti = tarfile.TarInfo(n)
+            ti.size = 1
+            tf.addfile(ti, io.BytesIO(b"x"))
+    f = tmp_path / "e"
+    f.write_bytes(gzip.compress(buf.getvalue()))
+    kind, files, notes = arxiv.unpack(f, tmp_path / "out", "2611.14296")
+    assert [lp for lp, _ in files] == ["source/a", "source/c/d", "source/\u00e9.tex", "source/main.tex"]
+    assert sum("a file and a folder" in n for n in notes) == 2
+    assert sum("Unicode normalisation" in n for n in notes) == 2
+    html = tmp_path / "html"
+    html.write_bytes(b"<html>rate limited</html>")
+    with pytest.raises(SystemExit, match="neither a PDF nor a gzip file"):
+        arxiv.unpack(html, tmp_path / "out2", "2611.14296")
+
+
 def test_source_kind_reads_one_block(tmp_path, monkeypatch):
     import gzip
     import io
@@ -1663,6 +1685,21 @@ def arxiv_downloads(folder, aid="2611.00001", label="first-paper"):
     (folder / "version-licences.json").write_text(json.dumps({
         f"{aid}v1": {"licence": cc, "comments": "10 pages"}, f"{aid}v2": {"licence": cc, "comments": "11 pages"}}))
     (folder / "identifiers.json").write_text(json.dumps({aid: label}))
+
+
+def test_arxiv_import_cleans_up_when_refused(tmp_path, monkeypatch):
+    import tempfile
+    root = tmp_path / "a"
+    make_archive(root)
+    dl = tmp_path / "downloads"
+    arxiv_downloads(dl)
+    (dl / "papers" / "2611.00001" / "v1-source.gz").write_bytes(b"<html>not an e-print</html>")
+    made = []
+    real = tempfile.mkdtemp
+    monkeypatch.setattr(arxiv.tempfile, "mkdtemp", lambda *a, **k: made.append(real(*a, **k)) or made[-1])
+    with pytest.raises(SystemExit, match="neither a PDF nor a gzip file"):
+        run("--root", str(root), "arxiv", "import", str(dl))
+    assert made and not any(Path(m).exists() for m in made)
 
 
 def test_arxiv_import_of_two_versions(tmp_path):
