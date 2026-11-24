@@ -3988,10 +3988,27 @@ def rotation_signers(args, owner, prev):
     if files:
         return rotation_keys(files, owner), None
     from . import wallet
-    w = configured_wallet(owner) or level_wallet(args, owner)
-    if w is None:
+    tried = [w for w in (level_wallet(args, owner), configured_wallet(owner)) if w is not None]
+    tried = [w for k, w in enumerate(tried) if w.name not in {x.name for x in tried[:k]}]
+    if not tried:
         stop("give the rotation keys that sign the new version of the key log (--rotation-key FILE), "
              "or the wallet that keeps them (--keys github:OWNER/REPO)")
+    need = prev.keys["nextThreshold"]
+    for k, w in enumerate(tried):
+        out = wallet_rotation_keys(w, owner, prev)
+        if len(out) >= need:
+            print(f"Read {plural(len(out), 'rotation key')} of v{prev.number} from {w.name}.", file=sys.stderr)
+            return out, w
+        if k + 1 < len(tried):
+            print(f"{w.name} holds {len(out)} of them: reading from {tried[k + 1].name}, the wallet "
+                  "configured", file=sys.stderr)
+    stop(f"the wallet {w.name} holds {len(out)} of the rotation keys of v{prev.number} of the key log of "
+         f"{names.short(owner)}, and {need} sign the next version: give them with --rotation-key FILE")
+
+
+def wallet_rotation_keys(w, owner, prev):
+    """The rotation keys of PREV's next that the wallet W holds, read until nextThreshold of them."""
+    from . import wallet
     need, out = prev.keys["nextThreshold"], []
     print(f"Reading {the_keys(need, 'rotation key')} of v{prev.number} of {names.short(owner)} that sign "
           f"from {w.name}…", file=sys.stderr)
@@ -4005,11 +4022,7 @@ def rotation_signers(args, owner, prev):
                 break
     except wallet.WalletError as e:
         stop(str(e))
-    if len(out) < need:
-        stop(f"the wallet {w.name} holds {len(out)} of the rotation keys of v{prev.number} of the key log of "
-             f"{names.short(owner)}, and {need} sign the next version: give them with --rotation-key FILE")
-    print(f"Read {plural(len(out), 'rotation key')} of v{prev.number} from {w.name}.", file=sys.stderr)
-    return out, w
+    return out
 
 
 def owner_init(args, done=True):

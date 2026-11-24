@@ -599,8 +599,11 @@ passphrase once, for all of them.
             out.append(rk.key)
         return out
 
-Without `--rotation-key`, the rotation keys come from a wallet: the one
-configured, or else that of `--keys`. The keys needed are those whose
+Without `--rotation-key`, the rotation keys come from a wallet: that of
+`--keys` (or `--wallet`) when one is given, which wins, or else the one
+configured. A wallet given explicitly that does not hold enough of them
+(the new wallet of a rotation that moves the keys elsewhere) is followed by
+the one configured, and the command says so. The keys needed are those whose
 digests are in `next` of the latest version of the key log, filed in the
 wallet under their first 16 characters; `nextThreshold` of them are read,
 with the passphrase asked once. The wallet is returned with the keys, so
@@ -613,10 +616,27 @@ that a rotation can tell the owner that it has used them up.
         if files:
             return rotation_keys(files, owner), None
         from . import wallet
-        w = configured_wallet(owner) or level_wallet(args, owner)
-        if w is None:
+        tried = [w for w in (level_wallet(args, owner), configured_wallet(owner)) if w is not None]
+        tried = [w for k, w in enumerate(tried) if w.name not in {x.name for x in tried[:k]}]
+        if not tried:
             stop("give the rotation keys that sign the new version of the key log (--rotation-key FILE), "
                  "or the wallet that keeps them (--keys github:OWNER/REPO)")
+        need = prev.keys["nextThreshold"]
+        for k, w in enumerate(tried):
+            out = wallet_rotation_keys(w, owner, prev)
+            if len(out) >= need:
+                print(f"Read {plural(len(out), 'rotation key')} of v{prev.number} from {w.name}.", file=sys.stderr)
+                return out, w
+            if k + 1 < len(tried):
+                print(f"{w.name} holds {len(out)} of them: reading from {tried[k + 1].name}, the wallet "
+                      "configured", file=sys.stderr)
+        stop(f"the wallet {w.name} holds {len(out)} of the rotation keys of v{prev.number} of the key log of "
+             f"{names.short(owner)}, and {need} sign the next version: give them with --rotation-key FILE")
+
+
+    def wallet_rotation_keys(w, owner, prev):
+        """The rotation keys of PREV's next that the wallet W holds, read until nextThreshold of them."""
+        from . import wallet
         need, out = prev.keys["nextThreshold"], []
         print(f"Reading {the_keys(need, 'rotation key')} of v{prev.number} of {names.short(owner)} that sign "
               f"from {w.name}…", file=sys.stderr)
@@ -630,11 +650,7 @@ that a rotation can tell the owner that it has used them up.
                     break
         except wallet.WalletError as e:
             stop(str(e))
-        if len(out) < need:
-            stop(f"the wallet {w.name} holds {len(out)} of the rotation keys of v{prev.number} of the key log of "
-                 f"{names.short(owner)}, and {need} sign the next version: give them with --rotation-key FILE")
-        print(f"Read {plural(len(out), 'rotation key')} of v{prev.number} from {w.name}.", file=sys.stderr)
-        return out, w
+        return out
 
 Changing keys
 -------------

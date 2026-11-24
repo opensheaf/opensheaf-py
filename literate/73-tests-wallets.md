@@ -603,6 +603,27 @@ is written by whoever can change the archive.
         run(*r, "key", "push", "--yes")
         assert in_repo(tmp_path, "eve/keys") != {}
 
+The rotation keys that sign come from the wallet given with `--keys` when
+it holds them, whatever wallet is configured; a wallet given that holds
+none of them (a rotation moving the keys to a new wallet) is followed by
+the one configured.
+
+    # in wallet tests: the wallet of each owner:
+    def test_an_explicit_wallet_wins(monkeypatch, capsys):
+        import types
+        given, configured = types.SimpleNamespace(name="github:me/given"), types.SimpleNamespace(name="github:me/conf")
+        held = {"github:me/given": ["k"], "github:me/conf": ["k"]}
+        monkeypatch.setattr(P, "level_wallet", lambda args, owner=None: given if args.keys else None)
+        monkeypatch.setattr(P, "configured_wallet", lambda owner=None: configured)
+        monkeypatch.setattr(P, "wallet_rotation_keys", lambda w, owner, prev: held[w.name])
+        prev = types.SimpleNamespace(number=1, keys={"nextThreshold": 1, "next": []})
+        args = lambda keys=None: types.SimpleNamespace(rotation_key=None, keys=keys)
+        assert P.rotation_signers(args("github:me/given"), "o", prev)[1] is given
+        assert P.rotation_signers(args(), "o", prev)[1] is configured
+        held["github:me/given"] = []
+        assert P.rotation_signers(args("github:me/given"), "o", prev)[1] is configured
+        assert "reading from github:me/conf" in capsys.readouterr().err
+
 The clipboard
 -------------
 
