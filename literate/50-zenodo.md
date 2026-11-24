@@ -221,6 +221,12 @@ except uploads, which send the bytes of a file. An HTTP error becomes an
 exception with Zenodo's explanation, which is usually precise. The DOI of a
 record is made from its number, as Zenodo makes it.
 
+Every request carries the token. A request names a path of the API, or a
+link Zenodo gave in an answer (the bucket of a draft, the latest draft of
+a new version); such a link is followed only over HTTPS and only on the
+host of the service in use, so that an answer cannot send the token
+anywhere else, nor in clear.
+
     # in Zenodo: talking to the API:
     class Zenodo:
         def __init__(self, production):
@@ -232,8 +238,12 @@ record is made from its number, as Zenodo makes it.
                          f"{self.s['token']} (see osheaf zenodo --help)")
 
         def call(self, method, url, data=None, raw=None):
-            if not url.startswith("http"):
+            if url.startswith("/"):
                 url = self.s["api"] + url
+            u, api = urllib.parse.urlsplit(url), urllib.parse.urlsplit(self.s["api"])
+            if u.scheme != "https" or u.netloc.lower() != api.netloc.lower():
+                raise RuntimeError(f"Zenodo gave the link {url!r}, not one of https://{api.netloc}/: "
+                                   "the token is not sent there")
             body = raw if raw is not None else (json.dumps(data).encode() if data is not None else None)
             ctype = "application/octet-stream" if raw is not None else "application/json"
             req = urllib.request.Request(url, data=body, method=method, headers={
@@ -462,7 +472,7 @@ standing for all versions, gives the concept DOI.
     # in Zenodo: a draft and its DOI:
     # 1-2. Draft: a new record, or a new version of the document's record;
     # Zenodo reserves the DOI when the draft is created.
-    prev_rec, prev_doi = previous_record(P, obj_dir, inv, doc_version, signed)
+    prev_rec, prev_doi = previous_record(P, obj_dir, inv, doc_version, signed, z.s["records"])
     if prev_rec:
         nv = z.call("POST", f"/deposit/depositions/{prev_rec}/actions/newversion")
         draft = z.call("GET", nv["links"]["latest_draft"])
@@ -481,12 +491,18 @@ standing for all versions, gives the concept DOI.
 The earlier version is the one before the current version in the history,
 or the latest before it that was deposited. Its deposit may be recorded in
 any object version holding it, not only in the last, so we look through
-all of them, the newest first.
+all of them, the newest first. Only a deposit with the service in use
+counts: its record is `<records><number>` (`https://zenodo.org/records/`
+or the sandbox's), the number becoming a path of the API. A deposit
+recorded with another service, or with a record of another form, is passed
+over: a deposit on the sandbox, made on a copy of a line deposited on
+Zenodo itself, starts a record of its own there.
 
     # in Zenodo: the record of the version before:
-    def previous_record(P, obj_dir, inv, doc_version, signed):
+    def previous_record(P, obj_dir, inv, doc_version, signed, records=SERVICES[True]["records"]):
         """The Zenodo record id and DOI of the latest document version before
-        DOC_VERSION in the history (as of SIGNED) that is on Zenodo."""
+        DOC_VERSION in the history (as of SIGNED) that is on the Zenodo whose records are
+        at RECORDS."""
         hist = P.history_of(obj_dir, inv, signed)
         docs = [P.doc_version_of(obj_dir, inv, v) for v in hist]
         before = docs[:docs.index(doc_version)] if doc_version in docs else docs
@@ -494,9 +510,14 @@ all of them, the newest first.
             # any object version holding document version n may carry its deposit
             for v in sorted(inv["versions"], key=lambda v: int(v[1:]), reverse=True):
                 obj = P.read_json(obj_dir, inv, P.OBJ, v)
-                if obj["documentVersion"] == n and zenodo_entries(obj):
-                    e = zenodo_entries(obj)[0]
-                    return e["record"].rstrip("/").rsplit("/", 1)[-1], e["doi"]
+                if obj["documentVersion"] != n:
+                    continue
+                for e in zenodo_entries(obj):
+                    record = e.get("record")
+                    number = record[len(records):].rstrip("/") \
+                        if isinstance(record, str) and record.startswith(records) else ""
+                    if re.fullmatch(r"[0-9]+", number):
+                        return number, e.get("doi")
         return None, None
 
 A deposit is an entry of `external` with role `deposit` and service

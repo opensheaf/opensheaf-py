@@ -2424,6 +2424,56 @@ record, linked to the first by `IsNewVersionOf`, and the archive verifies.
         run(*r, "collect")
         assert P.verify_errors() == []
 
+The token goes only to the service in use: a link that Zenodo's answer
+gives elsewhere, or over HTTP, is refused before any request is made. A
+deposit recorded with Zenodo itself is not the record of a new version on
+the sandbox: there the next document version starts a record of its own.
+
+    # in test: Zenodo, against a test double:
+    def test_zenodo_token_and_records_stay_with_their_service(tmp_path, monkeypatch):
+        import urllib.request
+        from opensheaf import zenodo
+        real = zenodo.Zenodo
+        sent = []
+
+        class Answer:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                pass
+
+            def read(self):
+                return b"{}"
+        monkeypatch.setattr(urllib.request, "urlopen", lambda req, timeout: sent.append(req) or Answer())
+        monkeypatch.setenv("ZENODO_TOKEN", "secret")
+        z = real(True)
+        for bad in ("https://evil.example/api/files/1", "http://zenodo.org/api/files/1",
+                    "https://zenodo.org@evil.example/x", "https://sandbox.zenodo.org/api/files/1", "files/1"):
+            with pytest.raises(RuntimeError, match="the token is not sent there"):
+                z.call("PUT", bad, raw=b"x")
+        assert sent == []
+        z.call("GET", "/deposit/depositions/1")
+        z.call("PUT", "https://zenodo.org/api/files/abc/paper.pdf", raw=b"x")
+        assert [r.full_url for r in sent] == ["https://zenodo.org/api/deposit/depositions/1",
+                                              "https://zenodo.org/api/files/abc/paper.pdf"]
+        assert all(r.get_header("Authorization") == "Bearer secret" for r in sent)
+        fake_zenodo = {True: FakeZenodo(True), False: FakeZenodo(False)}
+        monkeypatch.setattr(zenodo, "Zenodo", lambda production: fake_zenodo[production])
+        root = tmp_path / "a"
+        make_archive(root)
+        pdf = tmp_path / "p.pdf"
+        pdf.write_bytes(b"%PDF-1.4 p")
+        r = ["--root", str(root)]
+        paper = ["--pdf", str(pdf), "--no-source", "lost", "--title", "P", "--author", "Doe, Jane"]
+        run(*r, "deposit", "p", *paper, "--new")
+        run(*r, "zenodo", "p", "--production")
+        pdf.write_bytes(b"%PDF-1.4 p2")
+        run(*r, "deposit", "p", *paper, "--changes", "Typos.")
+        run(*r, "zenodo", "p")
+        assert fake_zenodo[False].uploads
+        assert not any(u.endswith("/actions/newversion") for _, u in fake_zenodo[False].calls)
+
 A deposit interrupted after publication (appendix A.1) keeps its staging
 folder, with the version built and signed, and locks the line: a deposit
 is refused until the next run of `osheaf zenodo` adds the version. If the
