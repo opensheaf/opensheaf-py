@@ -1399,6 +1399,27 @@ a discovery document without `owners` is an error (section 3.1).
         (a / "opensheaf.json").write_text(json.dumps({k: v for k, v in disc.items() if k != "owners"}))
         assert any(x["severity"] == "error" and "no owners" in x["message"] for x in findings(a))
 
+Evidence that is not JSON, or not of the form of an inventory, makes a
+branch point inconsistent, never a crash; and the chain of owners a branch
+needs stops at a level it cannot read, and at `MAX_DEPTH` levels.
+
+    # in across: branches and accepted copies:
+    def test_evidence_of_another_form(tmp_path):
+        from opensheaf import branch
+        g = names.genesis_record("document", originator="z" + "a" * 51)
+        nm = names.name(g, 0)
+        for pinv in (b"not json", b"[1]", b'{"versions": []}', b"[" * 100 + b"]" * 100):
+            level = branch.level_of_files({"parent/inventory.json": pinv, "parent/object.json": b"{}"})
+            v, problems = branch.verdict(level, {"parent": {"name": nm}, "name": nm, "owner": "x"}, g,
+                                         lambda o: None)
+            assert v == branch.INCONSISTENT and problems
+        owner = "q" * 51 + "a"
+        files = {"parent/" * k + "parent/object.json": json.dumps({"owner": owner}).encode()
+                 for k in range(200)}
+        assert len(branch.chain_owners(files)) == branch.MAX_DEPTH + 1
+        files["parent/parent/object.json"] = b"[]"
+        assert branch.chain_owners(files) == [owner]
+
 A branch point whose evidence is tampered with is inconsistent, an error;
 so is one whose `parent/object.json` was changed in place, the branch's
 inventory still stating the digest of the one the parent's inventory

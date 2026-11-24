@@ -134,7 +134,7 @@ paths, and a function reading one.
         def json(self, path):
             data = self.read(path) if path in self.digests else None
             try:
-                return json.loads(data) if data is not None else None
+                return names.json_value(data) if data is not None else None
             except ValueError:
                 return None
 
@@ -185,7 +185,12 @@ level below (the branch's own at the first level):
   it, and is checked in turn.
 
 A chain deeper than `MAX_DEPTH` is not followed further, and the branch
-point is then unchecked (section 9.3).
+point is then unchecked (section 9.3). The evidence comes from the parent's
+archive, through the branch: a file of it that is not JSON, or JSON of
+another form (a list where an inventory is an object), makes the branch
+point inconsistent, with the reason, never a crash of the verification
+that asked (`verdict` guards `level_verdict`, which reads the files as
+they should be).
 
     # in branches: checking a branch point:
     INCONSISTENT, CONFIRMED, UNCHECKED = "inconsistent", "confirmed", "unchecked"
@@ -195,6 +200,14 @@ point is then unchecked (section 9.3).
     def verdict(level, obj, genesis, logs, depth=0):
         """(verdict, problems) of the branch point that OBJ (an object.json) records, the content of
         its level being LEVEL; GENESIS the bytes of the genesis record; LOGS(owner) a key log or None."""
+        try:
+            return level_verdict(level, obj, genesis, logs, depth)
+        except (ValueError, KeyError, IndexError, TypeError, AttributeError) as e:
+            return INCONSISTENT, [f"the evidence of the branch point cannot be read: {type(e).__name__} {e}"]
+
+
+    def level_verdict(level, obj, genesis, logs, depth=0):
+        """verdict, the files read as they should be (an exception for a file of another form)."""
         p = obj.get("parent")
         if not isinstance(p, dict):
             return INCONSISTENT, ["object.json has no parent"]
@@ -224,11 +237,12 @@ The name and the pin.
         problems.append("a branch renamed after a clash has a greater algorithm number than parent.name "
                         "(section 5.3)")
     pinv_bytes = level.read("parent/inventory.json") if "parent/inventory.json" in level.digests else None
-    pinv = json.loads(pinv_bytes) if pinv_bytes else None
+    pinv = names.json_value(pinv_bytes) if pinv_bytes else None
     pobj_bytes = level.read("parent/object.json") if "parent/object.json" in level.digests else None
     pobj = level.json("parent/object.json")
-    if pinv is None or pobj is None:
-        return INCONSISTENT, problems + ["parent/inventory.json or parent/object.json is missing (section 9.2)"]
+    if not isinstance(pinv, dict) or not isinstance(pobj, dict):
+        return INCONSISTENT, problems + ["parent/inventory.json or parent/object.json is missing, or not "
+                                         "of the form of an inventory and an object.json (section 9.2)"]
     if names.sha512_hex(pinv_bytes) != p.get("inventorySha512") or pinv.get("head") != p.get("objectVersion"):
         problems.append("parent/inventory.json is not the inventory the pin of parent names")
     pstate = {path: dig for dig, ps in pinv.get("versions", {}).get(pinv.get("head"), {}).get("state", {}).items()
@@ -339,14 +353,23 @@ are left out.
         return files, parent
 
 The owners whose key logs a branch needs beside it: the parent's, and the
-one at every level of the chain.
+one at every level of the chain, down to `MAX_DEPTH` levels. A level whose
+`object.json` cannot be read, or names no owner, ends the chain: the
+evidence is the parent archive's, and its checks (`verdict`) say what is
+wrong with it.
 
     # in branches: the evidence of a branch point:
     def chain_owners(files):
         """The owners of the parent versions at every level of the evidence in FILES."""
         out, prefix = [], ""
-        while prefix + "parent/object.json" in files:
-            out.append(json.loads(files[prefix + "parent/object.json"])["owner"])
+        while prefix + "parent/object.json" in files and len(out) <= MAX_DEPTH:
+            try:
+                owner = names.json_value(files[prefix + "parent/object.json"]).get("owner")
+            except (ValueError, AttributeError):
+                break
+            if not isinstance(owner, str) or not names.OWNER_NAME.match(owner):
+                break
+            out.append(owner)
             prefix += "parent/"
         return out
 

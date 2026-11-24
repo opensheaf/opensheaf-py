@@ -29,7 +29,7 @@ class Level:
     def json(self, path):
         data = self.read(path) if path in self.digests else None
         try:
-            return json.loads(data) if data is not None else None
+            return names.json_value(data) if data is not None else None
         except ValueError:
             return None
 
@@ -53,6 +53,14 @@ ORDER = {CONFIRMED: 0, UNCHECKED: 1, INCONSISTENT: 2}
 def verdict(level, obj, genesis, logs, depth=0):
     """(verdict, problems) of the branch point that OBJ (an object.json) records, the content of
     its level being LEVEL; GENESIS the bytes of the genesis record; LOGS(owner) a key log or None."""
+    try:
+        return level_verdict(level, obj, genesis, logs, depth)
+    except (ValueError, KeyError, IndexError, TypeError, AttributeError) as e:
+        return INCONSISTENT, [f"the evidence of the branch point cannot be read: {type(e).__name__} {e}"]
+
+
+def level_verdict(level, obj, genesis, logs, depth=0):
+    """verdict, the files read as they should be (an exception for a file of another form)."""
     p = obj.get("parent")
     if not isinstance(p, dict):
         return INCONSISTENT, ["object.json has no parent"]
@@ -70,11 +78,12 @@ def verdict(level, obj, genesis, logs, depth=0):
         problems.append("a branch renamed after a clash has a greater algorithm number than parent.name "
                         "(section 5.3)")
     pinv_bytes = level.read("parent/inventory.json") if "parent/inventory.json" in level.digests else None
-    pinv = json.loads(pinv_bytes) if pinv_bytes else None
+    pinv = names.json_value(pinv_bytes) if pinv_bytes else None
     pobj_bytes = level.read("parent/object.json") if "parent/object.json" in level.digests else None
     pobj = level.json("parent/object.json")
-    if pinv is None or pobj is None:
-        return INCONSISTENT, problems + ["parent/inventory.json or parent/object.json is missing (section 9.2)"]
+    if not isinstance(pinv, dict) or not isinstance(pobj, dict):
+        return INCONSISTENT, problems + ["parent/inventory.json or parent/object.json is missing, or not "
+                                         "of the form of an inventory and an object.json (section 9.2)"]
     if names.sha512_hex(pinv_bytes) != p.get("inventorySha512") or pinv.get("head") != p.get("objectVersion"):
         problems.append("parent/inventory.json is not the inventory the pin of parent names")
     pstate = {path: dig for dig, ps in pinv.get("versions", {}).get(pinv.get("head"), {}).get("state", {}).items()
@@ -157,8 +166,14 @@ def branch_point_files(c, k):
 def chain_owners(files):
     """The owners of the parent versions at every level of the evidence in FILES."""
     out, prefix = [], ""
-    while prefix + "parent/object.json" in files:
-        out.append(json.loads(files[prefix + "parent/object.json"])["owner"])
+    while prefix + "parent/object.json" in files and len(out) <= MAX_DEPTH:
+        try:
+            owner = names.json_value(files[prefix + "parent/object.json"]).get("owner")
+        except (ValueError, AttributeError):
+            break
+        if not isinstance(owner, str) or not names.OWNER_NAME.match(owner):
+            break
+        out.append(owner)
         prefix += "parent/"
     return out
 

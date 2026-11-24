@@ -1004,6 +1004,23 @@ def test_branch_of_a_branch_and_a_clash(tmp_path):
         run("--root", str(a), "branch", uri(j, "accepted", 1), "--label", "back")
 
 
+def test_evidence_of_another_form(tmp_path):
+    from opensheaf import branch
+    g = names.genesis_record("document", originator="z" + "a" * 51)
+    nm = names.name(g, 0)
+    for pinv in (b"not json", b"[1]", b'{"versions": []}', b"[" * 100 + b"]" * 100):
+        level = branch.level_of_files({"parent/inventory.json": pinv, "parent/object.json": b"{}"})
+        v, problems = branch.verdict(level, {"parent": {"name": nm}, "name": nm, "owner": "x"}, g,
+                                     lambda o: None)
+        assert v == branch.INCONSISTENT and problems
+    owner = "q" * 51 + "a"
+    files = {"parent/" * k + "parent/object.json": json.dumps({"owner": owner}).encode()
+             for k in range(200)}
+    assert len(branch.chain_owners(files)) == branch.MAX_DEPTH + 1
+    files["parent/parent/object.json"] = b"[]"
+    assert branch.chain_owners(files) == [owner]
+
+
 def test_inconsistent_branch_point(tmp_path):
     a, j = make(tmp_path, "authors"), make(tmp_path, "journal")
     deposit(a, "paper", "one", new=True)
