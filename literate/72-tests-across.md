@@ -1152,7 +1152,10 @@ a discovery document without `owners` is an error (section 3.1).
         (a / "opensheaf.json").write_text(json.dumps({k: v for k, v in disc.items() if k != "owners"}))
         assert any(x["severity"] == "error" and "no owners" in x["message"] for x in findings(a))
 
-A branch point whose evidence is tampered with is inconsistent, an error.
+A branch point whose evidence is tampered with is inconsistent, an error;
+so is one whose `parent/object.json` was changed in place, the branch's
+inventory still stating the digest of the one the parent's inventory
+records: its bytes are hashed, not its stated digest trusted.
 
     # in across: branches and accepted copies:
     def test_inconsistent_branch_point(tmp_path):
@@ -1173,6 +1176,12 @@ A branch point whose evidence is tampered with is inconsistent, an error.
         v, problems = branch.verdict(branch.level_of_files(changed), obj, genesis, P.key_log)
         assert v == branch.INCONSISTENT and any(p.startswith("paper.pdf") for p in problems)
         assert branch.verdict(level, obj, genesis, lambda o: None)[0] == branch.UNCHECKED
+        pobj = json.loads(level.read("parent/object.json"))
+        forged = json.dumps(dict(pobj, parent=dict(obj["parent"]))).encode()
+        stated = branch.Level(level.digests, lambda p: forged if p == "parent/object.json" else level.read(p))
+        v, problems = branch.verdict(stated, obj, genesis, P.key_log)
+        assert v == branch.INCONSISTENT and \
+            "parent/object.json is not the object.json the parent inventory records" in problems
 
 A branch numbers its own document versions from 1 (section 9.4), and
 holds none of the parent's earlier versions: its history, once written,

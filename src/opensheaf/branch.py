@@ -71,6 +71,7 @@ def verdict(level, obj, genesis, logs, depth=0):
                         "(section 5.3)")
     pinv_bytes = level.read("parent/inventory.json") if "parent/inventory.json" in level.digests else None
     pinv = json.loads(pinv_bytes) if pinv_bytes else None
+    pobj_bytes = level.read("parent/object.json") if "parent/object.json" in level.digests else None
     pobj = level.json("parent/object.json")
     if pinv is None or pobj is None:
         return INCONSISTENT, problems + ["parent/inventory.json or parent/object.json is missing (section 9.2)"]
@@ -78,7 +79,7 @@ def verdict(level, obj, genesis, logs, depth=0):
         problems.append("parent/inventory.json is not the inventory the pin of parent names")
     pstate = {path: dig for dig, ps in pinv.get("versions", {}).get(pinv.get("head"), {}).get("state", {}).items()
               for path in ps}
-    if pstate.get(P.OBJ) != level.digests.get("parent/object.json"):
+    if pstate.get(P.OBJ) is None or pstate.get(P.OBJ) != names.sha512_hex(pobj_bytes):
         problems.append("parent/object.json is not the object.json the parent inventory records")
     if depth == 0:
         own = {"datacite.json", P.OBJ} | {n["path"] for n in obj.get("notices", []) if n.get("path")}

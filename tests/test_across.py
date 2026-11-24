@@ -818,6 +818,12 @@ def test_inconsistent_branch_point(tmp_path):
     v, problems = branch.verdict(branch.level_of_files(changed), obj, genesis, P.key_log)
     assert v == branch.INCONSISTENT and any(p.startswith("paper.pdf") for p in problems)
     assert branch.verdict(level, obj, genesis, lambda o: None)[0] == branch.UNCHECKED
+    pobj = json.loads(level.read("parent/object.json"))
+    forged = json.dumps(dict(pobj, parent=dict(obj["parent"]))).encode()
+    stated = branch.Level(level.digests, lambda p: forged if p == "parent/object.json" else level.read(p))
+    v, problems = branch.verdict(stated, obj, genesis, P.key_log)
+    assert v == branch.INCONSISTENT and \
+        "parent/object.json is not the object.json the parent inventory records" in problems
 
 
 def test_the_history_of_a_branch(tmp_path):
