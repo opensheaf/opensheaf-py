@@ -175,26 +175,48 @@ steps of section 14, in order.
             schema("opensheaf.json", disc, "archive")
             if "objectPages" in disc:
                 disc["objects"] = check_object_pages(f, schema, disc)
-        found = check_storage(f, schema, disc)
-        logs = check_key_logs(f, found, schema)
-        check_keepers(f, logs, remote, keeper_fetch)
+        found = guarded(f, "the storage root", check_storage, f, schema, disc) or {}
+        logs = guarded(f, "the key logs", check_key_logs, f, found, schema) or {}
+        guarded(f, "the keepers", check_keepers, f, logs, remote, keeper_fetch)
         resolver = None
         if remote:
             from . import remote as remote_
             resolver = remote_.Resolver()
         try:
-            statuses = check_lines(f, found, logs, schema, disc, resolver)
+            statuses = guarded(f, "the lines", check_lines, f, found, logs, schema, disc, resolver) or {}
             if resolver is not None:
                 for severity, message in resolver.notes:
                     f.add(severity, "resolution", message)
         finally:
             if resolver is not None:
                 resolver.__exit__(None, None, None)
-        check_archive(f, found, statuses, disc)
-        check_indexes(f, schema, disc)
-        check_presentation(f, disc)
+        guarded(f, "the archive", check_archive, f, found, statuses, disc)
+        guarded(f, "the indexes", check_indexes, f, schema, disc)
+        guarded(f, "the presentation files", check_presentation, f, disc)
         look_for_keys(f)
         return f
+
+The files the verifier reads are anyone's, and a file it did not foresee
+(a content path out of the object, a list where a mapping is expected, a
+JSON nested a hundred thousand times) must become a finding, not end the
+verification half way with a traceback. Each object is checked on its own,
+and one that cannot be read is reported and left out of the later steps
+(`check_storage`); each step runs under `guarded`, which turns what stops
+it into an error that says which step stopped, and goes on to the next.
+
+    # in check an archive and list its findings:
+    UNREADABLE = (UnsafePath, ValueError, KeyError, TypeError, AttributeError, IndexError,
+                  RecursionError, OSError)
+
+
+    def guarded(f, what, step, *args):
+        """STEP(*ARGS), or None after an error in F if it stops on a file it cannot read."""
+        try:
+            return step(*args)
+        except UNREADABLE as e:
+            f.error("archive", f"the checks of {what} stopped on a file they cannot read "
+                    f"({type(e).__name__}: {str(e)[:300]}); the rest of them are not made")
+            return None
 
 
     def check_object_pages(f, schema, disc):
@@ -261,7 +283,7 @@ layout.
                 if (c.get("digestAlgorithm", "sha256"), c.get("tupleSize", 3), c.get("numberOfTuples", 3)) != \
                         ("sha256", 3, 3):
                     f.error("ocfl", "the hashed layout keeps its default parameters (section 3.2)")
-        found = {}
+        found, unread = {}, []
         for obj_id, d, inv in objects():
             rel = d.relative_to(OCFL).as_posix()
             if inv is None or obj_id is None:
@@ -277,7 +299,14 @@ layout.
             if obj_id in found:
                 f.error(where(obj_id), "two objects of the storage root have this identifier (section 4)")
             found[obj_id] = (d, inv)
-            check_object_storage(f, schema, obj_id, d, inv)
+            try:
+                readable = check_object_storage(f, schema, obj_id, d, inv)
+            except UNREADABLE as e:
+                f.error(where(obj_id), f"cannot be read ({type(e).__name__}: {str(e)[:300]}): not checked further")
+                readable = False
+            if readable is False:
+                del found[obj_id]
+                unread.append(obj_id)
         <<check the storage root with an independent OCFL validator>>
         return found
 
@@ -326,12 +355,19 @@ key logs (section 14.3), so they are left out here.
         head = inv.get("head", "")
         if not (d / head / "inventory.json").exists() or (d / head / "inventory.json").read_bytes() != root:
             f.error(place, f"the inventory of {head} is not the root inventory")
+        unsafe = False
         for dig, paths in inv.get("manifest", {}).items():
             for cp in paths:
-                if not (d / cp).exists():
+                problem = content_problem(d, cp)
+                if problem:
+                    f.error(place, f"{problem}: it is not read, nor the object checked further")
+                    unsafe = True
+                elif not (d / cp).exists():
                     f.error(place, f"missing {cp}")
                 elif digest(d / cp) != dig:
                     f.error(place, f"{cp} does not have the digest of the manifest")
+        if unsafe:
+            return False
         versions = sorted(inv.get("versions", {}), key=lambda v: int(v[1:]) if v[1:].isdigit() else 0)
         kind = (read_json(d, inv, OBJ) or {}).get("kind")
         draft = obj_id.startswith("sheaf:draft:")
@@ -424,7 +460,9 @@ twice. Only its errors are reported: its warnings are on what OpenSheaf
 does on purpose, such as the witness folder, an extension folder not yet
 registered with OCFL (section 7.2), or the first version of a key log,
 which has no message or user (section 6.1). Without it, the check is not
-made, which is a warning.
+made, which is a warning. It reads every content file of the storage
+root, links included, so it is not run on a storage root with an object
+that cannot be read.
 
     # in check the storage root with an independent OCFL validator:
     try:
@@ -438,7 +476,10 @@ made, which is a warning.
             v = Validator(log_warnings=False, log_errors=True)
             if not v.validate_object(str(d)):
                 f.error(where(obj_id), f"OCFL validator: {v.status_str()}")
-        if not ocfl.StorageRoot(root=str(OCFL)).validate(log_warnings=False):
+        if unread:
+            f.warning("ocfl", "the storage root as a whole is not given to the OCFL validator: it would read "
+                      "the files of the objects that cannot be read")
+        elif not ocfl.StorageRoot(root=str(OCFL)).validate(log_warnings=False):
             f.error("ocfl", "the OCFL validator rejects the storage root")
 
 Key logs (14.3)

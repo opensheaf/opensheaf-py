@@ -663,9 +663,43 @@ def objects():
     return sorted(out, key=lambda o: (str(o[0]), str(o[1])))
 
 
+class UnsafePath(ValueError):
+    """A content path of an inventory that the tools do not read."""
+
+
+def content_problem(obj_dir, cp):
+    """Why the content path CP of the object in OBJ_DIR is not read, or None."""
+    if not isinstance(cp, str) or not cp:
+        return f"{cp!r} is not a content path"
+    parts = cp.split("/")
+    if cp.startswith("/") or "\\" in cp or any(p in ("", ".", "..") for p in parts) \
+            or any(ord(c) < 32 or ord(c) == 127 for c in cp):
+        return f"the content path {cp!r} is not a relative path inside the object (section 4.1)"
+    at = Path(obj_dir)
+    for p in parts:
+        at = at / p
+        if at.is_symlink():
+            return f"the content path {cp} passes through a symbolic link"
+    if at.exists() and not at.is_file():
+        return f"the content path {cp} is not a regular file"
+    return None
+
+
+def content_file(obj_dir, cp):
+    """The file of the content path CP of the object in OBJ_DIR; UnsafePath if it is not read."""
+    problem = content_problem(obj_dir, cp)
+    if problem:
+        try:
+            place = Path(obj_dir).relative_to(ROOT).as_posix()
+        except (TypeError, ValueError):
+            place = str(obj_dir)
+        raise UnsafePath(f"{place}: {problem}")
+    return Path(obj_dir) / cp
+
+
 def read_logical(obj_dir, inv, logical, version=None):
     cp = content_path(inv, version or inv["head"], logical)
-    return (obj_dir / cp) if cp else None
+    return content_file(obj_dir, cp) if cp else None
 
 
 def previous_digest(obj_id, d, head):
@@ -1442,7 +1476,7 @@ def description_version(label, change, message, add_files=None, acknowledged=Fal
     change(dc, obj)
     set_date(dc, "Updated", TODAY)
     carry_forward(prev, obj, inv, next_object_version(inv))
-    files = {p: d / inv["manifest"][dg][0] for p, dg in state.items() if p not in ("datacite.json", OBJ)}
+    files = {p: content_file(d, inv["manifest"][dg][0]) for p, dg in state.items() if p not in ("datacite.json", OBJ)}
     for lp, f in (add_files or {}).items():
         if lp in files:
             sys.exit(f"{label} has a file {lp} already")
@@ -1545,7 +1579,7 @@ def complete(args):
     head = read_json(d, inv, OBJ)
     dc = read_json(d, inv, "datacite.json", last)
     state = {p: dg for dg, ps in inv["versions"][last]["state"].items() for p in ps}
-    files = {p: d / inv["manifest"][dg][0] for p, dg in state.items() if p not in ("datacite.json", OBJ)}
+    files = {p: content_file(d, inv["manifest"][dg][0]) for p, dg in state.items() if p not in ("datacite.json", OBJ)}
     source = Path(args.source)
     main = source.name
     for lp, f in [(main, source)] + [(x.partition("=")[2] or Path(x.partition("=")[0]).name,
@@ -2521,7 +2555,7 @@ def check_storage(f, schema, disc):
             if (c.get("digestAlgorithm", "sha256"), c.get("tupleSize", 3), c.get("numberOfTuples", 3)) != \
                     ("sha256", 3, 3):
                 f.error("ocfl", "the hashed layout keeps its default parameters (section 3.2)")
-    found = {}
+    found, unread = {}, []
     for obj_id, d, inv in objects():
         rel = d.relative_to(OCFL).as_posix()
         if inv is None or obj_id is None:
@@ -2537,7 +2571,14 @@ def check_storage(f, schema, disc):
         if obj_id in found:
             f.error(where(obj_id), "two objects of the storage root have this identifier (section 4)")
         found[obj_id] = (d, inv)
-        check_object_storage(f, schema, obj_id, d, inv)
+        try:
+            readable = check_object_storage(f, schema, obj_id, d, inv)
+        except UNREADABLE as e:
+            f.error(where(obj_id), f"cannot be read ({type(e).__name__}: {str(e)[:300]}): not checked further")
+            readable = False
+        if readable is False:
+            del found[obj_id]
+            unread.append(obj_id)
     try:
         import ocfl
         from ocfl.validator import Validator
@@ -2549,7 +2590,10 @@ def check_storage(f, schema, disc):
             v = Validator(log_warnings=False, log_errors=True)
             if not v.validate_object(str(d)):
                 f.error(where(obj_id), f"OCFL validator: {v.status_str()}")
-        if not ocfl.StorageRoot(root=str(OCFL)).validate(log_warnings=False):
+        if unread:
+            f.warning("ocfl", "the storage root as a whole is not given to the OCFL validator: it would read "
+                      "the files of the objects that cannot be read")
+        elif not ocfl.StorageRoot(root=str(OCFL)).validate(log_warnings=False):
             f.error("ocfl", "the OCFL validator rejects the storage root")
     return found
 
@@ -2581,12 +2625,19 @@ def check_object_storage(f, schema, obj_id, d, inv):
     head = inv.get("head", "")
     if not (d / head / "inventory.json").exists() or (d / head / "inventory.json").read_bytes() != root:
         f.error(place, f"the inventory of {head} is not the root inventory")
+    unsafe = False
     for dig, paths in inv.get("manifest", {}).items():
         for cp in paths:
-            if not (d / cp).exists():
+            problem = content_problem(d, cp)
+            if problem:
+                f.error(place, f"{problem}: it is not read, nor the object checked further")
+                unsafe = True
+            elif not (d / cp).exists():
                 f.error(place, f"missing {cp}")
             elif digest(d / cp) != dig:
                 f.error(place, f"{cp} does not have the digest of the manifest")
+    if unsafe:
+        return False
     versions = sorted(inv.get("versions", {}), key=lambda v: int(v[1:]) if v[1:].isdigit() else 0)
     kind = (read_json(d, inv, OBJ) or {}).get("kind")
     draft = obj_id.startswith("sheaf:draft:")
@@ -3240,26 +3291,40 @@ def verify_findings(remote=False, keeper_fetch=None):
         schema("opensheaf.json", disc, "archive")
         if "objectPages" in disc:
             disc["objects"] = check_object_pages(f, schema, disc)
-    found = check_storage(f, schema, disc)
-    logs = check_key_logs(f, found, schema)
-    check_keepers(f, logs, remote, keeper_fetch)
+    found = guarded(f, "the storage root", check_storage, f, schema, disc) or {}
+    logs = guarded(f, "the key logs", check_key_logs, f, found, schema) or {}
+    guarded(f, "the keepers", check_keepers, f, logs, remote, keeper_fetch)
     resolver = None
     if remote:
         from . import remote as remote_
         resolver = remote_.Resolver()
     try:
-        statuses = check_lines(f, found, logs, schema, disc, resolver)
+        statuses = guarded(f, "the lines", check_lines, f, found, logs, schema, disc, resolver) or {}
         if resolver is not None:
             for severity, message in resolver.notes:
                 f.add(severity, "resolution", message)
     finally:
         if resolver is not None:
             resolver.__exit__(None, None, None)
-    check_archive(f, found, statuses, disc)
-    check_indexes(f, schema, disc)
-    check_presentation(f, disc)
+    guarded(f, "the archive", check_archive, f, found, statuses, disc)
+    guarded(f, "the indexes", check_indexes, f, schema, disc)
+    guarded(f, "the presentation files", check_presentation, f, disc)
     look_for_keys(f)
     return f
+
+
+UNREADABLE = (UnsafePath, ValueError, KeyError, TypeError, AttributeError, IndexError,
+              RecursionError, OSError)
+
+
+def guarded(f, what, step, *args):
+    """STEP(*ARGS), or None after an error in F if it stops on a file it cannot read."""
+    try:
+        return step(*args)
+    except UNREADABLE as e:
+        f.error("archive", f"the checks of {what} stopped on a file they cannot read "
+                f"({type(e).__name__}: {str(e)[:300]}); the rest of them are not made")
+        return None
 
 
 def check_object_pages(f, schema, disc):

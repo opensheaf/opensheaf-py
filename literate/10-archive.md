@@ -997,10 +997,54 @@ through the digest.
 The file of a logical path in a version (by default the head), as a path on
 disk.
 
+The content paths come from the inventory, which is read, not trusted: an
+absolute path, or one with `..`, would make the tools read a file outside
+the object (and serve it, or sign over it), and a content file that is a
+symbolic link (to `/dev/zero`, say) a file that never ends. `content_file`
+gives the file of a content path only if the path is relative, in the
+segments section 4.1 allows, passes through no symbolic link from the
+object folder down, and names a regular file (or nothing yet); otherwise it
+raises `UnsafePath`, which the command line turns into a message and the
+verifier into a finding.
+
     # in the file holding a logical path:
+    class UnsafePath(ValueError):
+        """A content path of an inventory that the tools do not read."""
+
+
+    def content_problem(obj_dir, cp):
+        """Why the content path CP of the object in OBJ_DIR is not read, or None."""
+        if not isinstance(cp, str) or not cp:
+            return f"{cp!r} is not a content path"
+        parts = cp.split("/")
+        if cp.startswith("/") or "\\" in cp or any(p in ("", ".", "..") for p in parts) \
+                or any(ord(c) < 32 or ord(c) == 127 for c in cp):
+            return f"the content path {cp!r} is not a relative path inside the object (section 4.1)"
+        at = Path(obj_dir)
+        for p in parts:
+            at = at / p
+            if at.is_symlink():
+                return f"the content path {cp} passes through a symbolic link"
+        if at.exists() and not at.is_file():
+            return f"the content path {cp} is not a regular file"
+        return None
+
+
+    def content_file(obj_dir, cp):
+        """The file of the content path CP of the object in OBJ_DIR; UnsafePath if it is not read."""
+        problem = content_problem(obj_dir, cp)
+        if problem:
+            try:
+                place = Path(obj_dir).relative_to(ROOT).as_posix()
+            except (TypeError, ValueError):
+                place = str(obj_dir)
+            raise UnsafePath(f"{place}: {problem}")
+        return Path(obj_dir) / cp
+
+
     def read_logical(obj_dir, inv, logical, version=None):
         cp = content_path(inv, version or inv["head"], logical)
-        return (obj_dir / cp) if cp else None
+        return content_file(obj_dir, cp) if cp else None
 
 Most files the tools read are JSON: `object.json`, `datacite.json`,
 `members.json`. Reading one of a given version is the common case.

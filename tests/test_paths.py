@@ -100,3 +100,33 @@ def test_values_of_a_file_of_options_are_converted(tmp_path):
     (tmp_path / "dep.yaml").write_text("id: x\ntitle: T\nauthor: Doe, J\ni-know: no\nnew: yes\nstage: AM\n")
     ns = cli.runs(p, p.parse_args(["deposit", "--from", str(tmp_path / "dep.yaml")]))[0]
     assert (ns.i_know, ns.new, ns.stage, ns.author) == (False, True, "AM", ["Doe, J"])
+
+
+def rewrite(d, inv):
+    data, sc = P.inventory_bytes(inv)
+    for folder in (d, d / inv["head"]):
+        (folder / "inventory.json").write_bytes(data)
+        (folder / "inventory.json.sha512").write_bytes(sc)
+
+
+@pytest.mark.parametrize("where", ["absolute", "up", "link"])
+def test_content_paths_outside_the_object_are_not_read(archive, tmp_path, where):
+    put("paper-a", 1, FILES1)
+    finish()
+    d = P.obj_dir(P.LABELS["paper-a"])
+    inv = P.load_inventory(d)
+    secret = tmp_path / "secret.json"
+    secret.write_text('{"kind": "document", "x": "outside"}')
+    dig = next(dg for dg, cps in inv["manifest"].items() if cps[0].endswith("object.json"))
+    if where == "link":
+        (d / inv["manifest"][dig][0]).unlink()
+        os.symlink("/dev/zero", d / inv["manifest"][dig][0])
+    else:
+        inv["manifest"][dig] = [str(secret) if where == "absolute" else "v1/../../../../../secret.json"]
+        rewrite(d, inv)
+    with pytest.raises(P.UnsafePath):
+        P.read_json(d, inv, P.OBJ)
+    errors = P.verify_errors()
+    assert any("not read" in e for e in errors)
+    with pytest.raises(SystemExit, match="nothing is read"):
+        run("--root", str(archive), "describe", "paper-a", "--title", "T")

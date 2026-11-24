@@ -143,7 +143,7 @@ record added and the two descriptions rewritten; `add_version` signs it.
         dc = P.read_json(d, inv, "datacite.json")
         notes = {n["path"] for n in head.get("notices", []) if n.get("path")}
         state = inv["versions"][inv["head"]]["state"]
-        files = {p: d / inv["manifest"][dig][0] for dig, ps in state.items() for p in ps
+        files = {p: P.content_file(d, inv["manifest"][dig][0]) for dig, ps in state.items() for p in ps
                  if p not in (P.OBJ, "datacite.json") and p not in notes}
         obj = {k: v for k, v in head.items() if k not in ("history", "notices", "previous")}
         obj["documentVersion"] = 1

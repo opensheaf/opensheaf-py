@@ -143,7 +143,7 @@ paths, and a function reading one.
         """The Level of the object version VER of the object in D."""
         state = inv["versions"][ver]["state"]
         digests = {p: dig for dig, ps in state.items() for p in ps}
-        return Level(digests, lambda p: (d / inv["manifest"][digests[p]][0]).read_bytes())
+        return Level(digests, lambda p: P.content_file(d, inv["manifest"][digests[p]][0]).read_bytes())
 
 
     def level_of_files(files):

@@ -84,7 +84,7 @@ section 7.3); the discovery document is then rewritten (section 3.1).
         change(dc, obj)
         set_date(dc, "Updated", TODAY)
         carry_forward(prev, obj, inv, next_object_version(inv))
-        files = {p: d / inv["manifest"][dg][0] for p, dg in state.items() if p not in ("datacite.json", OBJ)}
+        files = {p: content_file(d, inv["manifest"][dg][0]) for p, dg in state.items() if p not in ("datacite.json", OBJ)}
         for lp, f in (add_files or {}).items():
             if lp in files:
                 sys.exit(f"{label} has a file {lp} already")
@@ -376,7 +376,7 @@ not typeset the added sources.
         head = read_json(d, inv, OBJ)
         dc = read_json(d, inv, "datacite.json", last)
         state = {p: dg for dg, ps in inv["versions"][last]["state"].items() for p in ps}
-        files = {p: d / inv["manifest"][dg][0] for p, dg in state.items() if p not in ("datacite.json", OBJ)}
+        files = {p: content_file(d, inv["manifest"][dg][0]) for p, dg in state.items() if p not in ("datacite.json", OBJ)}
         source = Path(args.source)
         main = source.name
         for lp, f in [(main, source)] + [(x.partition("=")[2] or Path(x.partition("=")[0]).name,

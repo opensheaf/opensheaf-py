@@ -1106,6 +1106,8 @@ when it ends.
         core.forget_passphrase()
         try:
             result = dispatch(p, args)
+        except core.UnsafePath as e:
+            sys.exit(f"{e}: nothing is read from it (repair the inventory, from a copy of the object)")
         finally:
             core.forget_passphrase()
         if changes_archive(args) and core.ROOT is not None:
