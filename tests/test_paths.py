@@ -283,3 +283,22 @@ def test_a_broken_configuration_is_a_message(archive):
     (archive / "osheaf.json").write_text('[]')
     with pytest.raises(SystemExit, match="mapping"):
         P.configure(archive)
+
+
+def test_reserved_names_in_a_document(archive, tmp_path):
+    put("paper-a", 1, dict(FILES1, **{"members.json": b"{}", "keys.json": b"{}",
+                                      "parent/object.json": b"{}", "forked/x": b"x", "figs/a.png": b"a"}))
+    errors = finish()
+    for name in ("members.json", "keys.json", "parent/object.json", "forked/x"):
+        assert any(f"{name}: the name" in e for e in errors), name
+    assert not any("figs/a.png" in e for e in errors)
+    src, pdf = tmp_path / "main.tex", tmp_path / "paper.pdf"
+    src.write_text("\\documentclass{article}")
+    pdf.write_bytes(b"%PDF-1.4 x")
+    r = ["--root", str(archive), "deposit", "paper-b", str(src), "--pdf", str(pdf), "--title", "T",
+         "--author", "Doe, J", "--new", "--extra-source"]
+    for logical in ("members.json", "parent/object.json", "genesis.json", "paper.pdf", "main.tex",
+                    "a//b", "a\\b", "e\u0301.tex", "./x"):
+        with pytest.raises(SystemExit, match="--extra-source"):
+            run(*r, f"{src}={logical}")
+    run(*r, f"{src}=sub/main.tex")

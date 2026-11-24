@@ -368,6 +368,17 @@ of the version before, as its checksum file states it; a first version and
 a draft have none. The key logs are checked for it with the other rules of
 key logs (section 14.3), so they are left out here.
 
+Section 4.1 reserves the names of the files it defines at the top level
+of the content for those files: `object.json`, `datacite.json`,
+`genesis.json`, `members.json`, `keys.json`, `forked` and `parent`. In a
+document or a collection, `members.json` is the member list of a
+collection only, `parent/` the evidence of the branch point of a branch
+only (an `object.json` with `parent`), and `keys.json` and `forked` belong
+to owner objects, whose key logs are checked apart (section 14.3). Any
+other use of these names, as a file or as a folder, is an error. The
+deposit refuses them in the same way (`deposit_path_problem`, in the
+chapter on the [deposit](13-deposit.md)).
+
 Before any of this, the inventory must have the shape the checks read: a
 manifest mapping digests to lists of content paths, versions mapping names
 to versions, each with a state of the same shape, a user that is a mapping
@@ -397,6 +408,27 @@ otherwise stop on it.
                     or not isinstance(v.get("created", ""), str):
                 return f"{name} has a user that is not a JSON object, or a message or time that is not text"
         return None
+
+
+    RESERVED = ("object.json", "datacite.json", "genesis.json", "members.json", "keys.json", "forked", "parent")
+
+
+    def reserved_name_errors(obj, logical):
+        """The uses of the names section 4.1 reserves, among the logical paths LOGICAL of a version of
+        a document or collection whose object.json is OBJ."""
+        out = []
+        for p in sorted(logical):
+            top = p.split("/")[0]
+            if top not in RESERVED:
+                continue
+            if p == top and top in ("object.json", "datacite.json", "genesis.json"):
+                continue
+            if p == top == "members.json" and obj.get("kind") == "collection":
+                continue
+            if top == "parent" and p != top and "parent" in obj:
+                continue
+            out.append(f"{p}: the name {top} is reserved for the file section 4.1 defines")
+        return out
 
 
     def check_logical_path(p):
@@ -456,6 +488,8 @@ otherwise stop on it.
                 continue
             if kind != "owner":
                 schema(f"{at}/{OBJ}", obj, "object")
+                for message in reserved_name_errors(obj, logical):
+                    f.error(at, message)
                 <<check previous in an object version>>
 
 Digests in inventories and checksum files are in lower case (section 4.1),

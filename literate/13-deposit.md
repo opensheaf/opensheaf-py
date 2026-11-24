@@ -409,12 +409,31 @@ TeXmacs source and the two descriptions.
         # FILE or FILE=LOGICAL/PATH (the path the main source refers to)
         src, _, logical = spec.partition("=")
         logical = logical or Path(src).name
-        parts = logical.split("/")
-        if logical.startswith("/") or ".." in parts or "." in parts:
-            sys.exit(f"bad logical path {logical}")
+        problem = deposit_path_problem(logical, files)
+        if problem:
+            sys.exit(f"--extra-source {spec}: {problem}")
         files[logical] = Path(src)
         if logical.endswith(".bib") and "application/x-bibtex" not in formats:
             formats.append("application/x-bibtex")
+
+The logical path of a further source follows the rules the verifier
+applies (section 4.1): relative, in normalisation form C, without empty,
+`.` or `..` segments or backslashes, and not under a name the
+specification reserves (`members.json`, `parent`, ..., see the
+[verifier](17-verify.md)). Nor may it replace another file of the deposit:
+the main source, the rendition `paper.pdf`, or another further source.
+
+    # in deposit a document version:
+    def deposit_path_problem(logical, files):
+        """Why LOGICAL cannot be the logical path of a further source beside FILES, or None."""
+        if not logical or logical.startswith("/") or not check_logical_path(logical) \
+                or any(ord(c) < 32 or ord(c) == 127 for c in logical):
+            return f"{logical!r} is not a logical path of section 4.1 (relative, NFC, no empty, . or .. segments)"
+        if logical.split("/")[0] in RESERVED:
+            return f"{logical}: the name {logical.split('/')[0]} is reserved by section 4.1"
+        if logical in files or logical == "paper.pdf":
+            return f"{logical} is another file of the deposit already"
+        return None
 
 The rendition is always `paper.pdf`. A TeXmacs source is typeset now, the
 PDF and the HTML version (if the archive makes one) into the scratch

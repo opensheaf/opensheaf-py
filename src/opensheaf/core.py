@@ -1381,9 +1381,9 @@ def deposit_in(args, tmp):
         # FILE or FILE=LOGICAL/PATH (the path the main source refers to)
         src, _, logical = spec.partition("=")
         logical = logical or Path(src).name
-        parts = logical.split("/")
-        if logical.startswith("/") or ".." in parts or "." in parts:
-            sys.exit(f"bad logical path {logical}")
+        problem = deposit_path_problem(logical, files)
+        if problem:
+            sys.exit(f"--extra-source {spec}: {problem}")
         files[logical] = Path(src)
         if logical.endswith(".bib") and "application/x-bibtex" not in formats:
             formats.append("application/x-bibtex")
@@ -1510,6 +1510,18 @@ def deposit_in(args, tmp):
         LABELS[label] = obj_id
     write_discovery()
     print(f"{label}: {inv['head']} (document version {doc_version}) {obj_id}")
+
+
+def deposit_path_problem(logical, files):
+    """Why LOGICAL cannot be the logical path of a further source beside FILES, or None."""
+    if not logical or logical.startswith("/") or not check_logical_path(logical) \
+            or any(ord(c) < 32 or ord(c) == 127 for c in logical):
+        return f"{logical!r} is not a logical path of section 4.1 (relative, NFC, no empty, . or .. segments)"
+    if logical.split("/")[0] in RESERVED:
+        return f"{logical}: the name {logical.split('/')[0]} is reserved by section 4.1"
+    if logical in files or logical == "paper.pdf":
+        return f"{logical} is another file of the deposit already"
+    return None
 
 
 def documents(owner=None):
@@ -2742,6 +2754,27 @@ def inventory_problem(inv):
     return None
 
 
+RESERVED = ("object.json", "datacite.json", "genesis.json", "members.json", "keys.json", "forked", "parent")
+
+
+def reserved_name_errors(obj, logical):
+    """The uses of the names section 4.1 reserves, among the logical paths LOGICAL of a version of
+    a document or collection whose object.json is OBJ."""
+    out = []
+    for p in sorted(logical):
+        top = p.split("/")[0]
+        if top not in RESERVED:
+            continue
+        if p == top and top in ("object.json", "datacite.json", "genesis.json"):
+            continue
+        if p == top == "members.json" and obj.get("kind") == "collection":
+            continue
+        if top == "parent" and p != top and "parent" in obj:
+            continue
+        out.append(f"{p}: the name {top} is reserved for the file section 4.1 defines")
+    return out
+
+
 def check_logical_path(p):
     """Whether the logical path P follows the rules of section 4.1."""
     parts = p.split("/")
@@ -2823,6 +2856,8 @@ def check_object_storage(f, schema, obj_id, d, inv):
             continue
         if kind != "owner":
             schema(f"{at}/{OBJ}", obj, "object")
+            for message in reserved_name_errors(obj, logical):
+                f.error(at, message)
             if n == 1 or draft:
                 if "previous" in obj:
                     f.error(at, "a first version, or a draft, has no previous (section 4.3)")
