@@ -82,6 +82,7 @@ optional package keyring, as for the tokens of [Zenodo](50-zenodo.md).
     import shutil
     import subprocess
     import sys
+    import unicodedata
     from pathlib import Path
 
     from nacl import pwhash, secret, utils
@@ -515,6 +516,15 @@ default, libsodium's "moderate" (the module's `OPSLIMIT` and `MEMLIMIT`,
 read when a seed is encrypted, so that the tests can lower them); `none`
 means a seed kept as it is.
 
+A passphrase is normalised to Unicode NFC before Argon2id reads it, in
+UTF-8: the same accented letter can be typed as one character or as a
+letter and a combining accent, depending on the keyboard, the operating
+system or the password manager, and both spellings must open the same
+key. This is the one place where a passphrase becomes bytes, for a seed
+encrypted on its own as for the passphrase lock of an envelope (below),
+in a key file, a key text or a wallet; opensheaf-js does the same. (An
+ASCII passphrase is unchanged by NFC.)
+
 The cost recorded in a file is read from the file, which may come from
 anywhere: a wallet, a clipboard, a USB key. A file that asks for more than
 libsodium's "sensitive" cost (4 passes, 1 GiB), or less than its minimum,
@@ -536,7 +546,7 @@ give the memory asked for is told so, as an error of the key, not a crash.
         if len(salt) != a.SALTBYTES:
             raise KeyStoreError("the encryption of the key is damaged")
         try:
-            return a.kdf(secret.SecretBox.KEY_SIZE, passphrase.encode("utf-8"), salt,
+            return a.kdf(secret.SecretBox.KEY_SIZE, unicodedata.normalize("NFC", passphrase).encode("utf-8"), salt,
                          opslimit=opslimit, memlimit=memlimit)
         except (MemoryError, RuntimeError) as e:
             raise KeyStoreError(f"Argon2id could not run with memlimit={memlimit} on this machine: {e}") from None

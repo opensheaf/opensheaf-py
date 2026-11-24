@@ -25,6 +25,7 @@ import os
 import shutil
 import subprocess
 import sys
+import unicodedata
 from pathlib import Path
 
 from nacl import pwhash, secret, utils
@@ -300,7 +301,7 @@ def _argon2id(passphrase, salt, opslimit, memlimit):
     if len(salt) != a.SALTBYTES:
         raise KeyStoreError("the encryption of the key is damaged")
     try:
-        return a.kdf(secret.SecretBox.KEY_SIZE, passphrase.encode("utf-8"), salt,
+        return a.kdf(secret.SecretBox.KEY_SIZE, unicodedata.normalize("NFC", passphrase).encode("utf-8"), salt,
                      opslimit=opslimit, memlimit=memlimit)
     except (MemoryError, RuntimeError) as e:
         raise KeyStoreError(f"Argon2id could not run with memlimit={memlimit} on this machine: {e}") from None

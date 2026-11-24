@@ -225,7 +225,9 @@ Key files and texts
 A key file of a wallet says its kind, and is read back as that kind; a
 current key is refused where a rotation key is needed. The text for a
 password manager reads back, in clear or encrypted, also with lines
-pasted around it, and a mistyped group is caught by its check.
+pasted around it, and a mistyped group is caught by its check. A
+passphrase is read in NFC: its spellings in NFC and in NFD open the same
+key file, text or envelope, whichever wrote it.
 
     # in wallet tests: key files and texts:
     def test_key_files_and_texts():
@@ -250,6 +252,15 @@ pasted around it, and a mistyped group is caught by its check.
             keys.read_key(plain.replace(seed, wrong, 1))
         with pytest.raises(wallet.WalletError, match="only locked with a passphrase"):
             wallet.put_key(None, owner, k, keys.ROTATION, 1, None)
+        import unicodedata
+        nfc, nfd = (unicodedata.normalize(f, "Élan café, crème brûlée") for f in ("NFC", "NFD"))
+        assert nfc != nfd
+        for one, other in ((nfc, nfd), (nfd, nfc)):
+            for text in (keys.key_file_text(k, owner, keys.CURRENT, 2, one, **FAST),
+                         keys.key_text(k, owner, passphrase=one, **FAST)):
+                assert keys.read_key(text, other).key.did == k.did == keys.read_key(text, one).key.did
+        with pytest.raises(keys.KeyStoreError, match="wrong passphrase"):
+            keys.read_key(keys.key_text(k, owner, passphrase=nfc, **FAST), "Elan cafe, creme brulee")
 
 The repositories of an archive are those of its git remotes on GitHub and
 of its GitHub Pages address.
