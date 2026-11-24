@@ -9,6 +9,7 @@ URIs resolved to the latest signed version among the copies that agree (section 
 
 import json
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -617,6 +618,12 @@ class Resolver:
 
     def pin(self, nm, owner, version, digest, where=()):
         """The status of the pin (VERSION, DIGEST) of the line (NM, OWNER) (section 8.5), as a Found."""
+        if not (all(isinstance(x, str) and names.NAME.match(x) for x in (nm, owner))
+                and isinstance(version, str) and re.fullmatch(r"v[1-9][0-9]*", version)
+                and isinstance(digest, str) and re.fullmatch(r"[0-9a-f]{128}", digest)):
+            self.note("warning", f"sheaf:{nm}:{owner}: the pin {version!r} sha512={digest!r} is not a line, "
+                      "an object version and a digest (section 8.5)")
+            return Found("not a version", version=version if isinstance(version, str) else None)
         if nm == owner:
             log = self.key_log(owner, self.where(where))
             v = log.lookup(int(version[1:]), digest) if log else None

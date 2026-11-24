@@ -441,6 +441,28 @@ member is verified across archives (`verify --remote`, section 14.5), and
         run("--root", str(c), "collection", "status", "reading-list")
         assert capsys.readouterr().out.count("verified: ") == 2
 
+A pin that is not one, a version `latest` say, written into a member by
+hand, is not a version: `verify --remote` reports it, and does not stop.
+
+    # in across: collections:
+    def test_a_pin_that_is_not_one(tmp_path):
+        from opensheaf import collections
+        a = make(tmp_path, "papers")
+        deposit(a, "one", "one", new=True)
+        c = make(tmp_path, "reading")
+        spec = tmp_path / "collection.yaml"
+        spec.write_text(f"title: Reading\ntype: catalogue\nmembers:\n  - '{uri(a, 'one')}'\n")
+        run("--root", str(c), "collection", "sync", "list", "--from", str(spec))
+        P.configure(c)
+        m = members(c, "list")["members"][0]
+        collections.write(line(c, "list"), dict(members(c, "list"), members=[dict(m, version="latest")]),
+                          message="by hand")
+        with remote.Resolver() as r:
+            assert r.pin(m["name"], m["owner"], "latest", m["inventorySha512"]).status == "not a version"
+            assert r.pin("../x", m["owner"], "v1", m["inventorySha512"]).status == "not a version"
+        found = findings(c, remote_=True)
+        assert any(x["severity"] == "error" for x in found)
+
 The statuses of section 8.5, across archives: a member whose line is taken
 down in its archive is removed; a pin of another digest is a mismatch; a
 member whose archive has gone is unavailable; a version signed with a key

@@ -329,6 +329,25 @@ def test_curated_collection_across_archives(tmp_path, capsys):
     assert capsys.readouterr().out.count("verified: ") == 2
 
 
+def test_a_pin_that_is_not_one(tmp_path):
+    from opensheaf import collections
+    a = make(tmp_path, "papers")
+    deposit(a, "one", "one", new=True)
+    c = make(tmp_path, "reading")
+    spec = tmp_path / "collection.yaml"
+    spec.write_text(f"title: Reading\ntype: catalogue\nmembers:\n  - '{uri(a, 'one')}'\n")
+    run("--root", str(c), "collection", "sync", "list", "--from", str(spec))
+    P.configure(c)
+    m = members(c, "list")["members"][0]
+    collections.write(line(c, "list"), dict(members(c, "list"), members=[dict(m, version="latest")]),
+                      message="by hand")
+    with remote.Resolver() as r:
+        assert r.pin(m["name"], m["owner"], "latest", m["inventorySha512"]).status == "not a version"
+        assert r.pin("../x", m["owner"], "v1", m["inventorySha512"]).status == "not a version"
+    found = findings(c, remote_=True)
+    assert any(x["severity"] == "error" for x in found)
+
+
 def test_member_statuses(tmp_path):
     a = make(tmp_path, "a")
     for label in ("one", "two", "three"):

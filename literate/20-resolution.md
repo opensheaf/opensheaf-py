@@ -71,6 +71,7 @@ what they fetch as untrusted, and bound it).
 
     import json
     import os
+    import re
     import shutil
     import sys
     import tempfile
@@ -925,11 +926,21 @@ a version of the key log: a version held with that number and digest
 that fails the checks of the key log (section 14.3) is not a version.
 
 The answer is a `Found`: the status, the copy and version where it was
-found, and the notes.
+found, and the notes. A pin comes from a member of a collection, which may
+be another archive's: one whose line is not two names, whose version is not
+`v` and a positive integer, or whose digest is not 128 hexadecimal digits,
+pins nothing, and is not a version (section 8.5), noted, never a crash of
+the verification that asked.
 
     # in resolution: resolving a pin, a version or a line:
     def pin(self, nm, owner, version, digest, where=()):
         """The status of the pin (VERSION, DIGEST) of the line (NM, OWNER) (section 8.5), as a Found."""
+        if not (all(isinstance(x, str) and names.NAME.match(x) for x in (nm, owner))
+                and isinstance(version, str) and re.fullmatch(r"v[1-9][0-9]*", version)
+                and isinstance(digest, str) and re.fullmatch(r"[0-9a-f]{128}", digest)):
+            self.note("warning", f"sheaf:{nm}:{owner}: the pin {version!r} sha512={digest!r} is not a line, "
+                      "an object version and a digest (section 8.5)")
+            return Found("not a version", version=version if isinstance(version, str) else None)
         if nm == owner:
             log = self.key_log(owner, self.where(where))
             v = log.lookup(int(version[1:]), digest) if log else None
