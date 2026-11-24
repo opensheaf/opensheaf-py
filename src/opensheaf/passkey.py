@@ -13,8 +13,10 @@ import hashlib
 import hmac
 import html
 import http.server
+import os
 import re
 import secrets
+import socket
 import sys
 import threading
 import urllib.parse
@@ -52,6 +54,11 @@ def page_url(mode, port, state, pk, owner, creds=()):
     if creds:
         fragment["cred"] = ",".join(creds)
     return UNLOCK_PAGE + "#" + urllib.parse.urlencode(fragment)
+
+
+def start_url(port):
+    """The address that the command opens, and prints: the listener on PORT, which sends the browser on."""
+    return f"http://127.0.0.1:{port}/start"
 
 
 CODE_LABEL = b"opensheaf unlock code v1"
@@ -119,6 +126,40 @@ FAILED = "osheaf did not get the key ({}): it asks for the passphrase instead. Y
 NO_X25519 = ("this browser has no X25519 in WebCrypto, and cannot hand the key to osheaf securely (known to "
              "work: Safari 17+, Chrome 133+, Firefox 130+); osheaf uses the passphrase")
 ANSWER = ({"state", "epk", "ct", "tag", "cred"}, {"state", "error"})
+TWICE = ("the address of osheaf was opened twice: another program may have read it, so osheaf does not "
+         "wait for the browser (if it was you, try again, and open the address once)")
+OTHER_USER = "another user of this computer"
+SAME_USER_ONLY = sys.platform.startswith("linux")
+
+
+def _hex_address(host):
+    """The forms of the IPv4 address HOST in /proc/net/tcp and in /proc/net/tcp6 (as ::ffff:HOST)."""
+    word = socket.inet_aton(host)[::-1].hex().upper()
+    return {word, "0000000000000000FFFF0000" + word}
+
+
+def peer_uid(host, port, server_port, tables=("/proc/net/tcp", "/proc/net/tcp6")):
+    """The uid of the socket at HOST:PORT connected to HOST:SERVER_PORT, from the kernel's TCP TABLES;
+    None if none is found."""
+    here = _hex_address(host)
+    for table in tables:
+        try:
+            with open(table, encoding="ascii") as f:
+                lines = f.read().splitlines()[1:]
+        except OSError:
+            continue
+        for line in lines:
+            f = line.split()
+            if len(f) < 8 or f[3] != "01":
+                continue
+            (local, lport), (remote, rport) = f[1].split(":"), f[2].split(":")
+            if (local in here and remote in here and int(lport, 16) == port
+                    and int(rport, 16) == server_port):
+                return int(f[7])
+    return None
+
+
+PEER_UID = peer_uid
 
 
 class _Handler(http.server.BaseHTTPRequestHandler):
@@ -126,8 +167,15 @@ class _Handler(http.server.BaseHTTPRequestHandler):
 
     def do_GET(self):
         url = urllib.parse.urlsplit(self.path)
-        if url.path != "/callback":
+        if url.path not in ("/start", "/callback"):
             return self._answer(404, "not found")
+        if SAME_USER_ONLY:
+            host, port = self.client_address[:2]
+            if PEER_UID(host, port, self.server.server_port) != os.getuid():
+                print(f"Warning: {OTHER_USER} asked osheaf for {url.path}: refused.", file=sys.stderr)
+                return self._answer(403, f"osheaf answers only the user who runs it, not {OTHER_USER}")
+        if url.path == "/start":
+            return self._start()
         try:
             fields = urllib.parse.parse_qs(url.query, max_num_fields=6, strict_parsing=True)
         except ValueError:
@@ -148,6 +196,22 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         else:
             self._answer(200, DONE)
         self.server.done.set()
+
+    def _start(self):
+        s = self.server
+        with s.lock:
+            s.started += 1
+            if s.started > 1 and s.result is None:
+                s.result = {"abort": TWICE}
+                s.done.set()
+        if s.started > 1:
+            return self._answer(409, TWICE)
+        self.send_response(302)
+        self.send_header("Location", s.page)
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Referrer-Policy", "no-referrer")
+        self.send_header("Content-Length", "0")
+        self.end_headers()
 
     def _open(self, fields):
         if "error" in fields:
@@ -187,13 +251,14 @@ def ask(mode, owner, creds=(), *, no_browser=False, timeout=None, ctrl_c="type t
     server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
     server.daemon_threads = True
     server.state, server.result, server.done = secrets.token_urlsafe(16), None, threading.Event()
-    server.mode, server.owner, server.lock = mode, owner, threading.Lock()
+    server.mode, server.owner, server.lock, server.started = mode, owner, threading.Lock(), 0
     server.key = public.PrivateKey.generate()
+    pk = bytes(server.key.public_key)
+    server.page = page_url(mode, server.server_port, server.state, pk, owner, creds)
     thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.1}, daemon=True)
     thread.start()
     try:
-        pk = bytes(server.key.public_key)
-        url = page_url(mode, server.server_port, server.state, pk, owner, creds)
+        url = start_url(server.server_port)
         what = (f"create a passkey for {names.short(owner)}" if mode == "enroll"
                 else f"unlock the keys of {names.short(owner)} with your passkey")
         opened = False
@@ -210,7 +275,8 @@ def ask(mode, owner, creds=(), *, no_browser=False, timeout=None, ctrl_c="type t
         limit = TIMEOUT if timeout is None else timeout
         try:
             if opened and limit > STILL and not server.done.wait(STILL):
-                print(f"Still waiting… if the browser did not open, go to:\n  {url}", file=sys.stderr)
+                if not server.started:
+                    print(f"Still waiting… if the browser did not open, go to:\n  {url}", file=sys.stderr)
                 limit -= STILL
             if not server.done.wait(limit):
                 raise UnlockFailed("no answer from the browser in time")
@@ -219,7 +285,10 @@ def ask(mode, owner, creds=(), *, no_browser=False, timeout=None, ctrl_c="type t
     finally:
         server.shutdown()
         server.server_close()
-        server.key = None
+        server.key = server.page = None
+    if "abort" in server.result:
+        print(f"Warning: {server.result['abort']}.", file=sys.stderr)
+        raise UnlockFailed(server.result["abort"])
     if "error" in server.result:
         error = server.result["error"]
         raise UnlockFailed(NO_X25519 if error == "x25519-unavailable" else f"the page says: {error[:200]}")

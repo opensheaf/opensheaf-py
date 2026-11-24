@@ -62,6 +62,8 @@ SHA-1) required to replace or delete it, and the 404 of the real API
 
     import base64
     import json
+    import os
+    import re
     import stat
     import sys
     import threading
@@ -879,8 +881,10 @@ other state, mode, owner, credential, key or ciphertext is refused.
         assert passkey.hkdf(b"\x0b" * 22, bytes(range(13)), bytes(range(0xf0, 0xfa)), 42).hex() == (
             "3cb25f25faacd57a90434f64d0362f2a2d2d0a90cf1a5a4c5db02d56ecc4c5bf34007208d5b887185865")
 
-The double of the browser reads the address of the page as the page
-does, from its fragment, computes the salt from the owner, and goes back
+The double of the browser opens the address `/start` of the listener, as
+a browser would, and checks that it is sent on to the page, once, without
+being kept or named (`follow_start`). It reads the address of the page as
+the page does, from its fragment, computes the salt from the owner, and goes back
 to the listener as the page would, from another thread: it encrypts a PRF
 secret of its own (a digest of the credential and the salt, stable as a
 real one is) to the public key of the listener, and sends it in the
@@ -890,8 +894,24 @@ the provider holds one of those excluded already. It records the
 fragments of the pages it opened, and the addresses it went to.
 
     # in wallet tests: passkey unlock:
+    class _NoRedirect(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, *args, **kw):
+            return None
+
+
+    def follow_start(url):
+        """The address of the page that the listener at URL, its /start, sends the browser to."""
+        assert re.fullmatch(r"http://127\.0\.0\.1:[0-9]+/start", url)
+        with pytest.raises(urllib.error.HTTPError) as e:
+            urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirect).open(url, timeout=5)
+        h = e.value.headers
+        assert e.value.code == 302 and h["Cache-Control"] == "no-store" and h["Referrer-Policy"] == "no-referrer"
+        return h["Location"]
+
+
     def fake_browser(opened, answer="secret", cred="ZmFrZS1wYXNza2V5LWNyZWRlbnRpYWw"):
         def opener(url):
+            url = follow_start(url)
             assert url.startswith(passkey.UNLOCK_PAGE + "#") and "?" not in url
             q = {k: v[0] for k, v in urllib.parse.parse_qs(urllib.parse.urlsplit(url).fragment).items()}
             assert "salt" not in q
@@ -1180,8 +1200,10 @@ refused, and it keeps waiting; a ciphertext that is not 32 bytes counts
 as an error of the page. Another program that holds a connection open and
 says nothing does not stop the answer of the page from arriving at once.
 Without a browser
-(`--no-browser`), the address is printed at once; when the browser does
-not answer, it is printed after a while, in case no browser opened.
+(`--no-browser`), the address `/start` is printed at once; when the
+browser does not answer, it is printed after a while, in case no browser
+opened, but not once a browser has asked for it; the address of the page
+is never printed.
 
     # in wallet tests: passkey unlock:
     def test_listener():
@@ -1191,6 +1213,7 @@ not answer, it is printed after a while, in case no browser opened.
         got, idle = [], []
 
         def opener(url):
+            url = follow_start(url)
             q = {k: v[0] for k, v in urllib.parse.parse_qs(urllib.parse.urlsplit(url).fragment).items()}
             idle.append(socket.create_connection(("127.0.0.1", int(q["port"]))))
             o = urllib.request.build_opener(urllib.request.ProxyHandler({}))
@@ -1232,13 +1255,116 @@ not answer, it is printed after a while, in case no browser opened.
             passkey.unlock(owner, ["Y3JlZA"], timeout=0.5)
         err = capsys.readouterr().err
         assert err.index("Waiting for the browser") < err.index("Still waiting… if the browser did not open, go to:\n  "
-                                                                 + passkey.UNLOCK_PAGE + "#mode=unlock&")
+                                                                 "http://127.0.0.1:")
+        assert re.search(r"go to:\n  http://127\.0\.0\.1:[0-9]+/start\n", err) and passkey.UNLOCK_PAGE not in err
         monkeypatch.setattr(passkey, "OPEN", lambda url: pytest.fail("a browser was opened"))
         with pytest.raises(passkey.UnlockFailed, match="no answer"):
             passkey.unlock(owner, ["Y3JlZA"], timeout=0.3, no_browser=True)
         err = capsys.readouterr().err
         assert "Go to this address in your browser" in err and "Opening the browser" not in err
-        assert "Still waiting" not in err
+        assert "Still waiting" not in err and "/start\n" in err and passkey.UNLOCK_PAGE not in err
+        monkeypatch.setattr(passkey, "OPEN", lambda url: follow_start(url) and True)
+        with pytest.raises(passkey.UnlockFailed, match="no answer"):
+            passkey.unlock(owner, ["Y3JlZA"], timeout=0.5)
+        assert "Still waiting" not in capsys.readouterr().err
+
+
+The address `/start` sends the browser on once. Opened a second time, by
+someone who read it, or by the user, it says so (409), and the command
+stops waiting, with a warning, and closes the listener, so that no
+answer of a page is taken.
+
+    # in wallet tests: passkey unlock:
+    def test_start_is_answered_once(monkeypatch, capsys):
+        owner = "56wo6cdpjsxk7ddgnqfp2quipfghukhtmvjuahvwzko7m4tkz3pa"
+        opened = []
+
+        def twice(url):
+            assert follow_start(url).startswith(passkey.UNLOCK_PAGE + "#mode=unlock&")
+            try:
+                urllib.request.build_opener(urllib.request.ProxyHandler({})).open(url, timeout=5)
+            except urllib.error.HTTPError as e:
+                opened.append({"again": e.code})
+            return True
+
+        monkeypatch.setattr(passkey, "OPEN", twice)
+        with pytest.raises(passkey.UnlockFailed, match="opened twice"):
+            passkey.unlock(owner, ["Y3JlZA"], timeout=3)
+        assert opened == [{"again": 409}]
+        assert "Warning: the address of osheaf was opened twice" in capsys.readouterr().err
+
+
+On Linux, the listener answers only the user who runs the command. The
+tests play another user by replacing `PEER_UID`, whatever the system:
+`/start` asked by another user is refused (403), and does not count as
+the first; an answer of the page sent by another user, even a right one,
+is refused, and the answer of the user's own browser is still taken.
+`peer_uid` reads a table in the form of `/proc/net/tcp`; on Linux, it
+finds the owner of a real connection, the user running the tests.
+
+    # in wallet tests: passkey unlock:
+    def test_another_user_is_refused(monkeypatch, capsys):
+        owner = "56wo6cdpjsxk7ddgnqfp2quipfghukhtmvjuahvwzko7m4tkz3pa"
+        who, got, opened = [os.getuid() + 1], [], []
+        monkeypatch.setattr(passkey, "SAME_USER_ONLY", True)
+        monkeypatch.setattr(passkey, "PEER_UID", lambda host, port, server_port: who[0])
+        o = urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirect)
+
+        def status(url):
+            try:
+                return o.open(url, timeout=5).status
+            except urllib.error.HTTPError as e:
+                return e.code
+
+        def opener(url):
+            got.append(status(url))
+            who[0] = os.getuid()
+            page = follow_start(url)
+            q = {k: v[0] for k, v in urllib.parse.parse_qs(urllib.parse.urlsplit(page).fragment).items()}
+            epk, ct, tag = passkey.seal(bytes(32), passkey.from_b64url(q["pk"]), q["state"], q["mode"], q["owner"],
+                                        "Y3JlZA")
+            answer = url.replace("/start", "/callback?") + urllib.parse.urlencode(
+                {"state": q["state"], "epk": passkey.b64url(epk), "ct": passkey.b64url(ct),
+                 "tag": passkey.b64url(tag), "cred": "Y3JlZA"})
+            who[0] = os.getuid() + 1
+            got.append(status(answer))
+            who[0] = os.getuid()
+            got.append(status(answer))
+            return True
+
+        monkeypatch.setattr(passkey, "OPEN", opener)
+        assert passkey.unlock(owner, ["Y3JlZA"], timeout=3) == ("Y3JlZA", bytes(32))
+        assert got == [403, 403, 200]
+        err = capsys.readouterr().err
+        assert err.count("Warning: another user of this computer asked osheaf for ") == 2
+
+
+    def test_peer_uid(tmp_path):
+        import socket
+        table = tmp_path / "tcp"
+        table.write_text(
+            "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n"
+            "   0: 0100007F:D431 0100007F:0050 06 00000000:00000000 03:00000000 00000000     0        0 0\n"
+            "   1: 0100007F:D431 0100007F:0050 01 00000000:00000000 00:00000000 00000000  1001        0 0\n"
+            "   2: 0100007F:0050 0100007F:D431 01 00000000:00000000 00:00000000 00000000  1002        0 0\n")
+        table6 = tmp_path / "tcp6"
+        table6.write_text(
+            "  sl  local_address                         remote_address                        st tx_queue rx_queue "
+            "tr tm->when retrnsmt   uid  timeout inode\n"
+            "   0: 0000000000000000FFFF00000100007F:D432 0000000000000000FFFF00000100007F:0050 01 00000000:00000000 "
+            "00:00000000 00000000  1003        0 0\n")
+        tables = (str(table), str(table6), str(tmp_path / "missing"))
+        assert passkey.peer_uid("127.0.0.1", 0xD431, 0x50, tables) == 1001
+        assert passkey.peer_uid("127.0.0.1", 0x50, 0xD431, tables) == 1002
+        assert passkey.peer_uid("127.0.0.1", 0xD432, 0x50, tables) == 1003
+        assert passkey.peer_uid("127.0.0.1", 0xD433, 0x50, tables) is None
+        assert passkey.peer_uid("127.0.0.2", 0xD431, 0x50, tables) is None
+        if sys.platform.startswith("linux"):
+            with socket.create_server(("127.0.0.1", 0)) as server, \
+                    socket.create_connection(server.getsockname()) as client:
+                accepted, (host, port) = server.accept()
+                with accepted:
+                    assert passkey.peer_uid(host, port, server.getsockname()[1]) == os.getuid()
 
 `OPENSHEAF_PASSPHRASE_COMMAND` gives the passphrase, before it is asked,
 also where it would be asked twice; a command that gives nothing is said

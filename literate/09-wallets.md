@@ -888,11 +888,13 @@ nothing else (its source is the repository
 The way there and back is this. The command starts a *listener*, a small
 web server on `127.0.0.1` only, on a port chosen by the system, with a
 `state`, 128 random bits, and a one-time X25519 key pair, which only this
-command knows. It opens the browser at the page, with the mode, the port,
-the state, the public key of the pair, the owner and the credentials of
-the owner's passkeys, all in the *fragment* of the address (after `#`),
-which the browser never sends to a server; the page reads it, and at once
-takes it out of the address bar and of the history. The command prints a
+command knows. It opens the browser at the listener itself,
+`http://127.0.0.1:<port>/start`, which sends it on (a redirection) to the
+page, with the mode, the port, the state, the public key of the pair, the
+owner and the credentials of the owner's passkeys, all in the *fragment*
+of the address (after `#`), which the browser never sends to a server;
+the page reads it, and at once takes it out of the address bar and of the
+history. The command prints a
 *confirmation code* of six digits, derived from the state and the public
 key; the page shows the same code, and does nothing until the user has
 checked that the two agree and clicked. It then calls WebAuthn: to
@@ -927,6 +929,23 @@ the page that knew the state; the command line, besides, trusts a secret
 only once it has opened a key of the wallet (chapter 19), and checks a new
 passkey with a second unlock before it writes anything under it.
 
+Why `/start`, and not the address of the page. The command line of a
+program is public on a computer shared by several users: on Linux, any of
+them reads the arguments of `xdg-open` and of the browser in `/proc`. The
+address `/start` holds nothing: it gives the state and the public key
+once, to the first `GET`, in the `Location` of a redirection, which
+reaches only the browser that asked, and no server log (the browser keeps
+the fragment, and sends no `Referer`). A second `GET /start` means that
+someone else asked too, perhaps before the user's browser: the command
+then stops, with a warning, rather than wait for an answer that may come
+from that someone. The listener itself is open to every user of the
+computer, at `127.0.0.1`; on Linux it answers `/start` and `/callback`
+only to a connection of the user who runs the command, whose owner it
+finds in `/proc/net/tcp` (or `tcp6`), so that another user cannot race
+the browser to the page or to the listener with an answer of their own.
+Elsewhere (macOS, Windows) the listener has no such check, and the code
+and the authenticated hand-off are what protect it.
+
     # in passkey: the docstring and the imports:
     """Passkey unlock (opensheaf-py): the command line's side of the page
     https://unlock.opensheaf.org/ (UNLOCK_PAGE), which creates a passkey for
@@ -942,8 +961,10 @@ passkey with a second unlock before it writes anything under it.
     import hmac
     import html
     import http.server
+    import os
     import re
     import secrets
+    import socket
     import sys
     import threading
     import urllib.parse
@@ -996,6 +1017,11 @@ which the tests replace.
         if creds:
             fragment["cred"] = ",".join(creds)
         return UNLOCK_PAGE + "#" + urllib.parse.urlencode(fragment)
+
+
+    def start_url(port):
+        """The address that the command opens, and prints: the listener on PORT, which sends the browser on."""
+        return f"http://127.0.0.1:{port}/start"
 
 The confirmation code is the first four bytes of a SHA-256 digest, of
 `opensheaf unlock code v1`, the state (in UTF-8) and the public key of
@@ -1095,7 +1121,13 @@ written out, as in chapter 7: it is two lines of HMAC.
 
 ### The listener
 
-The listener answers one request, `GET /callback`, whose query holds the
+The listener answers two requests. `GET /start`, the first time, sends
+the browser on to the page (302, with the address of the page in
+`Location`, and `Cache-Control: no-store` and `Referrer-Policy:
+no-referrer`, so that the browser neither keeps the redirection nor names
+the listener to the page); the second time, it ends the wait with a
+warning, and the command does not use the browser. `GET /callback`, whose
+query holds the
 `state`, and either `epk`, `ct`, `tag` and `cred` or an `error`, and
 nothing else (a few fields, a few kilobytes at most). A request with
 another state is refused (403), and the listener keeps waiting, as it
@@ -1111,12 +1143,57 @@ up after five seconds of silence: another program on the computer that
 opens a connection and says nothing cannot keep the browser's answer
 waiting. The first answer is taken under a lock.
 
+On Linux (`SAME_USER_ONLY`), both requests are answered only to a
+connection of the user who runs the command; any other is refused (403),
+with a warning, and the listener keeps waiting. The owner of a
+connection is in the kernel's table of TCP sockets, `/proc/net/tcp`, or
+`/proc/net/tcp6` for a socket of IPv6 that reaches `127.0.0.1` as
+`::ffff:127.0.0.1`: the line whose local address is the address and port
+of the other end, whose remote address is the listener's, and whose
+state is "established" (`01`), gives the uid. A connection that cannot be
+found counts as another user's. `PEER_UID` is a variable, which the tests
+replace, to play another user without needing one.
+
     # in passkey: the listener:
     DONE = "osheaf has the key. You can close this tab."
     FAILED = "osheaf did not get the key ({}): it asks for the passphrase instead. You can close this tab."
     NO_X25519 = ("this browser has no X25519 in WebCrypto, and cannot hand the key to osheaf securely (known to "
                  "work: Safari 17+, Chrome 133+, Firefox 130+); osheaf uses the passphrase")
     ANSWER = ({"state", "epk", "ct", "tag", "cred"}, {"state", "error"})
+    TWICE = ("the address of osheaf was opened twice: another program may have read it, so osheaf does not "
+             "wait for the browser (if it was you, try again, and open the address once)")
+    OTHER_USER = "another user of this computer"
+    SAME_USER_ONLY = sys.platform.startswith("linux")
+
+
+    def _hex_address(host):
+        """The forms of the IPv4 address HOST in /proc/net/tcp and in /proc/net/tcp6 (as ::ffff:HOST)."""
+        word = socket.inet_aton(host)[::-1].hex().upper()
+        return {word, "0000000000000000FFFF0000" + word}
+
+
+    def peer_uid(host, port, server_port, tables=("/proc/net/tcp", "/proc/net/tcp6")):
+        """The uid of the socket at HOST:PORT connected to HOST:SERVER_PORT, from the kernel's TCP TABLES;
+        None if none is found."""
+        here = _hex_address(host)
+        for table in tables:
+            try:
+                with open(table, encoding="ascii") as f:
+                    lines = f.read().splitlines()[1:]
+            except OSError:
+                continue
+            for line in lines:
+                f = line.split()
+                if len(f) < 8 or f[3] != "01":
+                    continue
+                (local, lport), (remote, rport) = f[1].split(":"), f[2].split(":")
+                if (local in here and remote in here and int(lport, 16) == port
+                        and int(rport, 16) == server_port):
+                    return int(f[7])
+        return None
+
+
+    PEER_UID = peer_uid
 
 
     class _Handler(http.server.BaseHTTPRequestHandler):
@@ -1124,8 +1201,15 @@ waiting. The first answer is taken under a lock.
 
         def do_GET(self):
             url = urllib.parse.urlsplit(self.path)
-            if url.path != "/callback":
+            if url.path not in ("/start", "/callback"):
                 return self._answer(404, "not found")
+            if SAME_USER_ONLY:
+                host, port = self.client_address[:2]
+                if PEER_UID(host, port, self.server.server_port) != os.getuid():
+                    print(f"Warning: {OTHER_USER} asked osheaf for {url.path}: refused.", file=sys.stderr)
+                    return self._answer(403, f"osheaf answers only the user who runs it, not {OTHER_USER}")
+            if url.path == "/start":
+                return self._start()
             try:
                 fields = urllib.parse.parse_qs(url.query, max_num_fields=6, strict_parsing=True)
             except ValueError:
@@ -1146,6 +1230,22 @@ waiting. The first answer is taken under a lock.
             else:
                 self._answer(200, DONE)
             self.server.done.set()
+
+        def _start(self):
+            s = self.server
+            with s.lock:
+                s.started += 1
+                if s.started > 1 and s.result is None:
+                    s.result = {"abort": TWICE}
+                    s.done.set()
+            if s.started > 1:
+                return self._answer(409, TWICE)
+            self.send_response(302)
+            self.send_header("Location", s.page)
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Referrer-Policy", "no-referrer")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
 
         def _open(self, fields):
             if "error" in fields:
@@ -1175,15 +1275,18 @@ waiting. The first answer is taken under a lock.
 
 ### Asking the browser
 
-`ask` runs the way there and back. It opens the address with `OPEN` (the
-standard `webbrowser`, which the tests replace by a double that plays the
-page), prints the confirmation code, and waits for the answer, two
-minutes at most, or until the user presses Ctrl-C (to type the
-passphrase instead, or to stop). It says what it does on the standard
-error, and shows the address, which is long, only when it is needed: when
-no browser opens (`--no-browser`, a remote shell), or after ten seconds
-without an answer, in case the browser did not come up. The listener is
-closed whatever happens, and its private key goes with it.
+`ask` runs the way there and back. It opens the address `/start` of the
+listener with `OPEN` (the standard `webbrowser`, which the tests replace
+by a double that plays the browser and the page), prints the confirmation
+code, and waits for the answer, two minutes at most, or until the user
+presses Ctrl-C (to type the passphrase instead, or to stop). It says what
+it does on the standard error, and shows the address `/start` (never the
+address of the page) only when it is needed: when no browser opens
+(`--no-browser`, a remote shell), or after ten seconds without an
+answer, in case the browser did not come up, unless a browser has asked
+for `/start` already (opening it again would stop the command). A second
+`GET /start` ends the wait with its warning. The listener is closed
+whatever happens, and its private key goes with it.
 
     # in passkey: asking the browser:
     OPEN = webbrowser.open
@@ -1197,13 +1300,14 @@ closed whatever happens, and its private key goes with it.
         server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
         server.daemon_threads = True
         server.state, server.result, server.done = secrets.token_urlsafe(16), None, threading.Event()
-        server.mode, server.owner, server.lock = mode, owner, threading.Lock()
+        server.mode, server.owner, server.lock, server.started = mode, owner, threading.Lock(), 0
         server.key = public.PrivateKey.generate()
+        pk = bytes(server.key.public_key)
+        server.page = page_url(mode, server.server_port, server.state, pk, owner, creds)
         thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.1}, daemon=True)
         thread.start()
         try:
-            pk = bytes(server.key.public_key)
-            url = page_url(mode, server.server_port, server.state, pk, owner, creds)
+            url = start_url(server.server_port)
             what = (f"create a passkey for {names.short(owner)}" if mode == "enroll"
                     else f"unlock the keys of {names.short(owner)} with your passkey")
             opened = False
@@ -1220,7 +1324,8 @@ closed whatever happens, and its private key goes with it.
             limit = TIMEOUT if timeout is None else timeout
             try:
                 if opened and limit > STILL and not server.done.wait(STILL):
-                    print(f"Still waiting… if the browser did not open, go to:\n  {url}", file=sys.stderr)
+                    if not server.started:
+                        print(f"Still waiting… if the browser did not open, go to:\n  {url}", file=sys.stderr)
                     limit -= STILL
                 if not server.done.wait(limit):
                     raise UnlockFailed("no answer from the browser in time")
@@ -1229,7 +1334,10 @@ closed whatever happens, and its private key goes with it.
         finally:
             server.shutdown()
             server.server_close()
-            server.key = None
+            server.key = server.page = None
+        if "abort" in server.result:
+            print(f"Warning: {server.result['abort']}.", file=sys.stderr)
+            raise UnlockFailed(server.result["abort"])
         if "error" in server.result:
             error = server.result["error"]
             raise UnlockFailed(NO_X25519 if error == "x25519-unavailable" else f"the page says: {error[:200]}")
