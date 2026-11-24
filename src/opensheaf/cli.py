@@ -298,6 +298,8 @@ def build_parser():
     oe.add_argument("--successor", help="the owner name of the owner that continues the work")
     oe.add_argument("--expose", action="append", metavar="DID", help="also expose a key (repeatable)")
     rotation_options(oe, export=False)
+    ocp = osub.add_parser("complete", help="settle a version of the key log left by an interrupted write")
+    ocp.add_argument("--owner", help="an owner the archive hosts (default: the archive's)")
     osh = osub.add_parser("show", help="the key log of the owner")
     osh.add_argument("--owner", help="an owner the archive hosts (default: the archive's)")
     osh.add_argument("--offline", action="store_true",
@@ -532,7 +534,7 @@ def main(argv=None):
 
 
 OWNER_ACTIONS = {"init": "owner_init_command", "rotate": "owner_rotate", "expose": "owner_expose",
-                 "end": "owner_end", "show": "owner_show"}
+                 "end": "owner_end", "show": "owner_show", "complete": "owner_complete"}
 KEY_ACTIONS = {"new": "key_new", "push": "key_push", "pull": "key_pull", "list": "key_list",
                "export": "key_export", "import": "key_import", "forget": "key_forget",
                "enroll": "key_enroll", "unlock": "key_unlock", "wallet": "key_wallet",

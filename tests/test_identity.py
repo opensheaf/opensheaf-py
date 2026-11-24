@@ -460,6 +460,47 @@ def test_key_log_on_disk(tmp_path):
     assert back.versions[3].digest == KL4 and back.fork_point == 3 and back.check() == ([], [])
 
 
+def test_a_version_written_and_not_completed(tmp_path, monkeypatch):
+    d = tmp_path / A / A
+    log = authors_log(2)
+    owners.write_key_log(d, log)
+    v3 = log.expose([R[4], R[5]], [K3.did], add=[K5], next_keys=R[7:10], next_threshold=2, user=USER_A)
+
+    def full(*args):
+        raise OSError("the disk is full")
+    monkeypatch.setattr(owners.os, "replace", full)
+    with pytest.raises(OSError):
+        owners.write_key_log(d, log)
+    monkeypatch.undo()
+    back = owners.load_key_log(d)
+    assert len(back.versions) == 2 and back.orphan.number == 3 and back.orphan.witnesses
+    with pytest.raises(owners.OwnerError, match="osheaf owner complete"):
+        back.rotate([R[4], R[5]], next_keys=[K("n1"), K("n2"), K("n3")], next_threshold=2, user=USER_A)
+    other = owners.load_key_log(d)
+    other.orphan = None
+    other.rotate([R[4], R[5]], next_keys=[K("n1"), K("n2"), K("n3")], next_threshold=2, user=USER_A)
+    with pytest.raises(owners.OwnerError, match="another version"):
+        owners.write_key_log(d, other)
+    assert owners.complete_orphan(d) == "completed"
+    back = owners.load_key_log(d)
+    assert back.orphan is None and back.versions[-1].digest == v3.digest and back.check()[0] == []
+    assert owners.complete_orphan(d) is None
+    log.rotate([R[7], R[8]], next_keys=[K("n1"), K("n2"), K("n3")], next_threshold=2, user=USER_A)
+    v4 = log.versions[-1]
+    (d / "v4").mkdir()
+    (d / "v4" / "inventory.json").write_bytes(v4.inventory)
+    assert owners.complete_orphan(d) == "removed" and not (d / "v4").exists()
+    owners.write_key_log(d, log)
+    assert owners.load_key_log(d).versions[-1].digest == v4.digest
+    (d / "v5").mkdir()
+    (d / "v5" / "inventory.json").write_bytes(b"{}")
+    (d / "extensions/opensheaf-witnesses/v5").mkdir(parents=True)
+    (d / "extensions/opensheaf-witnesses/v5/signature-x.json").write_bytes(b"{}")
+    with pytest.raises(owners.OwnerError, match="left for a person"):
+        owners.complete_orphan(d)
+    assert (d / "v5").exists()
+
+
 def test_checks_of_a_key_log_on_disk(tmp_path):
     d = tmp_path / "log"
     owners.write_key_log(d, authors_log(3))

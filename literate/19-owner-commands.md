@@ -749,6 +749,34 @@ the wallet, as for a rotation.
         print(f"Done: the owner {who} has ended, at v{v.number} of its key log" +
               (f"; its successor is {successor}." if successor else "."))
 
+Completing an interrupted write
+-------------------------------
+
+A write of the key log interrupted before its root inventory was replaced
+leaves an orphan version after the head, and the key log takes no new
+version until it is settled (the chapter on [owners](06-owners.md) says
+why: a different version of the same number, signed by the same rotation
+keys, would fork it). `owner complete` settles it: a signed orphan that
+passes the checks becomes the head, an unsigned one is removed, and a
+signed one that fails the checks is left for a person, with the reason.
+
+    # in end an owner:
+    def owner_complete(args):
+        """Settle a version of the key log that an interrupted write left after its head."""
+        owner, log = owner_of(args)
+        if log.orphan is None:
+            print(f"The key log of {names.short(owner)} has no version written after its head: nothing to do.")
+            return
+        n = log.orphan.number
+        try:
+            done = owners.complete_orphan(unlinked(obj_dir(log.id)))
+        except owners.OwnerError as e:
+            stop(str(e))
+        write_discovery()
+        print(f"Done: v{n} of the key log of {names.short(owner)} "
+              + ("is completed: it is the head." if done == "completed"
+                 else "carried no signature, and is removed."))
+
 Showing
 -------
 

@@ -4103,6 +4103,23 @@ def owner_end(args):
           (f"; its successor is {successor}." if successor else "."))
 
 
+def owner_complete(args):
+    """Settle a version of the key log that an interrupted write left after its head."""
+    owner, log = owner_of(args)
+    if log.orphan is None:
+        print(f"The key log of {names.short(owner)} has no version written after its head: nothing to do.")
+        return
+    n = log.orphan.number
+    try:
+        done = owners.complete_orphan(unlinked(obj_dir(log.id)))
+    except owners.OwnerError as e:
+        stop(str(e))
+    write_discovery()
+    print(f"Done: v{n} of the key log of {names.short(owner)} "
+          + ("is completed: it is the head." if done == "completed"
+             else "carried no signature, and is removed."))
+
+
 def owner_show(args):
     owner, log = owner_of(args)
     latest, here = log.latest(), []

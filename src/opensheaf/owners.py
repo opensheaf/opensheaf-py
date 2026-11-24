@@ -8,6 +8,7 @@ import copy
 import json
 import os
 import re
+import shutil
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
@@ -312,6 +313,7 @@ class KeyLog:
         self.id = names.object_id(self.owner, self.owner)
         self.versions = versions if versions is not None else [first_version(genesis)]
         self.problems = []
+        self.orphan = None
         self._checked = None
 
     def pin(self, number):
@@ -528,7 +530,14 @@ class KeyLog:
             before = before + [c]
         return problems
 
+    def refuse_orphan(self):
+        """OwnerError if the folder of this key log holds a version written and not completed."""
+        if self.orphan is not None:
+            raise OwnerError(f"v{self.orphan.number} of the key log of {self.owner} is on disk after its head: "
+                             f"{ORPHAN_HELP}")
+
     def _prepare(self, signers):
+        self.refuse_orphan()
         errors, _ = self.check()
         if errors:
             raise OwnerError("the key log has errors: " + "; ".join(errors))
@@ -564,6 +573,7 @@ class KeyLog:
         return self._append(Version(n, content, inv_bytes, sidecar(inv_bytes), witnesses))
 
     def _append(self, version):
+        self.refuse_orphan()
         self.versions.append(version)
         self._checked = None
         errors, _ = self.check()
@@ -901,7 +911,65 @@ def load_key_log(obj_dir):
     if json.loads(root).get("id") != log.id:
         problems.append(f"the identifier of the object is not {log.id}, that of the owner its genesis record names")
     log.problems = problems
+    log.orphan = read_orphan(obj_dir, head + 1)
     return log
+
+
+ORPHAN_HELP = ("an earlier write of the key log was interrupted before its root inventory was replaced; "
+               "osheaf owner complete settles it (it completes a signed version, removes an unsigned one), "
+               "and signing another version of that number would fork the key log (section 6.3)")
+
+
+def read_orphan(obj_dir, n):
+    """The version vN in OBJ_DIR after its head, written by an interrupted write, or None."""
+    vdir = obj_dir / f"v{n}"
+    if not vdir.is_dir():
+        return None
+    try:
+        inv_bytes = (vdir / "inventory.json").read_bytes()
+    except OSError:
+        inv_bytes = b""
+    sc = (vdir / "inventory.json.sha512").read_bytes() if (vdir / "inventory.json.sha512").is_file() else b""
+    files = {}
+    try:
+        entry = names.json_value(inv_bytes)
+        for d, paths in entry["versions"][f"v{n}"]["state"].items():
+            cp = entry["manifest"][d][0]
+            if content_path(cp, entry, n) and (obj_dir / cp).is_file():
+                for path in paths:
+                    files[path] = (obj_dir / cp).read_bytes()
+    except (ValueError, KeyError, IndexError, TypeError, AttributeError, OSError):
+        pass
+    wdir = obj_dir / sign.WITNESSES / f"v{n}"
+    witnesses = {f.name: f.read_bytes() for f in sorted(wdir.iterdir()) if f.is_file()} if wdir.is_dir() else {}
+    return Version(n, files, inv_bytes, sc, witnesses)
+
+
+def complete_orphan(obj_dir):
+    """Settle the orphan of the key log in OBJ_DIR: 'completed' (it is the next version, now the
+    head), 'removed' (unsigned), or None if there is none; OwnerError if it is signed and fails
+    the checks of the key log."""
+    obj_dir = Path(obj_dir)
+    log = load_key_log(obj_dir)
+    o = log.orphan
+    if o is None:
+        return None
+    trial = KeyLog(log.genesis, log.versions + [o])
+    errors, _ = trial.check()
+    if not errors and not log.check()[0]:
+        tmp = obj_dir / "inventory.json.tmp"
+        tmp.write_bytes(o.inventory)
+        os.replace(tmp, obj_dir / "inventory.json")
+        (obj_dir / "inventory.json.sha512").write_bytes(o.sidecar or sidecar(o.inventory))
+        return "completed"
+    if not o.witnesses:
+        shutil.rmtree(obj_dir / f"v{o.number}")
+        shutil.rmtree(obj_dir / sign.WITNESSES / f"v{o.number}", ignore_errors=True)
+        return "removed"
+    raise OwnerError(f"{obj_dir}: v{o.number}, written by an interrupted write, carries signatures and is not "
+                     f"a version of the key log ({'; '.join(errors) or 'the key log before it has errors'}): it is "
+                     f"left for a person; remove v{o.number}/ and {sign.WITNESSES}/v{o.number}/ only if they "
+                     "were never copied anywhere (section 6.3)")
 
 
 def write_key_log(obj_dir, log):
@@ -919,7 +987,12 @@ def write_key_log(obj_dir, log):
             raise OwnerError(f"{obj_dir}: v{v.number} differs from that of the key log of {log.owner}")
     for v in log.versions[held:]:
         vdir = obj_dir / f"v{v.number}"
-        vdir.mkdir()
+        if vdir.exists():
+            there = vdir / "inventory.json"
+            if not there.is_file() or there.read_bytes() != v.inventory:
+                raise OwnerError(f"{obj_dir}: v{v.number} is there already, another version than the one "
+                                 f"written now: {ORPHAN_HELP}")
+        vdir.mkdir(exist_ok=True)
         inv = json.loads(v.inventory)
         by_digest = {sha512_hex(data): data for data in v.files.values()}
         for d, paths in inv["manifest"].items():
