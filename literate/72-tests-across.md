@@ -465,7 +465,7 @@ alone, it is a mismatch.
 A selection pins the revisions its curator vetted (section 8.4). Archive
 `digest` vets document versions 2 and 1 of a paper with three; they are
 kept in the order of the paper's history, each with the object version
-that held it and its digest. Later versions of the paper change nothing:
+that held it and its digest, a version named twice once. Later versions of the paper change nothing:
 `update` only reports the versions not vetted, and vetting one more is
 the curator's act, a new version of the selection. Removing one revision
 keeps the member with the others; removing its last revision removes the
@@ -479,7 +479,7 @@ member; a revision the member does not have is refused.
         s = make(tmp_path, "digest")
         spec = tmp_path / "digest.yaml"
         spec.write_text(f"type: selection\ntitle: Digest\nmembers:\n  - {{uri: '{uri(a, 'paper')}', "
-                        "revisions: [2, 1]}\n")
+                        "revisions: [2, 1, 2]}\n")
         run("--root", str(s), "collection", "sync", "digest", "--from", str(spec))
         m = members(s, "digest")["members"][0]
         assert "version" not in m and "follow" not in m
@@ -492,9 +492,10 @@ member; a revision the member does not have is refused.
         run("--root", str(s), "collection", "update", "digest")
         assert "document version(s) 3, 4 not vetted" in capsys.readouterr().out
         assert P.load_inventory(P.obj_dir(line(s, "digest")))["head"] == head
-        run("--root", str(s), "collection", "add", "digest", uri(a, "paper"), "--revision", "3")
+        run("--root", str(s), "collection", "add", "digest", uri(a, "paper"), "--revision", "3", "--revision", "3")
         new = members(s, "digest")["members"][0]["revisions"]
         assert new[:2] == m["revisions"] and (new[2]["documentVersion"], new[2]["version"]) == (3, "v3")
+        assert len(new) == 3
         found = findings(s, remote_=True)
         assert [x for x in found if x["severity"] == "error"] == []
         with pytest.raises(SystemExit):

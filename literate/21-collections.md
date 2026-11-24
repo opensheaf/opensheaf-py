@@ -343,8 +343,9 @@ one; a member needs at least one (section 8.2).
 The version pinned is the URI's pin if it has one; otherwise, in a
 catalogue, the latest signed version of the line; in a selection, each
 document version `--revision` names, or else the current version of the
-latest signed version. Only a verified version is pinned: a collection
-pins only signed versions, and a contested one is never a verified member
+latest signed version; a document version named twice is pinned once,
+since a selection vets each revision once (section 8.4). Only a verified
+version is pinned: a collection pins only signed versions, and a contested one is never a verified member
 (sections 7.3 and 8.5).
 
     # in collections: finding the version a member pins:
@@ -380,6 +381,7 @@ pins only signed versions, and a contested one is never a verified member
 
     def pinned(r, nm, owner, u, places, kind, revisions=()):
         """[Found] of the versions to pin for a member: one in a catalogue, one per revision."""
+        revisions = list(dict.fromkeys(revisions))
         if u is not None and u.sha512:
             founds = [r.resolve(str(u), places)[1]]
         elif kind == "selection" and revisions:
@@ -680,7 +682,7 @@ collection, and from there into the links of a website.
         at = [at] if isinstance(at, str) else list(at)
         nm, owner, u, places = target(r, str(text), at)
         follow = entry.get("follow") in (True, "yes", "true", "latest")
-        revs = [int(x) for x in entry.get("revisions", [])]
+        revs = list(dict.fromkeys(int(x) for x in entry.get("revisions", [])))
         if kind == "catalogue" and revs:
             sys.exit(f"{text}: revisions are for selections")
         old = next((m for m in old_members if (m["name"], m["owner"]) == (nm, owner)), None)

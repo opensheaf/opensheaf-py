@@ -191,6 +191,7 @@ def recorded_at(found, places):
 
 def pinned(r, nm, owner, u, places, kind, revisions=()):
     """[Found] of the versions to pin for a member: one in a catalogue, one per revision."""
+    revisions = list(dict.fromkeys(revisions))
     if u is not None and u.sha512:
         founds = [r.resolve(str(u), places)[1]]
     elif kind == "selection" and revisions:
@@ -441,7 +442,7 @@ def sync_member(r, entry, kind, old_members):
     at = [at] if isinstance(at, str) else list(at)
     nm, owner, u, places = target(r, str(text), at)
     follow = entry.get("follow") in (True, "yes", "true", "latest")
-    revs = [int(x) for x in entry.get("revisions", [])]
+    revs = list(dict.fromkeys(int(x) for x in entry.get("revisions", [])))
     if kind == "catalogue" and revs:
         sys.exit(f"{text}: revisions are for selections")
     old = next((m for m in old_members if (m["name"], m["owner"]) == (nm, owner)), None)
