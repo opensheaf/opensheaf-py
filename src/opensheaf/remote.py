@@ -333,13 +333,48 @@ def folder_problem(d, inv, paths=None):
     return None
 
 
-def fetch_object(src, obj_id, dest, *, upto=None, witness_names=None, warn=None, expect=None, budget=None):
+class Reader:
+    """Reads the files of the object OBJ_ID of the archive SRC, counting them for the copy and,
+    in BUDGET ([files, bytes]) if given, for the run (section 15.2)."""
+
+    def __init__(self, src, obj_id, budget=None):
+        self.src, self.obj_id, self.budget, self.fetched = src, obj_id, budget, [0, 0]
+
+    def get(self, rel, limit=MAX_JSON):
+        data = self.src.get(rel, limit)
+        if data is not None:
+            for count in (self.fetched, self.budget) if self.budget is not None else (self.fetched,):
+                count[0] += 1
+                count[1] += len(data)
+            if self.fetched[0] > MAX_FETCH_FILES or self.fetched[1] > MAX_FETCH_BYTES:
+                raise Unavailable(f"{self.src}: {self.obj_id} has more than {MAX_FETCH_FILES} files or "
+                                  f"{MAX_FETCH_BYTES} bytes: not copied (section 15.2)")
+            if self.budget is not None and (self.budget[0] > MAX_RUN_FILES or self.budget[1] > MAX_RUN_BYTES):
+                raise Unavailable(f"{self.src}: {self.obj_id}: not read: the copies of this run have brought "
+                                  f"{MAX_RUN_FILES} files or {MAX_RUN_BYTES} bytes (section 15.2)")
+        return data
+
+    def content(self, dest, cp, dig):
+        """Fetch the file of the content path CP into the copy in DEST if it has the digest DIG;
+        whether it has."""
+        data = self.get(f"{self.src.object_path(self.obj_id)}/{cp}", MAX_BYTES)
+        if data is None or names.sha512_hex(data) != dig:
+            return False
+        (dest / cp).parent.mkdir(parents=True, exist_ok=True)
+        (dest / cp).write_bytes(data)
+        return True
+
+
+def fetch_object(src, obj_id, dest, *, upto=None, witness_names=None, warn=None, expect=None, budget=None,
+                 only=None, reader=None):
     """Copy the object OBJ_ID of the archive SRC, v1 to UPTO (default: its head), into the new
     folder DEST, checking every file; WITNESS_NAMES(n, dest) names the witness files of vN
     to fetch over HTTP; WARN(message) hears of checksum files missing or wrong; EXPECT, if
     given, {n: the digest of the inventory of vN} that each inventory fetched must have;
     BUDGET, if given, [files, bytes] fetched so far by the caller, bounded by MAX_RUN_FILES
-    and MAX_RUN_BYTES. Returns the number of the last version copied."""
+    and MAX_RUN_BYTES; ONLY(inventory), if given, the {content path: digest} fetched of the
+    content (default: all); READER, the Reader to use. Returns the number of the last version
+    copied."""
     base = src.object_path(obj_id)
     root = src.get(f"{base}/inventory.json", MAX_JSON)
     if root is None:
@@ -351,21 +386,9 @@ def fetch_object(src, obj_id, dest, *, upto=None, witness_names=None, warn=None,
     upto = min(upto or head, head)
     dest.mkdir(parents=True)
     (dest / "0=ocfl_object_1.1").write_text("ocfl_object_1.1\n")
-    last, fetched, earlier = None, [0, 0], []
-
-    def get(rel, limit=MAX_JSON):
-        data = src.get(rel, limit)
-        if data is not None:
-            for count in (fetched, budget) if budget is not None else (fetched,):
-                count[0] += 1
-                count[1] += len(data)
-            if fetched[0] > MAX_FETCH_FILES or fetched[1] > MAX_FETCH_BYTES:
-                raise Unavailable(f"{src}: {obj_id} has more than {MAX_FETCH_FILES} files or "
-                                  f"{MAX_FETCH_BYTES} bytes: not copied (section 15.2)")
-            if budget is not None and (budget[0] > MAX_RUN_FILES or budget[1] > MAX_RUN_BYTES):
-                raise Unavailable(f"{src}: {obj_id}: not copied: the copies of this run have brought "
-                                  f"{MAX_RUN_FILES} files or {MAX_RUN_BYTES} bytes (section 15.2)")
-        return data
+    last, earlier = None, []
+    reader = reader or Reader(src, obj_id, budget)
+    get = reader.get
 
     for n in range(1, upto + 1):
         data = get(f"{base}/v{n}/inventory.json")
@@ -402,11 +425,10 @@ def fetch_object(src, obj_id, dest, *, upto=None, witness_names=None, warn=None,
         for cp in paths:
             if not owners.content_path(cp, inv, upto):
                 raise Unavailable(f"{src}: {obj_id}: a content path out of the object: {cp!r}")
-            data = get(f"{base}/{cp}", MAX_BYTES)
-            if data is None or names.sha512_hex(data) != dig:
-                raise Unavailable(f"{src}: {obj_id}: {cp} is missing, or does not have its digest")
-            (dest / cp).parent.mkdir(parents=True, exist_ok=True)
-            (dest / cp).write_bytes(data)
+    wanted = only(inv) if only else {cp: dig for dig, paths in inv["manifest"].items() for cp in paths}
+    for cp, dig in wanted.items():
+        if not reader.content(dest, cp, dig):
+            raise Unavailable(f"{src}: {obj_id}: {cp} is missing, or does not have its digest")
     (dest / "inventory.json").write_bytes(last[0])
     (dest / "inventory.json.sha512").write_bytes(last[1])
     for n in range(1, upto + 1):
@@ -518,7 +540,7 @@ class Resolver:
         self.here = here and P.OCFL is not None
         self.cache = Path(tempfile.mkdtemp(prefix="osheaf-resolve-"))
         self.sources, self.fetched, self.logs, self.notes, self.bases = {}, {}, {}, [], {}
-        self.budget, self.pinned, self.checked = [0, 0], 0, {}
+        self.budget, self.pinned, self.checked, self.readers = [0, 0], 0, {}, {}
 
     def __enter__(self):
         return self
@@ -584,10 +606,12 @@ class Resolver:
         key = (where, obj_id) if upto is None else (where, obj_id, upto)
         if key not in self.fetched:
             dest = self.cache / str(len(self.fetched))
+            reader = Reader(src, obj_id, self.budget)
             try:
                 fetch_object(src, obj_id, dest, upto=upto, witness_names=witness_names,
-                             warn=lambda m: self.note("warning", m), budget=self.budget)
+                             warn=lambda m: self.note("warning", m), only=only, reader=reader)
                 self.fetched[key] = dest
+                self.readers[str(dest)] = reader
             except Unavailable as e:
                 if "no object" not in str(e):
                     self.note("warning", str(e))
@@ -760,9 +784,18 @@ class Resolver:
         if c.where == "here":
             return None
         if key not in self.checked:
-            problem = folder_problem(c.dir, c.inv, content_paths(c.inv, [f"v{n}"]))
-            if problem:
-                self.note("warning", f"{c.where}: {c.id} v{n}: {problem}: not read (section 12.3)")
+            paths = content_paths(c.inv, [f"v{n}"])
+            reader = self.readers.get(str(c.dir))
+            try:
+                for cp, dig in paths.items():
+                    if reader is not None and not (c.dir / cp).is_file() and owners.content_path(cp, c.inv, c.head):
+                        reader.content(c.dir, cp, dig)
+                problem = folder_problem(c.dir, c.inv, paths)
+                if problem:
+                    self.note("warning", f"{c.where}: {c.id} v{n}: {problem}: not read (section 12.3)")
+            except Unavailable as e:
+                problem = str(e)
+                self.note("warning", problem)
             self.checked[key] = problem
         return self.checked[key]
 

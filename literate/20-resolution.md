@@ -389,7 +389,7 @@ Copying an object
 -----------------
 
 An archive in a folder is read in place. An archive over HTTP is copied,
-object by object, into a scratch folder, and read there with the
+object by object, as far as it is read, into a scratch folder, and read there with the
 functions that read the archive's own storage root: an object is the same
 OCFL folder wherever it is. `fetch_object` copies an object's versions up
 to `upto` (by default its head), and is also what [mirrors](22-mirrors.md)
@@ -406,9 +406,11 @@ use to copy a line into the storage root, from either kind of source:
    bytes (the copy changed between the two readings, or another server
    answered) makes the copy unavailable, never a copy of versions that
    were not the ones verified;
-2. every file the inventory of the last version copied records, each
-   checked against its digest: a file that does not match makes the copy
-   unavailable, never a copy with a wrong file;
+2. every file the inventory of the last version copied records, or those
+   of them that `only` names (a resolver reads the descriptions only, and
+   the files of the version it resolves to later, through the same
+   `Reader`), each checked against its digest: a file that does not match
+   makes the copy unavailable, never a copy with a wrong file;
 3. the witness folder of each version: listed in a folder; over HTTP only
    the witnesses whose names the reader can compute (section 14.1), given
    by `witness_names`: the signature files of the keys the owner's key log
@@ -454,7 +456,10 @@ checked before they are written: every path of the manifest of every
 inventory fetched must be a content path of the object (`vN/content/...`,
 [key logs](06-owners.md)), and a path leaving the object is refused; and
 one copy brings `MAX_FETCH_FILES` files and `MAX_FETCH_BYTES` bytes at most
-(section 15.2).
+(section 15.2), and all the copies of one resolver `MAX_RUN_FILES` files
+and `MAX_RUN_BYTES` bytes. A `Reader` reads the files of one copy and
+counts them, for the copy and, with the `budget` of its resolver, for the
+run, whether they are read when the copy is made or later.
 
     # in resolution: copying an object from another archive:
     def safe_path(rel):
@@ -564,13 +569,48 @@ one copy brings `MAX_FETCH_FILES` files and `MAX_FETCH_BYTES` bytes at most
         return None
 
 
-    def fetch_object(src, obj_id, dest, *, upto=None, witness_names=None, warn=None, expect=None, budget=None):
+    class Reader:
+        """Reads the files of the object OBJ_ID of the archive SRC, counting them for the copy and,
+        in BUDGET ([files, bytes]) if given, for the run (section 15.2)."""
+
+        def __init__(self, src, obj_id, budget=None):
+            self.src, self.obj_id, self.budget, self.fetched = src, obj_id, budget, [0, 0]
+
+        def get(self, rel, limit=MAX_JSON):
+            data = self.src.get(rel, limit)
+            if data is not None:
+                for count in (self.fetched, self.budget) if self.budget is not None else (self.fetched,):
+                    count[0] += 1
+                    count[1] += len(data)
+                if self.fetched[0] > MAX_FETCH_FILES or self.fetched[1] > MAX_FETCH_BYTES:
+                    raise Unavailable(f"{self.src}: {self.obj_id} has more than {MAX_FETCH_FILES} files or "
+                                      f"{MAX_FETCH_BYTES} bytes: not copied (section 15.2)")
+                if self.budget is not None and (self.budget[0] > MAX_RUN_FILES or self.budget[1] > MAX_RUN_BYTES):
+                    raise Unavailable(f"{self.src}: {self.obj_id}: not read: the copies of this run have brought "
+                                      f"{MAX_RUN_FILES} files or {MAX_RUN_BYTES} bytes (section 15.2)")
+            return data
+
+        def content(self, dest, cp, dig):
+            """Fetch the file of the content path CP into the copy in DEST if it has the digest DIG;
+            whether it has."""
+            data = self.get(f"{self.src.object_path(self.obj_id)}/{cp}", MAX_BYTES)
+            if data is None or names.sha512_hex(data) != dig:
+                return False
+            (dest / cp).parent.mkdir(parents=True, exist_ok=True)
+            (dest / cp).write_bytes(data)
+            return True
+
+
+    def fetch_object(src, obj_id, dest, *, upto=None, witness_names=None, warn=None, expect=None, budget=None,
+                     only=None, reader=None):
         """Copy the object OBJ_ID of the archive SRC, v1 to UPTO (default: its head), into the new
         folder DEST, checking every file; WITNESS_NAMES(n, dest) names the witness files of vN
         to fetch over HTTP; WARN(message) hears of checksum files missing or wrong; EXPECT, if
         given, {n: the digest of the inventory of vN} that each inventory fetched must have;
         BUDGET, if given, [files, bytes] fetched so far by the caller, bounded by MAX_RUN_FILES
-        and MAX_RUN_BYTES. Returns the number of the last version copied."""
+        and MAX_RUN_BYTES; ONLY(inventory), if given, the {content path: digest} fetched of the
+        content (default: all); READER, the Reader to use. Returns the number of the last version
+        copied."""
         base = src.object_path(obj_id)
         root = src.get(f"{base}/inventory.json", MAX_JSON)
         if root is None:
@@ -582,21 +622,9 @@ one copy brings `MAX_FETCH_FILES` files and `MAX_FETCH_BYTES` bytes at most
         upto = min(upto or head, head)
         dest.mkdir(parents=True)
         (dest / "0=ocfl_object_1.1").write_text("ocfl_object_1.1\n")
-        last, fetched, earlier = None, [0, 0], []
-
-        def get(rel, limit=MAX_JSON):
-            data = src.get(rel, limit)
-            if data is not None:
-                for count in (fetched, budget) if budget is not None else (fetched,):
-                    count[0] += 1
-                    count[1] += len(data)
-                if fetched[0] > MAX_FETCH_FILES or fetched[1] > MAX_FETCH_BYTES:
-                    raise Unavailable(f"{src}: {obj_id} has more than {MAX_FETCH_FILES} files or "
-                                      f"{MAX_FETCH_BYTES} bytes: not copied (section 15.2)")
-                if budget is not None and (budget[0] > MAX_RUN_FILES or budget[1] > MAX_RUN_BYTES):
-                    raise Unavailable(f"{src}: {obj_id}: not copied: the copies of this run have brought "
-                                      f"{MAX_RUN_FILES} files or {MAX_RUN_BYTES} bytes (section 15.2)")
-            return data
+        last, earlier = None, []
+        reader = reader or Reader(src, obj_id, budget)
+        get = reader.get
 
         for n in range(1, upto + 1):
             data = get(f"{base}/v{n}/inventory.json")
@@ -633,11 +661,10 @@ one copy brings `MAX_FETCH_FILES` files and `MAX_FETCH_BYTES` bytes at most
             for cp in paths:
                 if not owners.content_path(cp, inv, upto):
                     raise Unavailable(f"{src}: {obj_id}: a content path out of the object: {cp!r}")
-                data = get(f"{base}/{cp}", MAX_BYTES)
-                if data is None or names.sha512_hex(data) != dig:
-                    raise Unavailable(f"{src}: {obj_id}: {cp} is missing, or does not have its digest")
-                (dest / cp).parent.mkdir(parents=True, exist_ok=True)
-                (dest / cp).write_bytes(data)
+        wanted = only(inv) if only else {cp: dig for dig, paths in inv["manifest"].items() for cp in paths}
+        for cp, dig in wanted.items():
+            if not reader.content(dest, cp, dig):
+                raise Unavailable(f"{src}: {obj_id}: {cp} is missing, or does not have its digest")
         (dest / "inventory.json").write_bytes(last[0])
         (dest / "inventory.json.sha512").write_bytes(last[1])
         for n in range(1, upto + 1):
@@ -757,8 +784,8 @@ The resolver
 ------------
 
 A `Resolver` keeps, for one run, the archives it has read, the objects it
-has copied (in a scratch folder removed at the end), the key logs it has
-met, and its *notes*: what it found that a reader should know (an archive
+has copied (in a scratch folder removed at the end), with the `Reader` of
+each, the key logs it has met, and its *notes*: what it found that a reader should know (an archive
 unavailable, a fork, an ended owner), each with its severity, as the
 findings of a verifier (section 14.1). It reads the places it is given,
 and the archive's own storage root when there is one.
@@ -772,7 +799,7 @@ and the archive's own storage root when there is one.
             self.here = here and P.OCFL is not None
             self.cache = Path(tempfile.mkdtemp(prefix="osheaf-resolve-"))
             self.sources, self.fetched, self.logs, self.notes, self.bases = {}, {}, {}, [], {}
-            self.budget, self.pinned, self.checked = [0, 0], 0, {}
+            self.budget, self.pinned, self.checked, self.readers = [0, 0], 0, {}, {}
 
         def __enter__(self):
             return self
@@ -802,6 +829,14 @@ then the `at` of a member), then those of the resolver, without
 repetition. `folder` gives the folder holding an object at a place: the
 archive's own storage root ("here"), the folder of an archive on disk, or
 a copy fetched over HTTP, once per run.
+
+A copy over HTTP holds what resolution reads, and no more: the inventories
+and checksum files, the witnesses, and the files that `only` names, for a
+line its descriptions (`described`); the files of the version it resolves
+to are fetched when it does (`contents`, below), those of its other
+versions never. A key log is copied whole: its files are few and small,
+and all of them are read. A [mirror](22-mirrors.md), which copies a line,
+fetches it whole with `fetch_object`.
 
 The places of the resolver are its user's (`--at`, the locations); every
 other place comes from what was read (the `at` of a member, of a URI) and
@@ -865,10 +900,12 @@ bounded too (`MAX_RUN_FILES`, `MAX_RUN_BYTES`).
         key = (where, obj_id) if upto is None else (where, obj_id, upto)
         if key not in self.fetched:
             dest = self.cache / str(len(self.fetched))
+            reader = Reader(src, obj_id, self.budget)
             try:
                 fetch_object(src, obj_id, dest, upto=upto, witness_names=witness_names,
-                             warn=lambda m: self.note("warning", m), budget=self.budget)
+                             warn=lambda m: self.note("warning", m), only=only, reader=reader)
                 self.fetched[key] = dest
+                self.readers[str(dest)] = reader
             except Unavailable as e:
                 if "no object" not in str(e):
                     self.note("warning", str(e))
@@ -1071,10 +1108,11 @@ A pin fixes an inventory, and the inventory every file of the version
 (section 8.5): a copy is a copy of the version pinned only if it holds
 them. So a version is resolved to, verified or contested, only once every
 file of it is found in the copy with the digest its inventory gives
-(`contents`); a copy that fails is noted with its location, and is not a
-copy found: another copy may match, and with none the pin is unavailable
-(or a mismatch, when other copies were found). Only the version resolved
-to is read whole, not the others of the line. The archive's own copies are
+(`contents`, which fetches them into a copy over HTTP); a copy that fails
+is noted with its location, and is not a copy found: another copy may
+match, and with none the pin is unavailable (or a mismatch, when other
+copies were found). Only the version resolved to is read whole, not the
+others of the line. The archive's own copies are
 not read again: they are its own verification's (section 14.2).
 
 A version of a key log is looked up in the key log met, where it is held
@@ -1135,9 +1173,18 @@ the verification that asked.
         if c.where == "here":
             return None
         if key not in self.checked:
-            problem = folder_problem(c.dir, c.inv, content_paths(c.inv, [f"v{n}"]))
-            if problem:
-                self.note("warning", f"{c.where}: {c.id} v{n}: {problem}: not read (section 12.3)")
+            paths = content_paths(c.inv, [f"v{n}"])
+            reader = self.readers.get(str(c.dir))
+            try:
+                for cp, dig in paths.items():
+                    if reader is not None and not (c.dir / cp).is_file() and owners.content_path(cp, c.inv, c.head):
+                        reader.content(c.dir, cp, dig)
+                problem = folder_problem(c.dir, c.inv, paths)
+                if problem:
+                    self.note("warning", f"{c.where}: {c.id} v{n}: {problem}: not read (section 12.3)")
+            except Unavailable as e:
+                problem = str(e)
+                self.note("warning", problem)
             self.checked[key] = problem
         return self.checked[key]
 
@@ -1282,8 +1329,8 @@ read lists candidates: lines whose name starts with the name given and
 whose owner starts with the owner part, or, without one, whose owner is
 the originator of their genesis record, which is read from the copy.
 Over HTTP only the first version is copied for this, without witnesses,
-and kept apart from the copy of the whole line that the resolution then
-makes with its witnesses: a short form resolves as the full URI does.
+and kept apart from the copy of the line that the resolution then makes
+with its witnesses: a short form resolves as the full URI does.
 
     # in resolution: resolving a sheaf: URI:
     def expand(self, u, where):

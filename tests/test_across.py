@@ -312,6 +312,52 @@ def test_resolution_over_http(tmp_path, monkeypatch, server):
         assert found.copy.src.folder is None and found.copy.statuses == [sign.SIGNED, sign.SIGNED]
 
 
+def test_over_http_only_what_resolution_needs_is_read(tmp_path, monkeypatch):
+    seen = []
+
+    class Seen(Quiet):
+        def do_GET(self):
+            seen.append(urllib.parse.unquote(urllib.parse.unquote(self.path)))
+            super().do_GET()
+    httpd = Server(("127.0.0.1", 0), functools.partial(Seen, directory=str(tmp_path)))
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    try:
+        h = make(tmp_path, "h")
+        deposit(h, "paper", "one", new=True)
+        deposit(h, "paper", "two")
+        oid = line(h, "paper")
+        _, nm, owner = oid.split(":")
+        hd = P.obj_dir(oid)
+        inv = P.load_inventory(hd)
+        pdf = {v: next(cp for cp in remote.content_paths(inv, [v]) if cp.endswith(".pdf")) for v in ("v1", "v2")}
+        assert pdf["v1"] != pdf["v2"]
+        d1 = head_digest(h, "paper", "v1")
+        monkeypatch.setenv(remote.LOCATIONS, f"https://example.org/=http://127.0.0.1:{httpd.server_address[1]}/")
+        c = make(tmp_path, "c")
+        fetched = lambda cp: any(x.endswith("/" + cp) for x in seen)
+        P.configure(c)
+        with remote.Resolver() as r:
+            found = r.latest(nm, owner, ["https://example.org/h/"])
+            assert (found.status, found.version) == ("verified", "v2")
+            assert found.copy.src.folder is None
+            assert fetched(pdf["v2"]) and not fetched(pdf["v1"])
+            assert r.pin(nm, owner, "v1", d1, ["https://example.org/h/"]).status == "verified"
+            assert fetched(pdf["v1"])
+        (hd / pdf["v2"]).write_bytes(b"%PDF tampered")
+        P.configure(c)
+        with remote.Resolver() as r:
+            assert r.latest(nm, owner, ["https://example.org/h/"]).status == "unavailable"
+            assert (f"https://example.org/h/: {oid} v2: {pdf['v2']} is missing, or does not have its digest: "
+                    "not read (section 12.3)") in [m for _, m in r.notes]
+        monkeypatch.setattr(remote, "MAX_RUN_FILES", 3)
+        P.configure(c)
+        with remote.Resolver() as r:
+            assert r.latest(nm, owner, ["https://example.org/h/"]).status == "unavailable"
+            assert any("not read: the copies of this run have brought 3 files" in m for _, m in r.notes)
+    finally:
+        httpd.shutdown()
+
+
 def test_short_uri_over_http(tmp_path, monkeypatch, server):
     h = make(tmp_path, "h", "--layout", "hashed")
     deposit(h, "paper", "one", new=True)
