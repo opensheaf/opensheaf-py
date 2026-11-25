@@ -435,14 +435,19 @@ to them is then reported as not matching (section 12.3). With the two in agreeme
 one its own inventory, the one signed, records, and each file read through
 the manifest has the digest that state names, checked as it is fetched.
 
-A copy read in place is checked as a copy fetched is, before anything
-is read from it (`folder_problem`): every path of its manifest is a
-content path of the object, a regular file below the object's folder (not
-a link leading out of it), with the digest the manifest gives. Without
-that, a file changed in the folder, a PDF, a `datacite.json`, an
-`object.json`, would be read as the one the signed inventory names, and
-the copy would still resolve as verified. Reading every file once costs
-what copying it would, without the writing.
+A copy read in place is checked as a copy fetched is (`folder_problem`):
+every path of its manifest is a content path of the object, and a file
+read from it is a regular file below the object's folder (not a link
+leading out of it), with the digest the manifest gives. Without that, a
+file changed in the folder, a PDF, a `datacite.json`, an `object.json`,
+would be read as the one the signed inventory names, and the copy would
+still resolve as verified. What is read, and so checked, is what the
+resolution needs, as for a copy fetched (below, the copies of a line): the
+descriptions of every version (`P.IDENTITY`: `object.json`,
+`datacite.json`, `genesis.json`) when the copy is found, and every file of
+the version it resolves to once it does (`content_paths` gives the content
+paths of some versions, or of some logical paths, with their digests); a
+key log, small and read whole, is checked whole.
 
 Content paths and witness names come from the files fetched, so they are
 checked before they are written: every path of the manifest of every
@@ -510,28 +515,52 @@ one copy brings `MAX_FETCH_FILES` files and `MAX_FETCH_BYTES` bytes at most
         return None
 
 
-    def folder_problem(d, inv):
+    def content_paths(inv, versions=None, logicals=None):
+        """{content path: digest} of the files of the versions VERSIONS (default: all) of the
+        inventory INV whose logical paths are among LOGICALS (default: all)."""
+        out = {}
+        manifest = inv.get("manifest") if isinstance(inv, dict) else None
+        for ver, rec in (inv.get("versions") or {}).items() if isinstance(manifest, dict) else ():
+            state = rec.get("state") if isinstance(rec, dict) else None
+            if (versions is not None and ver not in versions) or not isinstance(state, dict):
+                continue
+            for dig, paths in state.items():
+                if logicals is None or (isinstance(paths, list) and any(x in logicals for x in paths)):
+                    for cp in manifest.get(dig) or []:
+                        out[cp] = dig
+        return out
+
+
+    def described(inv):
+        """The content paths of the descriptions of every version of INV, read when a copy is found."""
+        return content_paths(inv, logicals=P.IDENTITY)
+
+
+    def folder_problem(d, inv, paths=None):
         """Why the files of the object in D, read in place, are not those its root inventory INV
-        names (a content path out of the object, a file missing, out of the folder or with
-        another digest), or None."""
+        names (a content path out of the object; one of PATHS, {content path: digest}, default
+        all, missing, out of the folder or with another digest), or None."""
         try:
             head = int(inv["head"][1:])
             manifest = list(inv["manifest"].items())
         except (KeyError, TypeError, ValueError, AttributeError):
             return "its inventory cannot be read"
-        top = d.resolve()
-        for dig, paths in manifest:
-            for cp in paths if isinstance(paths, list) else [paths]:
+        for dig, cps in manifest:
+            for cp in cps if isinstance(cps, list) else [cps]:
                 if not isinstance(cp, str) or not owners.content_path(cp, inv, head):
                     return f"a content path out of the object: {cp!r}"
-                p = d / cp
-                try:
-                    p.resolve().relative_to(top)
-                    data = p.read_bytes() if p.is_file() else None
-                except (ValueError, OSError):
-                    data = None
-                if data is None or names.sha512_hex(data) != dig:
-                    return f"{cp} is missing, or does not have its digest"
+        if paths is None:
+            paths = {cp: dig for dig, cps in manifest for cp in cps}
+        top = d.resolve()
+        for cp, dig in paths.items():
+            p = d / cp
+            try:
+                p.resolve().relative_to(top)
+                data = p.read_bytes() if p.is_file() else None
+            except (ValueError, OSError):
+                data = None
+            if data is None or names.sha512_hex(data) != dig:
+                return f"{cp} is missing, or does not have its digest"
         return None
 
 
@@ -743,7 +772,7 @@ and the archive's own storage root when there is one.
             self.here = here and P.OCFL is not None
             self.cache = Path(tempfile.mkdtemp(prefix="osheaf-resolve-"))
             self.sources, self.fetched, self.logs, self.notes, self.bases = {}, {}, {}, [], {}
-            self.budget, self.pinned = [0, 0], 0
+            self.budget, self.pinned, self.checked = [0, 0], 0, {}
 
         def __enter__(self):
             return self
@@ -808,9 +837,11 @@ bounded too (`MAX_RUN_FILES`, `MAX_RUN_BYTES`).
             out.append(w)
         return out
 
-    def folder(self, where, obj_id, witness_names=None, upto=None):
+    def folder(self, where, obj_id, witness_names=None, upto=None, only=None):
         """The folder holding the object OBJ_ID at WHERE ('here': this archive), or None; over
-        HTTP, a copy of v1 to UPTO (default: the head), kept apart from the whole copy."""
+        HTTP, a copy of v1 to UPTO (default: the head), kept apart from the whole copy. In a
+        folder, the files ONLY(inventory) names ({content path: digest}; default: all) are
+        checked."""
         if where == "here":
             d = P.obj_dir(obj_id) if self.here else None
             return d if d is not None and (d / "inventory.json").is_file() else None
@@ -824,7 +855,8 @@ bounded too (`MAX_RUN_FILES`, `MAX_RUN_BYTES`).
                     d = src.object_folder(obj_id)
                 except (ValueError, Unavailable):
                     d = None
-                problem = folder_problem(d, P.load_inventory(d) or {}) if d is not None else None
+                inv = (P.load_inventory(d) or {}) if d is not None else {}
+                problem = folder_problem(d, inv, only(inv) if only else None) if d is not None else None
                 if problem:
                     self.note("warning", f"{where}: {obj_id}: {problem}: not read (section 12.3)")
                     d = None
@@ -974,7 +1006,7 @@ the copies it finds and the tombstone (section 12.3).
                 if src is None or (src.folder is None and not any(o.get("id") == obj_id for o in src.entries(nm))):
                     continue
             log = self.key_log(owner, [] if w == "here" else [w])
-            d = self.folder(w, obj_id, line_witness_names(log))
+            d = self.folder(w, obj_id, line_witness_names(log), only=described)
             if d is None:
                 continue
             inv = P.load_inventory(d)
@@ -1035,6 +1067,16 @@ location, whether another copy matches or not: the status comes from the
 copies that match, and a copy that does not is damage or tampering where
 it is (section 12.3).
 
+A pin fixes an inventory, and the inventory every file of the version
+(section 8.5): a copy is a copy of the version pinned only if it holds
+them. So a version is resolved to, verified or contested, only once every
+file of it is found in the copy with the digest its inventory gives
+(`contents`); a copy that fails is noted with its location, and is not a
+copy found: another copy may match, and with none the pin is unavailable
+(or a mismatch, when other copies were found). Only the version resolved
+to is read whole, not the others of the line. The archive's own copies are
+not read again: they are its own verification's (section 14.2).
+
 A version of a key log is looked up in the key log met, where it is held
 or carried by a fork record (section 6.3); it counts as signed when it is
 a version of the key log: a version held with that number and digest
@@ -1074,13 +1116,30 @@ the verification that asked.
             if c.digest(n) not in (None, digest):
                 self.note("warning", f"{c.where}: {names.object_id(nm, owner)} {version} does not match "
                           "the pin (section 12.3)")
-        for c in copies:
+        for c in list(copies):
             if c.digest(n) == digest:
-                return Found(MEMBER_STATUS.get(c.status(n), "not a version"), c, version, digest, copies)
+                status = MEMBER_STATUS.get(c.status(n), "not a version")
+                if status in ("verified", "contested") and self.contents(c, n):
+                    copies.remove(c)
+                    continue
+                return Found(status, c, version, digest, copies)
         if copies:
             return Found("mismatch", None, version, digest, copies)
         return Found("removed" if self.tombstoned(names.object_id(nm, owner), where) else "unavailable",
                      None, version, digest, copies)
+
+    def contents(self, c, n):
+        """Why the files of vN of the copy C are not all found with their digests (noted), or
+        None; once per copy and version, never for this archive's own copy."""
+        key = (str(c.dir), n)
+        if c.where == "here":
+            return None
+        if key not in self.checked:
+            problem = folder_problem(c.dir, c.inv, content_paths(c.inv, [f"v{n}"]))
+            if problem:
+                self.note("warning", f"{c.where}: {c.id} v{n}: {problem}: not read (section 12.3)")
+            self.checked[key] = problem
+        return self.checked[key]
 
     def tombstoned(self, obj_id, where=()):
         """Whether an archive read holds a tombstone of OBJ_ID (section 13.3)."""
@@ -1096,28 +1155,34 @@ with it is a fork of the line, noted with where it was found and the
 status of each side (section 7.4). When two copies with signed versions
 disagree, the resolver does not choose (section 12.3): it notes the fork
 and answers nothing, unless a pin decides. A copy that agrees but stops
-earlier is older, and noted as such only by being older.
+earlier is older, and noted as such only by being older. The copy taken
+must hold every file of the version it gives (`contents`); one that does
+not is left out, noted, and the others are judged again.
 
     # in resolution: resolving a pin, a version or a line:
     def latest(self, nm, owner, where=()):
         """The copy with the latest signed version of the line among the copies that agree, as a
         Found (status unavailable, removed or fork when there is none)."""
         copies = self.copies(nm, owner, where)
-        signed = sorted((c for c in copies if c.latest_signed), key=lambda c: -c.latest_signed)
-        if not signed:
-            status = ("removed" if self.tombstoned(names.object_id(nm, owner), where) else "unavailable") \
-                if not copies else "not a version"
-            return Found(status, None, None, None, copies)
-        top = signed[0]
-        forks = [c for c in signed if not top.agrees(c)]
-        for c in forks:
-            self.note("result", f"a fork of the line {top.id}: the copy at {c.where} (latest signed "
-                      f"v{c.latest_signed}) does not agree with the copy at {top.where} (latest signed "
-                      f"v{top.latest_signed}) (section 7.4)")
-        if forks:
-            return Found("fork", None, None, None, copies)
-        v = f"v{top.latest_signed}"
-        return Found("verified", top, v, top.digest(top.latest_signed), copies)
+        while True:
+            signed = sorted((c for c in copies if c.latest_signed), key=lambda c: -c.latest_signed)
+            if not signed:
+                status = ("removed" if self.tombstoned(names.object_id(nm, owner), where) else "unavailable") \
+                    if not copies else "not a version"
+                return Found(status, None, None, None, copies)
+            top = signed[0]
+            forks = [c for c in signed if not top.agrees(c)]
+            for c in forks:
+                self.note("result", f"a fork of the line {top.id}: the copy at {c.where} (latest signed "
+                          f"v{c.latest_signed}) does not agree with the copy at {top.where} (latest signed "
+                          f"v{top.latest_signed}) (section 7.4)")
+            if forks:
+                return Found("fork", None, None, None, copies)
+            if self.contents(top, top.latest_signed):
+                copies = [c for c in copies if c is not top]
+                continue
+            v = f"v{top.latest_signed}"
+            return Found("verified", top, v, top.digest(top.latest_signed), copies)
 
     def document_version(self, nm, owner, n, where=()):
         """The object version holding document version N that the history of the latest signed
@@ -1129,7 +1194,10 @@ earlier is older, and noted as such only by being older.
         for h in P.history_of(c.dir, c.inv, found.version):
             if P.doc_version_of(c.dir, c.inv, h) == n:
                 k = int(h[1:])
-                return Found(MEMBER_STATUS.get(c.status(k), "not a version"), c, h, c.digest(k), found.copies)
+                status = MEMBER_STATUS.get(c.status(k), "not a version")
+                if status in ("verified", "contested") and self.contents(c, k):
+                    return Found("unavailable", None, None, None, found.copies)
+                return Found(status, c, h, c.digest(k), found.copies)
         self.note("warning", f"{c.id}: no document version {n} in the history of {found.version}")
         return Found("unavailable", None, None, None, found.copies)
 
@@ -1191,7 +1259,8 @@ read list (section 12.2), and refused when more than one matches. A work,
             return obj_id, self.latest(nm, owner, where)
         if u.sha512 is None:
             return obj_id, self.document_version(nm, owner, u.version, where)
-        for c in self.copies(nm, owner, where):
+        copies = self.copies(nm, owner, where)
+        for c in list(copies):
             k = c.find(u.sha512)
             if k is not None:
                 held = (c.read(P.OBJ, k) or {}).get("documentVersion")
@@ -1199,8 +1268,11 @@ read list (section 12.2), and refused when more than one matches. A work,
                     self.note("warning", f"{obj_id}: the version pinned holds document version {held}, "
                               f"not {u.version}")
                     return obj_id, Found("mismatch", c, f"v{k}", u.sha512)
-                return obj_id, Found(MEMBER_STATUS.get(c.status(k), "not a version"), c, f"v{k}", u.sha512)
-        copies = self.copies(nm, owner, where)
+                status = MEMBER_STATUS.get(c.status(k), "not a version")
+                if status in ("verified", "contested") and self.contents(c, k):
+                    copies.remove(c)
+                    continue
+                return obj_id, Found(status, c, f"v{k}", u.sha512)
         status = "mismatch" if copies else ("removed" if self.tombstoned(obj_id, where) else "unavailable")
         return obj_id, Found(status, None, None, u.sha512, copies)
 
@@ -1240,7 +1312,7 @@ makes with its witnesses: a short form resolves as the full URI does.
 
     def originator(self, where, obj_id):
         """The originator of the genesis record of the object OBJ_ID at WHERE, or None."""
-        d = self.folder(where, obj_id, upto=1)
+        d = self.folder(where, obj_id, upto=1, only=described)
         inv = P.load_inventory(d) if d else None
         g = P.read_logical(d, inv, P.GENESIS, "v1") if inv else None
         try:

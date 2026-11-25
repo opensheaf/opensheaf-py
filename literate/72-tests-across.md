@@ -297,6 +297,46 @@ file. The same holds when the folder is reached through `locations`.
         with remote.Resolver(places=[str(a)]) as r:
             assert r.resolve(f"sheaf:{nm}:{owner}")[1].status == "unavailable"
 
+A copy is checked where it is read: the descriptions of every version
+when it is found, and every file of the version it resolves to once it
+does, not the files of its other versions. The PDF of `v1` changed in the
+folder makes a pin of `v1` unavailable there, noted, and leaves the latest
+signed version, `v2`, verified; with another copy, intact, the pin of
+`v1` is verified there. An `object.json` changed makes the copy no copy at
+all.
+
+    # in across: resolution:
+    def test_only_the_version_resolved_to_is_read_whole(tmp_path):
+        a = make(tmp_path, "a")
+        deposit(a, "paper", "one", new=True)
+        deposit(a, "paper", "two")
+        oid = line(a, "paper")
+        _, nm, owner = oid.split(":")
+        d1 = head_digest(a, "paper", "v1")
+        b = tmp_path / "b"
+        shutil.copytree(a, b)
+        d = P.obj_dir(oid)
+        inv = P.load_inventory(d)
+        pdf1 = d / next(cp for cp in remote.content_paths(inv, ["v1"]) if cp.endswith(".pdf"))
+        assert pdf1.parts[-3] == "v1" and pdf1.name.endswith(".pdf")
+        pdf1.write_bytes(b"%PDF tampered")
+        c = make(tmp_path, "c")
+        P.configure(c)
+        with remote.Resolver(places=[str(a)]) as r:
+            found = r.latest(nm, owner)
+            assert (found.status, found.version) == ("verified", "v2")
+            assert r.pin(nm, owner, "v1", d1).status == "unavailable"
+            assert any(m.startswith(f"{a}: {oid} v1: ") and "does not have its digest" in m for _, m in r.notes)
+        with remote.Resolver(places=[str(a), str(b)]) as r:
+            found = r.pin(nm, owner, "v1", d1)
+            assert (found.status, found.copy.where) == ("verified", str(b))
+        obj1 = d / next(cp for cp, dg in remote.content_paths(inv, ["v1"], [P.OBJ]).items())
+        obj1.write_bytes(obj1.read_bytes() + b" ")
+        P.configure(c)
+        with remote.Resolver(places=[str(a)]) as r:
+            assert r.latest(nm, owner).status == "unavailable"
+            assert any("object.json is missing, or does not have its digest" in m for _, m in r.notes)
+
 A copy's versions are read through its root inventory. Here the head of
 the paper is forged: an unsigned `v2` whose inventory restates the state
 of the signed `v1` with another PDF, the inventory of `v1` left as it was.

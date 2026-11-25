@@ -216,6 +216,38 @@ def test_a_copy_read_in_place_is_checked(tmp_path):
         assert r.resolve(f"sheaf:{nm}:{owner}")[1].status == "unavailable"
 
 
+def test_only_the_version_resolved_to_is_read_whole(tmp_path):
+    a = make(tmp_path, "a")
+    deposit(a, "paper", "one", new=True)
+    deposit(a, "paper", "two")
+    oid = line(a, "paper")
+    _, nm, owner = oid.split(":")
+    d1 = head_digest(a, "paper", "v1")
+    b = tmp_path / "b"
+    shutil.copytree(a, b)
+    d = P.obj_dir(oid)
+    inv = P.load_inventory(d)
+    pdf1 = d / next(cp for cp in remote.content_paths(inv, ["v1"]) if cp.endswith(".pdf"))
+    assert pdf1.parts[-3] == "v1" and pdf1.name.endswith(".pdf")
+    pdf1.write_bytes(b"%PDF tampered")
+    c = make(tmp_path, "c")
+    P.configure(c)
+    with remote.Resolver(places=[str(a)]) as r:
+        found = r.latest(nm, owner)
+        assert (found.status, found.version) == ("verified", "v2")
+        assert r.pin(nm, owner, "v1", d1).status == "unavailable"
+        assert any(m.startswith(f"{a}: {oid} v1: ") and "does not have its digest" in m for _, m in r.notes)
+    with remote.Resolver(places=[str(a), str(b)]) as r:
+        found = r.pin(nm, owner, "v1", d1)
+        assert (found.status, found.copy.where) == ("verified", str(b))
+    obj1 = d / next(cp for cp, dg in remote.content_paths(inv, ["v1"], [P.OBJ]).items())
+    obj1.write_bytes(obj1.read_bytes() + b" ")
+    P.configure(c)
+    with remote.Resolver(places=[str(a)]) as r:
+        assert r.latest(nm, owner).status == "unavailable"
+        assert any("object.json is missing, or does not have its digest" in m for _, m in r.notes)
+
+
 def test_an_unsigned_head_cannot_restate_a_signed_version(tmp_path):
     a, c = make(tmp_path, "a"), make(tmp_path, "c")
     deposit(a, "paper", "one", new=True)

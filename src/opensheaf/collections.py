@@ -203,6 +203,8 @@ def pinned(r, nm, owner, u, places, kind, revisions=()):
             cur = P.current_version(c.dir, c.inv, found.version)
             found = remote.Found(remote.MEMBER_STATUS.get(c.status(int(cur[1:])), "not a version"), c, cur,
                                  c.digest(int(cur[1:])), found.copies)
+            if found.ok and r.contents(c, int(cur[1:])):
+                found = remote.Found("unavailable", None, None, None, found.copies)
         founds = [found]
     for f in founds:
         if f.status != "verified" or f.copy is None:
