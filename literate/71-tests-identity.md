@@ -347,7 +347,7 @@ those it shows; the short forms only when short forms are accepted.
         f"sheaf:{N}/v2",
         f"sheaf:{N}/v2?sha512={D2}",
         f"sheaf:{N}/v2?sha512={D2}&at=https%3A%2F%2Fmgubi.org%2Fpapers%2F",
-        f"sheaf:{N}:{J}/v2",
+        f"sheaf:{N}:{J}/v1",
         f"sheaf:{N}:*",
         f"sheaf:{A}",
         f"sheaf:{A}/v2?sha512={KL2}",
@@ -362,7 +362,7 @@ those it shows; the short forms only when short forms are accepted.
         assert u.canonical() == URIS_C7[2]
         assert names.parse_sheaf(URIS_C7[5]).owner == "*"
         assert names.key_log_pin(A, 2, KL2) == URIS_C7[7]
-        for short in (f"sheaf:{N[:8]}/v2", f"sheaf:{N[:8]}:{J[:8]}/v2"):
+        for short in (f"sheaf:{N[:8]}/v2", f"sheaf:{N[:8]}:{J[:8]}/v1"):
             with pytest.raises(ValueError):
                 names.parse_sheaf(short)
             s = names.parse_sheaf(short, short=True)
