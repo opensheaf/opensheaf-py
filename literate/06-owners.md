@@ -1313,9 +1313,32 @@ manifest is used only if it stays inside the object, a relative path
 without `.`, `..` or empty parts, and is in the content folder of a
 version not later than the inventory's, `vN/content/...` (or the
 `contentDirectory` that the inventory names). Any other is a problem of
-the key log, and never read or written.
+the key log, and never read or written. Symbolic links are never followed
+(section 15.2): a content file reached through one is missing, and the
+witness folder of a version holds its regular files only (`witness_files`,
+which the objects of the archive use as well).
 
     # in owners: reading and writing a key log on disk:
+    def linked(base, rel):
+        """Whether the path REL below BASE passes through a symbolic link (REL itself included)."""
+        at = Path(base)
+        for part in Path(rel).parts:
+            at = at / part
+            if at.is_symlink():
+                return True
+        return False
+
+
+    def witness_files(obj_dir, version):
+        """{file name: bytes} of the regular files of the witness folder of VERSION of the object in
+        OBJ_DIR; a link, or a folder reached through one, is not followed (section 15.2)."""
+        rel = f"{sign.WITNESSES}/{version}"
+        w = Path(obj_dir) / rel
+        if linked(obj_dir, rel) or not w.is_dir():
+            return {}
+        return {f.name: f.read_bytes() for f in sorted(w.iterdir()) if not f.is_symlink() and f.is_file()}
+
+
     def safe_relative(rel):
         """Whether REL is a relative path that stays below its base: no leading /, no \\, ., .. or empty parts."""
         return (isinstance(rel, str) and bool(rel) and not rel.startswith("/") and "\\" not in rel
@@ -1360,6 +1383,8 @@ the key log, and never read or written.
                     if not content_path(cp, entry, n):
                         problems.append(f"v{n}: a content path out of the object: {cp!r}")
                         raise KeyError(cp)
+                    if linked(obj_dir, cp):
+                        raise OSError(f"{cp} passes through a symbolic link")
                     data = (obj_dir / cp).read_bytes()
                 except (OSError, KeyError, IndexError, TypeError):
                     problems.append(f"v{n}: the content of {paths[0]} is missing")
@@ -1368,8 +1393,7 @@ the key log, and never read or written.
                     problems.append(f"v{n}: {paths[0]} does not have the digest its inventory states")
                 for path in paths:
                     files[path] = data
-            wdir = obj_dir / sign.WITNESSES / f"v{n}"
-            witnesses = {f.name: f.read_bytes() for f in sorted(wdir.iterdir()) if f.is_file()} if wdir.is_dir() else {}
+            witnesses = witness_files(obj_dir, f"v{n}")
             versions.append(Version(n, files, inv_bytes, sc, witnesses))
         if not versions or GENESIS not in versions[0].files:
             raise OwnerError(f"{obj_dir}: no genesis record in the first version")
@@ -1432,13 +1456,12 @@ apart from those of the key log.
             entry = names.json_value(inv_bytes)
             for d, paths in entry["versions"][f"v{n}"]["state"].items():
                 cp = entry["manifest"][d][0]
-                if content_path(cp, entry, n) and (obj_dir / cp).is_file():
+                if content_path(cp, entry, n) and not linked(obj_dir, cp) and (obj_dir / cp).is_file():
                     for path in paths:
                         files[path] = (obj_dir / cp).read_bytes()
         except (ValueError, KeyError, IndexError, TypeError, AttributeError, OSError):
             pass
-        wdir = obj_dir / sign.WITNESSES / f"v{n}"
-        witnesses = {f.name: f.read_bytes() for f in sorted(wdir.iterdir()) if f.is_file()} if wdir.is_dir() else {}
+        witnesses = witness_files(obj_dir, f"v{n}")
         return Version(n, files, inv_bytes, sc, witnesses)
 
 

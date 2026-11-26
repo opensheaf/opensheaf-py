@@ -1355,9 +1355,35 @@ def test_stale_discovery_document(archive):
 def test_keys_in_the_archive_are_reported(archive, tmp_path):
     shutil.copy(rotation_files(tmp_path / "keys")[0], archive / "backup.txt")
     found = P.verify_findings()
-    assert {"severity": "warning", "place": "backup.txt",
+    assert {"severity": "error", "place": "backup.txt",
             "message": "looks like a private key: keys are never kept in an archive (section 15.4)"} in found
+
+
+def test_symbolic_links_are_not_followed(archive, tmp_path):
+    put("paper-a", 1, FILES1)
+    finish()
     assert P.verify_errors() == []
+    d = P.obj_dir(P.LABELS["paper-a"])
+    w = d / sign.WITNESSES / "v1"
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    for f in sorted(w.iterdir()):
+        shutil.move(str(f), str(outside / f.name))
+        f.symlink_to(outside / f.name)
+    assert P.line_statuses(d, P.load_inventory(d))[1] == [sign.UNSIGNED]
+    errors = P.verify_errors()
+    rel = w.relative_to(archive).as_posix()
+    assert any(e.startswith(f"{rel}/signature-") and "a symbolic link in the archive: never followed" in e
+               for e in errors), errors
+    owner = P.ARCHIVE["owner"]
+    lw = P.obj_dir(names.object_id(owner, owner)) / sign.WITNESSES
+    (tmp_path / "log-witnesses" / "v1").mkdir(parents=True)
+    (tmp_path / "log-witnesses" / "v1" / "signature-x.json").write_text("{}")
+    if lw.exists():
+        shutil.rmtree(lw)
+    lw.parent.mkdir(parents=True, exist_ok=True)
+    lw.symlink_to(tmp_path / "log-witnesses")
+    assert all(v.witnesses == {} for v in owners.load_key_log(lw.parent.parent).versions)
 
 
 def test_specification_0_1_is_rebuilt(tmp_path, capsys):

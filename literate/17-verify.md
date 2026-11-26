@@ -243,6 +243,7 @@ steps of section 14, in order.
         guarded(f, "the indexes", check_indexes, f, schema, disc)
         guarded(f, "the presentation files", check_presentation, f, disc)
         look_for_keys(f)
+        look_for_links(f)
         return f
 
 The files the verifier reads are anyone's, and a file it did not foresee
@@ -1729,12 +1730,21 @@ person may copy one in by mistake. With access to the files, the verifier
 looks for files that look like keys: exported rotation keys (by their
 first line or their name), printed sheets, the files of current keys
 (`.key`), and small files holding nothing but the base64 of 32 bytes, the
-form of a seed. It cannot be sure, and the finding is a warning. The
-folders of git and of the tools' staging are not searched.
+form of a seed. A private key found in a form it recognises is an error,
+never a warning (section 15.4): whoever copies the archive copies the key.
+The folders of git and of the tools' staging are not searched.
+
+Nor does the verifier follow a symbolic link (section 15.2): a link in
+the storage root, or among the files of the archive that the
+specification defines (the discovery document, its pages of objects, the
+indexes), is an error, and what it points to is never read. The
+witness folders and the key logs are read without following them
+(`witness_files`, `linked`, [owners](06-owners.md)), so that a link
+there signs nothing.
 
     # in look for keys left in the archive:
     def look_for_keys(f):
-        """Warn of the files of the archive that look like private keys (section 15.4)."""
+        """Report the files of the archive that look like private keys, an error (section 15.4)."""
         rotation_name = re.compile(r"^rotation-[a-z2-7]{16}-[a-z2-7]{16}\.txt\Z")
         for p in sorted(ROOT.rglob("*")):
             rel = p.relative_to(ROOT)
@@ -1752,8 +1762,28 @@ folders of git and of the tools' staging are not searched.
                     except ValueError:
                         looks = False
             if looks:
-                f.warning(rel.as_posix(), "looks like a private key: keys are never kept in an archive "
-                          "(section 15.4)")
+                f.error(rel.as_posix(), "looks like a private key: keys are never kept in an archive "
+                        "(section 15.4)")
+
+
+    LINKS_SEARCHED = ("ocfl", "opensheaf.json", "objects", "indexes.json", "names", "owners", "sha512")
+
+
+    def look_for_links(f):
+        """Report the symbolic links among the files of the specification, never followed (section 15.2)."""
+        for top in LINKS_SEARCHED:
+            start = ROOT / top
+            if start.is_symlink():
+                f.error(top, "a symbolic link in the archive: never followed (section 15.2)")
+                continue
+            if not start.is_dir():
+                continue
+            for folder, dirs, files in os.walk(start):
+                for name in sorted(dirs + files):
+                    p = Path(folder) / name
+                    if p.is_symlink():
+                        f.error(p.relative_to(ROOT).as_posix(), "a symbolic link in the archive: never followed "
+                                "(section 15.2)")
 
 The command
 -----------

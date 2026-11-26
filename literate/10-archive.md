@@ -1445,13 +1445,13 @@ all, which these tools do not yet organise otherwise.
         return log, latest, found
 
 The witness files of a version, by name: the signature files and anything
-else a host may have put there.
+else a host may have put there; regular files only, never a symbolic link
+(section 15.2).
 
     # in the witness files of an object version:
     def witnesses_of(d, version):
         """{file name: bytes} of the witness folder of VERSION of the object in D."""
-        w = d / sign.WITNESSES / version
-        return {f.name: f.read_bytes() for f in sorted(w.iterdir()) if f.is_file()} if w.is_dir() else {}
+        return owners.witness_files(d, version)
 
 ### The statuses of a line
 

@@ -932,8 +932,7 @@ def signing_keys(owner):
 
 def witnesses_of(d, version):
     """{file name: bytes} of the witness folder of VERSION of the object in D."""
-    w = d / sign.WITNESSES / version
-    return {f.name: f.read_bytes() for f in sorted(w.iterdir()) if f.is_file()} if w.is_dir() else {}
+    return owners.witness_files(d, version)
 
 
 def line_statuses(d, inv, log=False):
@@ -3508,7 +3507,7 @@ def landing_description_gaps(text):
 
 
 def look_for_keys(f):
-    """Warn of the files of the archive that look like private keys (section 15.4)."""
+    """Report the files of the archive that look like private keys, an error (section 15.4)."""
     rotation_name = re.compile(r"^rotation-[a-z2-7]{16}-[a-z2-7]{16}\.txt\Z")
     for p in sorted(ROOT.rglob("*")):
         rel = p.relative_to(ROOT)
@@ -3526,8 +3525,28 @@ def look_for_keys(f):
                 except ValueError:
                     looks = False
         if looks:
-            f.warning(rel.as_posix(), "looks like a private key: keys are never kept in an archive "
-                      "(section 15.4)")
+            f.error(rel.as_posix(), "looks like a private key: keys are never kept in an archive "
+                    "(section 15.4)")
+
+
+LINKS_SEARCHED = ("ocfl", "opensheaf.json", "objects", "indexes.json", "names", "owners", "sha512")
+
+
+def look_for_links(f):
+    """Report the symbolic links among the files of the specification, never followed (section 15.2)."""
+    for top in LINKS_SEARCHED:
+        start = ROOT / top
+        if start.is_symlink():
+            f.error(top, "a symbolic link in the archive: never followed (section 15.2)")
+            continue
+        if not start.is_dir():
+            continue
+        for folder, dirs, files in os.walk(start):
+            for name in sorted(dirs + files):
+                p = Path(folder) / name
+                if p.is_symlink():
+                    f.error(p.relative_to(ROOT).as_posix(), "a symbolic link in the archive: never followed "
+                            "(section 15.2)")
 
 
 def verify_findings(remote=False, keeper_fetch=None):
@@ -3587,6 +3606,7 @@ def checked(f, schema, disc, remote, keeper_fetch):
     guarded(f, "the indexes", check_indexes, f, schema, disc)
     guarded(f, "the presentation files", check_presentation, f, disc)
     look_for_keys(f)
+    look_for_links(f)
     return f
 
 
