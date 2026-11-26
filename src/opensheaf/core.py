@@ -2036,6 +2036,13 @@ def object_pages(objs):
     return {f"{OBJECT_PAGES}/{p}.json": groups[p] for p in sorted(groups)}
 
 
+def storage_root_ok(root):
+    """Whether ROOT, the storageRoot of a discovery document, is a relative path of a folder
+    below the archive, ending with / (section 3.1)."""
+    return (isinstance(root, str) and root.endswith("/") and not any(c in root for c in ":?#")
+            and owners.safe_relative(root[:-1]))
+
+
 def page_path_ok(path):
     return (owners.safe_relative(path) and path.endswith(".json")
             and ":" not in path.split("/")[0])
@@ -2702,6 +2709,9 @@ def check_storage(f, schema, disc):
         f.error("ocfl", "no OCFL 1.1 storage root (0=ocfl_1.1)")
     if disc and disc.get("storageLayout") != LAYOUT:
         f.error("opensheaf.json", f"storageLayout is {disc.get('storageLayout')}, the configuration says {LAYOUT}")
+    if disc and not storage_root_ok(disc.get("storageRoot")):
+        f.error("opensheaf.json", f"storageRoot {disc.get('storageRoot')!r} is not a relative path of a folder "
+                "below the archive, ending with / (section 3.1)")
     if LAYOUT == OWNER_NAME_LAYOUT:
         if (OCFL / "ocfl_layout.json").exists():
             f.error("ocfl", "ocfl_layout.json names only registered layouts: the owner-name layout has none "

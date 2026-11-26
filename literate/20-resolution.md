@@ -345,16 +345,16 @@ makes the archive unavailable.
         return self._disc
 
 The storage root that a discovery document names is a path below the
-archive, relative: a document that names an absolute path, a path with
-`..`, an address of another host (`//host/`, `https://...`) is refused,
+archive, relative (`storage_root_ok`): a document that names an absolute
+path, a path with `..`, an address of another host (`//host/`,
+`https://...`) is refused,
 so that the objects of an archive are read from that archive only.
 
     # in resolution: the discovery document and the objects of an archive:
     def storage_root(self):
         """The storage root of the archive, a relative path ending with /."""
         root = self.discovery().get("storageRoot", "ocfl/")
-        if not isinstance(root, str) or ":" in root or not owners.safe_relative(root.rstrip("/")) \
-                or not root.endswith("/"):
+        if not P.storage_root_ok(root):
             raise Unavailable(f"{self}: the storage root {root!r} is not a relative path below the archive")
         return root
 

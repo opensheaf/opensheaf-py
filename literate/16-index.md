@@ -153,9 +153,21 @@ Every reader of a discovery document takes its entries through
 `listed_objects`, which reads the pages when it has them, with `read`
 giving the bytes of a path relative to the document (or None); a page
 missing, or not a page, is a `ValueError`. A path of a page stays below
-the document: relative, without `.`, `..` or a scheme.
+the document: relative, without `.`, `..` or a scheme. The storage root
+that a discovery document names, `storageRoot`, is such a path too, of a
+folder, ending with `/`: no scheme or other `:`, no leading `/`, no `.`,
+`..` or empty segment, no `?`, `#` or `\` (section 3.1, and the pattern
+of the archive schema); `storage_root_ok` says so, for the verifier and
+the resolver alike.
 
     # in write the discovery document of the archive:
+    def storage_root_ok(root):
+        """Whether ROOT, the storageRoot of a discovery document, is a relative path of a folder
+        below the archive, ending with / (section 3.1)."""
+        return (isinstance(root, str) and root.endswith("/") and not any(c in root for c in ":?#")
+                and owners.safe_relative(root[:-1]))
+
+
     def page_path_ok(path):
         return (owners.safe_relative(path) and path.endswith(".json")
                 and ":" not in path.split("/")[0])

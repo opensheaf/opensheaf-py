@@ -217,7 +217,7 @@ def break_inventory(d, change):
 
 @pytest.mark.parametrize("case", ["documentVersion text", "documentVersion missing", "discovery list",
                                   "deep inventory", "object.json latin-1", "object.json bom", "number 2.0",
-                                  "number beyond", "discovery number", "extension float", "label newline", "hashed config",
+                                  "number beyond", "discovery number", "extension float", "label newline", "storageRoot absolute", "hashed config",
                                   "versions list", "user text"])
 def test_the_verifier_reports_what_it_cannot_read(archive, case):
     put("paper-a", 1, FILES1, extra_obj={"documentVersion": "1"} if case == "documentVersion text" else None)
@@ -240,6 +240,7 @@ def test_the_verifier_reports_what_it_cannot_read(archive, case):
                 "number beyond": "object.json: the number 9007199254740992 is beyond 2^53 - 1 (section 2)",
                 "discovery number": "the number 1.5 is not an integer",
                 "label newline": "'paper-a\\n' does not match",
+                "storageRoot absolute": "storageRoot '/srv/ocfl/' is not a relative path of a folder below",
                 "extension float": "object.json: the number 0.5 is not an integer", "hashed config": "config.json is not a JSON object",
                 "versions list": "no versions", "user text": "a user that is not"}[case]
     if case == "discovery list":
@@ -251,6 +252,10 @@ def test_the_verifier_reports_what_it_cannot_read(archive, case):
     elif case == "object.json bom":
         cp = d / P.content_path(inv, "v1", P.OBJ)
         cp.write_bytes(b"\xef\xbb\xbf" + cp.read_bytes())
+    elif case == "storageRoot absolute":
+        disc = json.loads((archive / "opensheaf.json").read_text())
+        disc["storageRoot"] = "/srv/ocfl/"
+        (archive / "opensheaf.json").write_text(json.dumps(disc))
     elif case == "label newline":
         disc = json.loads((archive / "opensheaf.json").read_text())
         next(o for o in disc["objects"] if o.get("label") == "paper-a")["label"] = "paper-a\n"

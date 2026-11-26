@@ -193,8 +193,7 @@ class Source:
     def storage_root(self):
         """The storage root of the archive, a relative path ending with /."""
         root = self.discovery().get("storageRoot", "ocfl/")
-        if not isinstance(root, str) or ":" in root or not owners.safe_relative(root.rstrip("/")) \
-                or not root.endswith("/"):
+        if not P.storage_root_ok(root):
             raise Unavailable(f"{self}: the storage root {root!r} is not a relative path below the archive")
         return root
 

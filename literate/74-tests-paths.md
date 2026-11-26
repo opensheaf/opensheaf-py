@@ -336,7 +336,8 @@ nested deeper than any JSON the tools read, an `object.json` that is not
 UTF-8 or starts with a byte order mark, a number written `2.0` or beyond
 2^53 - 1 (section 2), in `object.json` (in the data of an extension too)
 or in the discovery document, a label ending in a newline (a pattern of
-the schemas is ECMA-262, whose `$` is the end of the string), a configuration of the hashed layout that is not JSON, an inventory
+the schemas is ECMA-262, whose `$` is the end of the string), a storage
+root that is an absolute path (section 3.1), a configuration of the hashed layout that is not JSON, an inventory
 whose versions are a list or whose user is text. Each case is a finding;
 none ends the verification with a traceback.
 
@@ -349,7 +350,7 @@ none ends the verification with a traceback.
 
     @pytest.mark.parametrize("case", ["documentVersion text", "documentVersion missing", "discovery list",
                                       "deep inventory", "object.json latin-1", "object.json bom", "number 2.0",
-                                      "number beyond", "discovery number", "extension float", "label newline", "hashed config",
+                                      "number beyond", "discovery number", "extension float", "label newline", "storageRoot absolute", "hashed config",
                                       "versions list", "user text"])
     def test_the_verifier_reports_what_it_cannot_read(archive, case):
         put("paper-a", 1, FILES1, extra_obj={"documentVersion": "1"} if case == "documentVersion text" else None)
@@ -372,6 +373,7 @@ none ends the verification with a traceback.
                     "number beyond": "object.json: the number 9007199254740992 is beyond 2^53 - 1 (section 2)",
                     "discovery number": "the number 1.5 is not an integer",
                     "label newline": "'paper-a\\n' does not match",
+                    "storageRoot absolute": "storageRoot '/srv/ocfl/' is not a relative path of a folder below",
                     "extension float": "object.json: the number 0.5 is not an integer", "hashed config": "config.json is not a JSON object",
                     "versions list": "no versions", "user text": "a user that is not"}[case]
         if case == "discovery list":
@@ -383,6 +385,10 @@ none ends the verification with a traceback.
         elif case == "object.json bom":
             cp = d / P.content_path(inv, "v1", P.OBJ)
             cp.write_bytes(b"\xef\xbb\xbf" + cp.read_bytes())
+        elif case == "storageRoot absolute":
+            disc = json.loads((archive / "opensheaf.json").read_text())
+            disc["storageRoot"] = "/srv/ocfl/"
+            (archive / "opensheaf.json").write_text(json.dumps(disc))
         elif case == "label newline":
             disc = json.loads((archive / "opensheaf.json").read_text())
             next(o for o in disc["objects"] if o.get("label") == "paper-a")["label"] = "paper-a\n"

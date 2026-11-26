@@ -309,7 +309,9 @@ compute every path. For the owner-name layout the storage root has no
 describes the layout; for the hashed layout, `ocfl_layout.json` names it,
 and a configuration file of the extension, if present, keeps its default
 parameters. Every object must be at the path its identifier gives in that
-layout.
+layout. The storage root the discovery document names is a relative path
+below the archive (`storage_root_ok`), checked by hand, as the resolver
+checks it, and not only by the schema, which may not be installed.
 
     # in check the files and the storage of an archive:
     def check_storage(f, schema, disc):
@@ -318,6 +320,9 @@ layout.
             f.error("ocfl", "no OCFL 1.1 storage root (0=ocfl_1.1)")
         if disc and disc.get("storageLayout") != LAYOUT:
             f.error("opensheaf.json", f"storageLayout is {disc.get('storageLayout')}, the configuration says {LAYOUT}")
+        if disc and not storage_root_ok(disc.get("storageRoot")):
+            f.error("opensheaf.json", f"storageRoot {disc.get('storageRoot')!r} is not a relative path of a folder "
+                    "below the archive, ending with / (section 3.1)")
         if LAYOUT == OWNER_NAME_LAYOUT:
             if (OCFL / "ocfl_layout.json").exists():
                 f.error("ocfl", "ocfl_layout.json names only registered layouts: the owner-name layout has none "
