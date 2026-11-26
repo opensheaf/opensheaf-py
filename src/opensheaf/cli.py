@@ -8,8 +8,10 @@ named by their labels in the archive.
 Commands:
   init                   create an archive (osheaf.json, storage root, owner, owner catalogue)
   owner init|rotate|expose|end|show   make an owner, change its keys, end it, show it
+  owner complete         settle a version of the key log left by an interrupted write
   key new                a new current key for this device
   key push|pull|list|forget   current keys to and from a key wallet (--wallet)
+  key wallet|wallets     the wallets of an owner (hints of osheaf.json), and your own
   key export|import --clipboard   a key to and from a password manager
   key enroll|unlock      a passkey (Touch ID) opens the keys of the wallet
   deposit LABEL [SOURCE] deposit a document (TeXmacs, or any source with --pdf);
@@ -20,6 +22,7 @@ Commands:
   notice LABEL           a notice about a document version
   withdraw LABEL         withdraw a document (the content stays)
   complete LABEL         add the sources of a version deposited without them
+  label LINE LABEL       give a line a label, change it, or remove it (--unset)
   collect                new versions of the owner catalogues when needed (--owner: one)
   collection new|add|remove|follow|update|status|sync
                          catalogues and selections, with members of any archive

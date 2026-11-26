@@ -35,7 +35,7 @@ The package is `opensheaf`; its command is `osheaf` (also installed as
 ## Installation
 
 ```
-pipx install "opensheaf[validate] @ git+https://github.com/opensheaf/opensheaf-py"
+pipx install "opensheaf[validate,keys] @ git+https://github.com/opensheaf/opensheaf-py"
 ```
 
 (or `pip install` in a virtual environment). Python 3.9 or later (PyYAML is installed with it). The extra
@@ -43,6 +43,8 @@ pipx install "opensheaf[validate] @ git+https://github.com/opensheaf/opensheaf-p
 `osheaf verify` also validates the JSON files against the schemas (with
 their formats, URIs included) and the storage root with an independent OCFL
 validator; without the first two, it says which schema checks it skipped.
+The extra `keys` adds `keyring`, for the keys kept in the system keychain
+(below).
 Depositing TeXmacs documents needs [GNU TeXmacs](https://www.texmacs.org) (`TEXMACS_BIN`, by default the macOS
 application).
 
@@ -212,15 +214,16 @@ wallets. Your configuration file `~/.config/opensheaf/config.json`
 for each owner, the wallets that hold its keys, `"keys": {"<owner>":
 {"wallets": [...]}}` (written by `init`, `owner init|rotate --keys` and
 `key push --wallet`, changed with `osheaf key wallet --owner O
---add|--remove`). The keys of an owner are looked for in its hinted
-wallets, then in yours, in order: the first that holds keys of the owner
-is used. The environment variable `OPENSHEAF_WALLET` (text, or JSON as
-below) wins over both. `osheaf key wallet` lists the wallets of an owner
-in order; `osheaf key wallets` lists yours with the owners each holds and
-how their keys are locked. The earlier forms, `"keys": {"wallet": ...}`,
-are still read: in `osheaf.json` as a hint for every owner, in your file
-after your `wallets`. A command wallet is configured only in your file or
-the environment, as in
+--add|--remove`). The keys of an owner are looked for in your wallets
+first, then in those `osheaf.json` hints for it, in order: the first that
+holds keys of the owner is used. The environment variable
+`OPENSHEAF_WALLET` (text, or JSON as below) wins over both. `osheaf key
+wallet` lists the wallets of an owner in order; `osheaf key wallets` lists
+yours with the owners each holds and how their keys are locked. In your
+file, `"keys": {"wallet": ...}` is still read, after your `wallets`; in
+`osheaf.json`, the earlier form `"keys": {"wallet": ...}`, one wallet for
+the whole archive, is refused, with the entries to write instead. A
+command wallet is configured only in your file or the environment, as in
 
 ```json
 {"keys": {"wallet": "command",
@@ -447,6 +450,7 @@ osheaf arxiv import DOWNLOADS [ARXIV-ID ...] [--update] [--versions v1,v3] [--ag
 
   ```yaml
   id: kpz-uniqueness
+  new: yes
   source: paper.tex
   pdf: paper.pdf
   extra-sources: [refs.bib, {file: figures/fig1.pdf, path: figures/fig1.pdf}]
@@ -467,8 +471,9 @@ osheaf arxiv import DOWNLOADS [ARXIV-ID ...] [--update] [--versions v1,v3] [--ag
   a likely typo.
 - **notice**, **withdraw**: later statements about a version (an erratum, by
   a description-only version; notices stay in every later version) and the
-  withdrawal of a line (the content stays; no new versions; every page
-  showing it shows the withdrawal, section 13.1).
+  withdrawal of a line (the content stays; every page showing it shows the
+  withdrawal; a later deposit of a new document version reinstates the
+  line, and the versions withdrawn stay withdrawn, section 13.1).
 - **complete**: adds the sources of a version deposited without them
   (`--no-source`); its number stays.
 - **resolve**: finds and checks what a `sheaf:` URI names (section 12.3):
@@ -509,9 +514,10 @@ osheaf arxiv import DOWNLOADS [ARXIV-ID ...] [--update] [--versions v1,v3] [--ag
   so; `osheaf verify --remote` resolves every member of other archives.
 - **mirror** (a library, a preservation copy; section 11): copies a line
   written elsewhere, up to its latest signed version, byte for byte, each
-  file checked, with the key log of its owner beside it; refused unless
-  every version is under an open licence (CC BY, CC BY-SA, CC0, GPL), or
-  `--licence-checked`. Run again (or `mirror --all`), it adds the owner's
+  file checked, with the key log of its owner beside it; a version whose
+  licence is not one known to be open (CC BY, CC BY-SA, CC0, GPL) is
+  copied with a warning that the archive answers for the copy (section
+  11.2), which `--licence-checked` silences. Run again (or `mirror --all`), it adds the owner's
   signed versions from copies that agree; never a contested version, never
   a version of an owner whose key log forks (the owner is frozen), and a
   copy that does not agree is a fork of the line, reported. Nothing marks a

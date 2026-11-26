@@ -10,17 +10,17 @@ Passwords app of macOS.
 
 The wallet is chosen with --keys (commands that make keys) or --wallet (the
 key commands), github:OWNER/REPO or command; or configured: by the
-environment variable OPENSHEAF_WALLET (text or JSON), which wins, then by
-"keys" of the user's configuration file ~/.config/opensheaf/config.json
-($XDG_CONFIG_HOME/opensheaf/config.json), {"wallet": "github:OWNER/REPO"}
-or {"wallet": "command", "read": "...", "write": "..."}, then by "keys" of
-osheaf.json, which may name a GitHub wallet only: the commands of a command
-wallet run on the user's machine, and are never read from an archive.
-Wallets and owners are many to many: the user's configuration lists the
-wallets the user reads, {"wallets": ["github:OWNER/REPO", ...]}, and
-"keys" of osheaf.json gives, for each owner, the wallets that hold its keys,
-as hints, {"<owner>": {"wallets": [...]}}; the keys of an owner are looked
-for in the hinted wallets, then in the user's, in order."""
+environment variable OPENSHEAF_WALLET (text or JSON), which wins over the
+rest; else by the user's configuration file ~/.config/opensheaf/config.json
+($XDG_CONFIG_HOME/opensheaf/config.json), which lists the wallets the user
+reads, {"wallets": ["github:OWNER/REPO", "command", ...]}, then its "keys",
+{"wallet": "github:OWNER/REPO"} or {"wallet": "command", "read": "...",
+"write": "..."}; then by "keys" of osheaf.json, which gives, for each owner,
+the wallets that hold its keys, as hints, {"<owner>": {"wallets": [...]}},
+GitHub wallets only: the commands of a command wallet run on the user's
+machine, and are never read from an archive. Wallets and owners are many to
+many; the keys of an owner are looked for in the user's wallets first, then
+in those osheaf.json hints for it, in order."""
 
 import base64
 import json
@@ -329,8 +329,9 @@ CONFIG_HELP = """Your own configuration: ~/.config/opensheaf/config.json ($XDG_C
           "forget": "..."}}                         optional: removes a key
 
 {"wallets": ["github:OWNER/REPO", "command", ...]}  the key wallets you read, in order: the
-                                                    keys of an owner are looked for in those
-                                                    osheaf.json hints for it, then in these
+                                                    keys of an owner are looked for in these
+                                                    (then in the "wallet" of "keys" above),
+                                                    then in those osheaf.json hints for it
                                                     (osheaf key wallets --add|--remove)
 
 The commands run in the shell; {owner} is the owner name, {k} the 16 characters
