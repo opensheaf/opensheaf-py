@@ -1637,6 +1637,21 @@ deleted, and leaves no tombstone.
         run("--root", str(a), "collect")
         assert errors(a) == []
 
+A draft sealed with `--delete-draft` goes as one deleted does, with the
+folder `draft/` once it is empty: an empty folder in the storage root is
+an error of OCFL validators (E073).
+
+    # in across: drafts:
+    def test_seal_delete_draft_leaves_no_empty_folder(tmp_path):
+        a = make(tmp_path, "a")
+        pdf = tmp_path / "d.pdf"
+        pdf.write_bytes(b"%PDF-1.4 draft")
+        run("--root", str(a), "draft", "new", "notes", "--pdf", str(pdf), "--no-source", "x", "--title", "Notes",
+            "--author", "Doe, J")
+        run("--root", str(a), "seal", "notes", "--label", "lecture-notes", "--delete-draft")
+        assert not (P.OCFL / "draft").exists()
+        assert errors(a) == []
+
 Takedowns and indexes
 ---------------------
 

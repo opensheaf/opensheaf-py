@@ -164,6 +164,9 @@ def target(r, text, where):
     if text in P.LABELS:
         _, nm, owner = P.LABELS[text].split(":")
         return nm, owner, None, ["here"]
+    if P.LABEL_RE.match(text):
+        sys.exit(f"no line labelled {text} in this archive (osheaf verify lists them); a line of another "
+                 "archive is named by its sheaf: URI")
     try:
         u = names.parse_sheaf(text, short=True, fold=True)
         places = r.where(([u.at] if u.at else []) + list(where))

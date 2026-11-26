@@ -3882,7 +3882,7 @@ def export_and_confirm(rotation, owner, version, args):
         return
     print("Put the files (or the printed sheets) away, apart from this computer and from each other.")
     for key, path in zip(rotation, paths):
-        typed = input(f"Type the check of {path.name} to confirm: ").strip().upper()
+        typed = ask(f"Type the check of {path.name} to confirm: ").strip().upper()
         if typed != keys.sheet_check(key.seed):
             stop("not confirmed: nothing was written to the key log (the exported files may be deleted)")
 
@@ -3968,11 +3968,21 @@ def warn(text):
     print("Warning: " + sentence(text), file=sys.stderr)
 
 
+def ask(prompt):
+    """The line the user types after PROMPT. With no one to type it (the standard input closed, as
+    under a script or in CI), the command stops, saying that --yes confirms without asking."""
+    try:
+        return input(prompt)
+    except EOFError:
+        print(file=sys.stderr)
+        stop("no answer: the standard input is closed (give --yes to confirm without being asked)")
+
+
 def confirmed(word, args=None):
     """Whether the user typed WORD to confirm what was listed (always, with --yes)."""
     if args is not None and getattr(args, "yes", False):
         return True
-    return input(f"Type {word} to confirm: ").strip() == word
+    return ask(f"Type {word} to confirm: ").strip() == word
 
 
 def store_name(store):
@@ -4212,6 +4222,11 @@ def owner_end(args):
         stop(f"the successor is an owner name: {successor}")
     if log.latest() is None:
         stop(f"the owner {who} has ended (section 6.3): its key log takes no new version")
+    if not getattr(args, "yes", False):
+        print(f"Ending the owner {who}: its key log takes no new version after this one, and nothing is "
+              "signed for it again (section 6.3). This cannot be undone.")
+        if not confirmed(owner[:8]):
+            stop("not confirmed: the owner has not ended")
     signers, _ = rotation_signers(args, owner, log.latest())
     try:
         v = log.end(signers, successor=successor, exposed=getattr(args, "expose", None) or (),

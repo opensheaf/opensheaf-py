@@ -452,7 +452,7 @@ silently).
             return
         print("Put the files (or the printed sheets) away, apart from this computer and from each other.")
         for key, path in zip(rotation, paths):
-            typed = input(f"Type the check of {path.name} to confirm: ").strip().upper()
+            typed = ask(f"Type the check of {path.name} to confirm: ").strip().upper()
             if typed != keys.sheet_check(key.seed):
                 stop("not confirmed: nothing was written to the key log (the exported files may be deleted)")
 
@@ -569,11 +569,21 @@ wallet such as `command`, or a program such as `gh`).
         print("Warning: " + sentence(text), file=sys.stderr)
 
 
+    def ask(prompt):
+        """The line the user types after PROMPT. With no one to type it (the standard input closed, as
+        under a script or in CI), the command stops, saying that --yes confirms without asking."""
+        try:
+            return input(prompt)
+        except EOFError:
+            print(file=sys.stderr)
+            stop("no answer: the standard input is closed (give --yes to confirm without being asked)")
+
+
     def confirmed(word, args=None):
         """Whether the user typed WORD to confirm what was listed (always, with --yes)."""
         if args is not None and getattr(args, "yes", False):
             return True
-        return input(f"Type {word} to confirm: ").strip() == word
+        return ask(f"Type {word} to confirm: ").strip() == word
 
 
     def store_name(store):
@@ -765,7 +775,9 @@ optionally, the successor that continues the owner's work (section 6.3):
 another owner name. Nothing is signed for the owner afterwards; the
 ending version has no keys, so no rotation keys are made. It may also
 expose keys (`--expose`). The rotation keys come from their files or from
-the wallet, as for a rotation.
+the wallet, as for a rotation. The end cannot be undone, so it is
+confirmed first, before any key is read, by typing the first 8 characters
+of the owner name, as a takedown is; `--yes` skips the question.
 
     # in end an owner:
     def owner_end(args):
@@ -777,6 +789,11 @@ the wallet, as for a rotation.
             stop(f"the successor is an owner name: {successor}")
         if log.latest() is None:
             stop(f"the owner {who} has ended (section 6.3): its key log takes no new version")
+        if not getattr(args, "yes", False):
+            print(f"Ending the owner {who}: its key log takes no new version after this one, and nothing is "
+                  "signed for it again (section 6.3). This cannot be undone.")
+            if not confirmed(owner[:8]):
+                stop("not confirmed: the owner has not ended")
         signers, _ = rotation_signers(args, owner, log.latest())
         try:
             v = log.end(signers, successor=successor, exposed=getattr(args, "expose", None) or (),

@@ -605,6 +605,17 @@ def import_paper(folder, taken, report, dry, texmacs=None, licences=None, existi
     print(f"{aid:>18}  {label}  {obj_id or '(a new line)'}  [{kinds}]", flush=True)
 
 
+def input_json(path, what):
+    """The JSON file PATH, WHAT the import reads (a sentence ending how to make it); stops with a
+    message if it is missing or not JSON."""
+    try:
+        return json.loads(Path(path).read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        sys.exit(f"{path}: not found: {what}")
+    except (OSError, UnicodeDecodeError, ValueError) as e:
+        sys.exit(f"{path}: not read: {e}")
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="osheaf arxiv import", description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -631,12 +642,15 @@ def main(argv=None):
         sys.exit("--agreed-by needs --agreement")
     agreement = {"method": a.agreement, "by": a.agreed_by} if a.agreement else None
     dl = Path(a.downloads)
-    P.init_storage_root()
-    licences = json.loads((dl / "version-licences.json").read_text())
-    ids = json.loads(Path(a.identifiers or dl / "identifiers.json").read_text())
+    if not dl.is_dir():
+        sys.exit(f"{dl}: not a folder (the folder of osheaf arxiv fetch)")
+    licences = input_json(dl / "version-licences.json", "DOWNLOADS is the folder written by osheaf arxiv fetch")
+    ids = input_json(a.identifiers or dl / "identifiers.json",
+                     "write it, arXiv identifier -> label of the line, or give --identifiers")
     texmacs = {}
     for f in a.texmacs or []:
-        texmacs.update(json.loads(Path(f).read_text()))
+        texmacs.update(input_json(f, "--texmacs names a JSON file"))
+    P.init_storage_root()
     done = already_archived()
     if a.rebuild:
         if not a.ids:

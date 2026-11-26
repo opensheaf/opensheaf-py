@@ -237,6 +237,9 @@ def build_parser():
     td.set_defaults(func=None)
     c = sub.add_parser("collect", help="new versions of the owner catalogues when needed")
     c.add_argument("--owner", help="only the catalogue of this owner, an owner the archive hosts")
+    c.add_argument("--i-know", dest="i_know", action="store_true",
+                   help="extend a catalogue whose versions are not all signed, or are contested, having looked at "
+                        "them (section 7.3)")
     c.set_defaults(func=core.collect)
     i = sub.add_parser("index", help="write opensheaf.json, the indexes and the readable index")
     i.add_argument("--no-html", action="store_true",
@@ -300,6 +303,7 @@ def build_parser():
     oe = osub.add_parser("end", help="the last version of the key log (section 6.3)")
     oe.add_argument("--successor", help="the owner name of the owner that continues the work")
     oe.add_argument("--expose", action="append", metavar="DID", help="also expose a key (repeatable)")
+    oe.add_argument("--yes", action="store_true", help="do not ask to confirm the end (scripts)")
     rotation_options(oe, export=False)
     ocp = osub.add_parser("complete", help="settle a version of the key log left by an interrupted write")
     ocp.add_argument("--owner", help="an owner the archive hosts (default: the archive's)")

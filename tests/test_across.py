@@ -1290,6 +1290,17 @@ def test_draft_and_seal(tmp_path):
     assert errors(a) == []
 
 
+def test_seal_delete_draft_leaves_no_empty_folder(tmp_path):
+    a = make(tmp_path, "a")
+    pdf = tmp_path / "d.pdf"
+    pdf.write_bytes(b"%PDF-1.4 draft")
+    run("--root", str(a), "draft", "new", "notes", "--pdf", str(pdf), "--no-source", "x", "--title", "Notes",
+        "--author", "Doe, J")
+    run("--root", str(a), "seal", "notes", "--label", "lecture-notes", "--delete-draft")
+    assert not (P.OCFL / "draft").exists()
+    assert errors(a) == []
+
+
 def test_takedown_and_return(tmp_path, capsys):
     a, lib = make(tmp_path, "a"), make(tmp_path, "lib")
     deposit(a, "paper", "one", new=True)

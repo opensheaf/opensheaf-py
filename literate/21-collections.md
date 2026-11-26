@@ -349,7 +349,10 @@ version is pinned: a collection pins only signed versions, and a contested one i
 (sections 7.3 and 8.5). The current version of a selection's member is
 checked as the resolver checks the version it resolves to: a copy that
 does not hold every file of it, with its digest, pins nothing
-(`Resolver.contents`, [resolution](20-resolution.md)).
+(`Resolver.contents`, [resolution](20-resolution.md)). A member is
+named by a label of this archive or by a `sheaf:` URI; a word of the form
+of a label that labels no line is reported as such, not as a malformed
+URI.
 
     # in collections: finding the version a member pins:
     def target(r, text, where):
@@ -357,6 +360,9 @@ does not hold every file of it, with its digest, pins nothing
         if text in P.LABELS:
             _, nm, owner = P.LABELS[text].split(":")
             return nm, owner, None, ["here"]
+        if P.LABEL_RE.match(text):
+            sys.exit(f"no line labelled {text} in this archive (osheaf verify lists them); a line of another "
+                     "archive is named by its sheaf: URI")
         try:
             u = names.parse_sheaf(text, short=True, fold=True)
             places = r.where(([u.at] if u.at else []) + list(where))

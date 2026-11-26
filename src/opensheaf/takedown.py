@@ -76,7 +76,7 @@ def main(args):
     if not args.reason or not args.reason.strip():
         sys.exit("a takedown needs --reason, a plain text (section 13.3)")
     if not getattr(args, "yes", False):
-        typed = input(f"take down {obj_id} for good? type {nm[:8]} to confirm: ").strip()
+        typed = P.ask(f"take down {obj_id} for good? type {nm[:8]} to confirm: ").strip()
         if typed != nm[:8]:
             sys.exit("not confirmed: nothing was taken down")
     genesis = P.read_logical(d, inv, P.GENESIS, "v1").read_bytes()

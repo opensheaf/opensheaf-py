@@ -72,7 +72,11 @@ The module
     <<drafts: sealing a draft>>
 
 A draft is named by its `<id>` alone, local to the archive; `draft_dir`
-finds it, and `drop_head` rewrites it, removing its head version.
+finds it, and `drop_head` rewrites it, removing its head version. A
+draft removed (by `draft delete`, by `seal --delete-draft`, or by
+rewriting its only version) is removed by `remove`, which also removes the
+folder `draft/` of the storage root once it holds no draft: an empty
+folder in a storage root is refused by OCFL validators (E073).
 
     # in drafts: the folder of a draft:
     def draft_dir(draft_id):
@@ -87,11 +91,19 @@ finds it, and `drop_head` rewrites it, removing its head version.
         return obj_id, d, inv
 
 
+    def remove(d):
+        """Remove the draft in D, and the folder draft/ of the storage root when it is left empty: an
+        empty folder there is not an object, and OCFL validators refuse it (E073)."""
+        shutil.rmtree(P.unlinked(d))
+        if d.parent != P.OCFL and d.parent.is_dir() and not any(d.parent.iterdir()):
+            d.parent.rmdir()
+
+
     def drop_head(d, inv):
         """Remove the head version of the draft in D: the draft may be rewritten (section 10.1)."""
         n = int(inv["head"][1:])
         if n == 1:
-            shutil.rmtree(P.unlinked(d))
+            remove(d)
             return
         shutil.rmtree(P.unlinked(d / f"v{n}"))
         for name in ("inventory.json", "inventory.json.sha512"):
@@ -102,9 +114,7 @@ finds it, and `drop_head` rewrites it, removing its head version.
     def delete(args):
         """osheaf draft delete ID: the draft goes, and leaves no tombstone (section 10.1)."""
         obj_id, d, _ = draft_dir(args.id)
-        shutil.rmtree(P.unlinked(d))
-        if d.parent != P.OCFL and not any(d.parent.iterdir()):
-            d.parent.rmdir()
+        remove(d)
         P.write_discovery()
         print(f"draft {args.id}: deleted")
 
@@ -159,6 +169,6 @@ record added and the two descriptions rewritten; `add_version` signs it.
         new = P.add_version(line, files, obj, getattr(args, "message", None) or f"Sealed from the draft {args.id}")
         P.LABELS[label] = line
         if getattr(args, "delete_draft", False):
-            shutil.rmtree(P.unlinked(d))
+            remove(d)
         P.write_discovery()
         print(f"{label}: {new['head']} (document version 1) {line}, sealed from the draft {args.id}")

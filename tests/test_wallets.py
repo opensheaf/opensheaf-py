@@ -577,9 +577,9 @@ def test_command_wallet(tmp_path, monkeypatch, capsys):
     other.mkdir()
     monkeypatch.setenv(wallet.WALLET, json.dumps(commands(other)))
     with pytest.raises(SystemExit, match="The wallet command holds 0 of the rotation keys"):
-        run(*r, "owner", "end")
+        run(*r, "owner", "end", "--yes")
     monkeypatch.setenv(wallet.WALLET, "command")
-    run(*r, "owner", "end")
+    run(*r, "owner", "end", "--yes")
     assert P.key_log(owner).ended and P.verify_errors() == []
     monkeypatch.delenv(wallet.WALLET)
     cfg = json.loads((root / "osheaf.json").read_text())

@@ -1209,7 +1209,7 @@ def test_rotate_expose_end(tmp_path, capsys):
     successor = names.name(names.genesis_record("owner", keys=[third], threshold=1,
                                                 next_digests=[names.key_digest(laptop)], next_threshold=1))
     rk3 = rotation_files(tmp_path / "keys-3")
-    run(*r, "owner", "end", "--successor", successor, "--rotation-key", rk3[0], "--rotation-key", rk3[1])
+    run(*r, "owner", "end", "--yes", "--successor", successor, "--rotation-key", rk3[0], "--rotation-key", rk3[1])
     log = P.key_log(owner)
     assert log.ended and log.successor == successor
     with pytest.raises(SystemExit, match="has ended"):
@@ -1239,14 +1239,46 @@ def test_rotation_keys_are_checked(tmp_path, monkeypatch):
         "--export", str(tmp_path / "k2"), "--yes")
     assert "encryption argon2id-secretbox" in Path(rotation_files(tmp_path / "k2")[0]).read_text()
     with pytest.raises(SystemExit, match="not a rotation key"):
-        run(*r, "owner", "end", "--rotation-key", rk1[0], "--rotation-key", rk1[2])
+        run(*r, "owner", "end", "--yes", "--rotation-key", rk1[0], "--rotation-key", rk1[2])
     rk2 = rotation_files(tmp_path / "k2")
     monkeypatch.setenv(P.PASSPHRASE, "wrong horse")
     with pytest.raises(SystemExit, match="wrong passphrase"):
-        run(*r, "owner", "end", "--rotation-key", rk2[0], "--rotation-key", rk2[1])
+        run(*r, "owner", "end", "--yes", "--rotation-key", rk2[0], "--rotation-key", rk2[1])
     monkeypatch.setenv(P.PASSPHRASE, "correct horse")
-    run(*r, "owner", "end", "--rotation-key", rk2[0], "--rotation-key", rk2[1])
+    run(*r, "owner", "end", "--yes", "--rotation-key", rk2[0], "--rotation-key", rk2[1])
     assert P.key_log(P.ARCHIVE["owner"]).ended
+
+
+def test_questions_and_clean_errors(tmp_path, monkeypatch):
+    def closed(prompt):
+        raise EOFError
+    monkeypatch.setattr("builtins.input", closed)
+    with pytest.raises(SystemExit, match="the standard input is closed .give --yes"):
+        run("init", str(tmp_path / "a"), "--name", "T", "--base-url", "https://example.org/T/",
+            "--curator", "Doe, Jane", "--new-owner", "--export", str(tmp_path / "k"), "--no-passphrase")
+    root = tmp_path / "b"
+    make_archive(root)
+    r = ["--root", str(root)]
+    owner = P.ARCHIVE["owner"]
+    rk = rotation_files(tmp_path / "T-keys")
+    with pytest.raises(SystemExit, match="the standard input is closed"):
+        run(*r, "owner", "end", "--rotation-key", rk[0], "--rotation-key", rk[1])
+    prompts = []
+    monkeypatch.setattr("builtins.input", lambda prompt: prompts.append(prompt) or owner[:7])
+    with pytest.raises(SystemExit, match="Not confirmed: the owner has not ended"):
+        run(*r, "owner", "end", "--rotation-key", rk[0], "--rotation-key", rk[1])
+    assert prompts == [f"Type {owner[:8]} to confirm: "] and not P.key_log(owner).ended
+    (tmp_path / "downloads" / "papers").mkdir(parents=True)
+    with pytest.raises(SystemExit, match="version-licences.json: not found: DOWNLOADS is the folder written"):
+        run(*r, "arxiv", "import", str(tmp_path / "downloads"))
+    with pytest.raises(SystemExit, match="not a folder"):
+        run(*r, "arxiv", "import", str(tmp_path / "nowhere"))
+    with pytest.raises(SystemExit, match="no line labelled no-such-paper in this archive"):
+        run(*r, "collection", "add", "main", "no-such-paper")
+    run(*r, "collect", "--i-know")
+    monkeypatch.setattr("builtins.input", lambda prompt: owner[:8])
+    run(*r, "owner", "end", "--rotation-key", rk[0], "--rotation-key", rk[1])
+    assert P.key_log(owner).ended
 
 
 def test_key_new_takes_an_owner_name_only(tmp_path):
