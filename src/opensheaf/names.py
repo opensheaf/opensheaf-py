@@ -219,6 +219,58 @@ def loads_exact(text):
                       parse_constant=_not_an_integer)
 
 
+class _Inexact(float):
+    text = ""
+
+
+class _Beyond(int):
+    text = ""
+
+
+def _remembered(kind, text):
+    v = kind(float(text) if kind is _Inexact else int(text))
+    v.text = text
+    return v
+
+
+def _lexical_int(text):
+    n = int(text)
+    return n if abs(n) <= MAX_INTEGER else _remembered(_Beyond, text)
+
+
+BOM = b"\xef\xbb\xbf"
+
+
+def loads_format(data):
+    """The JSON value of DATA (bytes, or str), a file of the specification other than a genesis
+    record or keys.json: UTF-8 without a byte order mark, nesting at most MAX_NESTING levels,
+    and every number an integer without a fraction or an exponent, of absolute value at most
+    2^53 - 1 (section 2); ValueError otherwise."""
+    if isinstance(data, bytes):
+        if data.startswith(BOM):
+            raise ValueError("JSON is UTF-8 without a byte order mark, and this file starts with one "
+                             "(section 2)")
+        try:
+            data = data.decode("utf-8")
+        except UnicodeDecodeError as e:
+            raise ValueError(f"JSON is UTF-8, and this file is not ({e}) (section 2)") from None
+    try:
+        value = json_value(data, parse_int=_lexical_int, parse_float=lambda t: _remembered(_Inexact, t),
+                           parse_constant=lambda t: _remembered(_Inexact, t))
+    except json.JSONDecodeError as e:
+        raise ValueError(f"not JSON ({e})") from None
+    todo = [value]
+    while todo:
+        v = todo.pop()
+        if isinstance(v, _Inexact):
+            _not_an_integer(v.text)
+        if isinstance(v, _Beyond):
+            _exact_integer(v.text)
+        if isinstance(v, (dict, list)):
+            todo += list(v.values() if isinstance(v, dict) else v)
+    return value
+
+
 MAX_NESTING = 64
 
 

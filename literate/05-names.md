@@ -367,6 +367,69 @@ infinities, and an integer out of range, wherever they are.
         return json_value(text, parse_int=_exact_integer, parse_float=_not_an_integer,
                           parse_constant=_not_an_integer)
 
+The other files of the specification (the discovery document and its
+pages of objects, `object.json`, `members.json`, the signature files, the
+indexes) follow the same rule, for every number, in the data of
+extensions too (section 2): a verifier reads them with `loads_format`,
+which also refuses a byte order mark and bytes that are not UTF-8, and
+reports a number that breaks the rule, with one message. The numbers are
+first parsed into values that remember their text, and a walk of the
+value then looks for them, so that the message names the number as
+written; a `float` subclass for a fraction, an exponent, `NaN` or an
+infinity, an `int` subclass for an integer out of range.
+
+    # in names: genesis records:
+    class _Inexact(float):
+        text = ""
+
+
+    class _Beyond(int):
+        text = ""
+
+
+    def _remembered(kind, text):
+        v = kind(float(text) if kind is _Inexact else int(text))
+        v.text = text
+        return v
+
+
+    def _lexical_int(text):
+        n = int(text)
+        return n if abs(n) <= MAX_INTEGER else _remembered(_Beyond, text)
+
+
+    BOM = b"\xef\xbb\xbf"
+
+
+    def loads_format(data):
+        """The JSON value of DATA (bytes, or str), a file of the specification other than a genesis
+        record or keys.json: UTF-8 without a byte order mark, nesting at most MAX_NESTING levels,
+        and every number an integer without a fraction or an exponent, of absolute value at most
+        2^53 - 1 (section 2); ValueError otherwise."""
+        if isinstance(data, bytes):
+            if data.startswith(BOM):
+                raise ValueError("JSON is UTF-8 without a byte order mark, and this file starts with one "
+                                 "(section 2)")
+            try:
+                data = data.decode("utf-8")
+            except UnicodeDecodeError as e:
+                raise ValueError(f"JSON is UTF-8, and this file is not ({e}) (section 2)") from None
+        try:
+            value = json_value(data, parse_int=_lexical_int, parse_float=lambda t: _remembered(_Inexact, t),
+                               parse_constant=lambda t: _remembered(_Inexact, t))
+        except json.JSONDecodeError as e:
+            raise ValueError(f"not JSON ({e})") from None
+        todo = [value]
+        while todo:
+            v = todo.pop()
+            if isinstance(v, _Inexact):
+                _not_an_integer(v.text)
+            if isinstance(v, _Beyond):
+                _exact_integer(v.text)
+            if isinstance(v, (dict, list)):
+                todo += list(v.values() if isinstance(v, dict) else v)
+        return value
+
 Every JSON file read from another archive is read through `json_value`,
 which bounds how deeply arrays and objects nest, to `MAX_NESTING` levels,
 the bound of the JavaScript tools. No file of the specification comes near

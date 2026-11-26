@@ -1723,7 +1723,7 @@ An archive with more objects than a page holds lists them in pages
 (section 3.1): here a page holds two objects. The pages pass verification,
 the labels are read from them, and another archive resolves a line through
 them; a page missing is an error, and makes the archive unavailable to
-resolvers. With a page missing, the labels are not known: a command that
+resolvers, as is a page with a byte order mark or not in UTF-8 (section 2). With a page missing, the labels are not known: a command that
 writes stops before it writes anything (#19), and the discovery document
 and the landing pages stay as they were. Back under the threshold, the
 pages go.
@@ -1764,6 +1764,10 @@ pages go.
             P.write_discovery()
         assert (a / "opensheaf.json").read_bytes() == before and (a / "paper" / "two" / "index.html").exists()
         assert not (P.obj_dir(line_id_two) / "v2").exists()
+        first.write_bytes(b"\xef\xbb\xbf" + saved)
+        assert any("without a byte order mark, and this file starts with one" in e for e in errors(a))
+        first.write_bytes(saved.decode("utf-8").encode("utf-16"))
+        assert any("JSON is UTF-8, and this file is not" in e for e in errors(a))
         first.write_bytes(saved)
         monkeypatch.setattr(P, "OBJECTS_PER_PAGE", 1000)
         P.configure(a)

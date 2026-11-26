@@ -333,7 +333,10 @@ The verifier on malformed files
 The verifier reports what it cannot read and goes on: a `documentVersion`
 that is text or missing, a discovery document that is a list, an inventory
 nested deeper than any JSON the tools read, an `object.json` that is not
-UTF-8, a configuration of the hashed layout that is not JSON, an inventory
+UTF-8 or starts with a byte order mark, a number written `2.0` or beyond
+2^53 - 1 (section 2), in `object.json` (in the data of an extension too)
+or in the discovery document, a label ending in a newline (a pattern of
+the schemas is ECMA-262, whose `$` is the end of the string), a configuration of the hashed layout that is not JSON, an inventory
 whose versions are a list or whose user is text. Each case is a finding;
 none ends the verification with a traceback.
 
@@ -345,19 +348,31 @@ none ends the verification with a traceback.
 
 
     @pytest.mark.parametrize("case", ["documentVersion text", "documentVersion missing", "discovery list",
-                                      "deep inventory", "object.json latin-1", "hashed config",
+                                      "deep inventory", "object.json latin-1", "object.json bom", "number 2.0",
+                                      "number beyond", "discovery number", "extension float", "label newline", "hashed config",
                                       "versions list", "user text"])
     def test_the_verifier_reports_what_it_cannot_read(archive, case):
         put("paper-a", 1, FILES1, extra_obj={"documentVersion": "1"} if case == "documentVersion text" else None)
         finish()
         if case == "documentVersion missing":
             put("paper-a", 2, FILES2, extra_obj={"documentVersion": None})
+        if case in ("number 2.0", "number beyond", "extension float"):
+            put("paper-a", 2, FILES2, extra_obj={"number 2.0": {"documentVersion": 2.0},
+                                                 "number beyond": {"documentVersion": 2 ** 53},
+                                                 "extension float": {"extensions": {
+                                                     "https://example.org/ext": {"x": 0.5}}}}[case])
         d = P.obj_dir(P.LABELS["paper-a"])
         inv = P.load_inventory(d)
         expected = {"documentVersion text": "documentVersion is a positive integer",
                     "documentVersion missing": "documentVersion is a positive integer",
                     "discovery list": "is a JSON object", "deep inventory": "without a readable inventory",
-                    "object.json latin-1": "cannot be read", "hashed config": "config.json is not a JSON object",
+                    "object.json latin-1": "object.json: JSON is UTF-8, and this file is not",
+                    "object.json bom": "object.json: JSON is UTF-8 without a byte order mark, and this file starts",
+                    "number 2.0": "object.json: the number 2.0 is not an integer written without a fraction",
+                    "number beyond": "object.json: the number 9007199254740992 is beyond 2^53 - 1 (section 2)",
+                    "discovery number": "the number 1.5 is not an integer",
+                    "label newline": "'paper-a\\n' does not match",
+                    "extension float": "object.json: the number 0.5 is not an integer", "hashed config": "config.json is not a JSON object",
                     "versions list": "no versions", "user text": "a user that is not"}[case]
         if case == "discovery list":
             (archive / "opensheaf.json").write_text("[]")
@@ -365,6 +380,16 @@ none ends the verification with a traceback.
             (d / "inventory.json").write_text("[" * 100000)
         elif case == "object.json latin-1":
             (d / P.content_path(inv, "v1", P.OBJ)).write_bytes(b"\xff\xfe{}")
+        elif case == "object.json bom":
+            cp = d / P.content_path(inv, "v1", P.OBJ)
+            cp.write_bytes(b"\xef\xbb\xbf" + cp.read_bytes())
+        elif case == "label newline":
+            disc = json.loads((archive / "opensheaf.json").read_text())
+            next(o for o in disc["objects"] if o.get("label") == "paper-a")["label"] = "paper-a\n"
+            (archive / "opensheaf.json").write_text(json.dumps(disc))
+        elif case == "discovery number":
+            disc = (archive / "opensheaf.json").read_text()
+            (archive / "opensheaf.json").write_text(disc.replace("{", '{"x-number": 1.5, ', 1))
         elif case == "hashed config":
             monkey = P.LAYOUT
             P.LAYOUT = P.HASHED_LAYOUT

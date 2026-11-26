@@ -2487,6 +2487,33 @@ def where(obj_id):
     return label_of(obj_id) or obj_id or "?"
 
 
+def ecma_pattern(pattern):
+    """PATTERN, an ECMA-262 regular expression of a JSON Schema, for Python's re: each $ outside a
+    character class and not escaped becomes \\Z (the end of the string, not before a newline)."""
+    out, escaped, in_class = [], False, False
+    for c in pattern:
+        if escaped:
+            escaped = False
+        elif c == "\\":
+            escaped = True
+        elif c == "[":
+            in_class = True
+        elif c == "]":
+            in_class = False
+        elif c == "$" and not in_class:
+            c = r"\Z"
+        out.append(c)
+    return "".join(out)
+
+
+def schema_validator(jsonschema):
+    """The validator class of the JSON Schemas of 0.2: Draft 2020-12, its pattern read as ECMA-262."""
+    def pattern(validator, patrn, instance, schema):
+        if validator.is_type(instance, "string") and not re.search(ecma_pattern(patrn), instance):
+            yield jsonschema.ValidationError(f"{instance!r} does not match {patrn!r}")
+    return jsonschema.validators.extend(jsonschema.Draft202012Validator, {"pattern": pattern})
+
+
 def schema_checker(f):
     """A function (place, data, schema name, severity) checking DATA against a schema of 0.2."""
     try:
@@ -2504,7 +2531,7 @@ def schema_checker(f):
     def check(place, data, name, severity="error"):
         if name not in validators:
             schema = json.loads((SCHEMAS / f"opensheaf-{name}-0.2.schema.json").read_text(encoding="utf-8"))
-            validators[name] = jsonschema.Draft202012Validator(schema, format_checker=formats)
+            validators[name] = schema_validator(jsonschema)(schema, format_checker=formats)
         for e in validators[name].iter_errors(data):
             f.add(severity, place, e.message)
     return check
@@ -2801,6 +2828,22 @@ def check_logical_path(p):
             and all(x not in ("", ".", "..") for x in parts))
 
 
+FORMAT_FILES = (OBJ, "members.json", "parent/object.json")
+
+
+def lexical_errors(d, inv, ver, logical):
+    """The breaches of section 2 (UTF-8 without a byte order mark, numbers exact integers) in the
+    files of the specification among the logical paths LOGICAL of VER of the object in D."""
+    out = []
+    for name in FORMAT_FILES:
+        if name in logical:
+            try:
+                names.loads_format(read_logical(d, inv, name, ver).read_bytes())
+            except ValueError as e:
+                out.append(f"{name}: {e}")
+    return out
+
+
 def check_object_storage(f, schema, obj_id, d, inv):
     place = where(obj_id)
     if inv.get("digestAlgorithm") != "sha512":
@@ -2835,8 +2878,12 @@ def check_object_storage(f, schema, obj_id, d, inv):
     if unsafe:
         return False
     versions = sorted(inv.get("versions", {}), key=lambda v: int(v[1:]) if v[1:].isdigit() else 0)
-    kind = (read_json(d, inv, OBJ) or {}).get("kind")
+    try:
+        kind = (read_json(d, inv, OBJ) or {}).get("kind")
+    except ValueError:
+        kind = None
     draft = obj_id.startswith("sheaf:draft:")
+    malformed = False
     for n, ver in enumerate(versions, 1):
         at = f"{place} {ver}"
         if ver != f"v{n}":
@@ -2870,7 +2917,11 @@ def check_object_storage(f, schema, obj_id, d, inv):
         for name in needed:
             if name not in logical:
                 f.error(at, f"has no {name} (section 4.1)")
-        obj = read_json(d, inv, OBJ, ver) if OBJ in logical else None
+        bad = lexical_errors(d, inv, ver, logical)
+        for message in bad:
+            f.error(at, message)
+        malformed = malformed or bool(bad)
+        obj = read_json(d, inv, OBJ, ver) if OBJ in logical and not bad else None
         if obj is None:
             continue
         if kind != "owner":
@@ -2887,6 +2938,9 @@ def check_object_storage(f, schema, obj_id, d, inv):
                     f.error(at, "object.json has no previous (section 4.3)")
                 elif obj["previous"] != expected:
                     f.error(at, f"previous is not the digest of the inventory of v{n - 1} (section 4.3)")
+    if malformed:
+        f.error(place, "a file of the specification in it breaks the rules of section 2: not checked further")
+        return False
 
 
 def check_key_logs(f, found, schema):
@@ -3249,9 +3303,9 @@ def check_indexes(f, schema, disc):
         for p in sorted((ROOT / index).glob("*.json")) if (ROOT / index).is_dir() else []:
             place = f"{index}/{p.name}"
             try:
-                data = json.loads(p.read_text(encoding="utf-8"))
+                data = names.loads_format(p.read_bytes())
             except ValueError as e:
-                f.error(place, f"not JSON: {e}")
+                f.error(place, str(e))
                 continue
             schema(place, data, "index")
             if data.get("index") != index:
@@ -3480,9 +3534,9 @@ def verify_findings(remote=False, keeper_fetch=None):
         f.error("opensheaf.json", "the discovery document is missing (section 3.1)")
     else:
         try:
-            disc = names.json_value(disc_path.read_text(encoding="utf-8"))
+            disc = names.loads_format(disc_path.read_bytes())
         except ValueError as e:
-            f.error("opensheaf.json", f"not JSON: {e}")
+            f.error("opensheaf.json", str(e))
             disc = None
         if not isinstance(disc, dict):
             if disc is not None:
@@ -3550,9 +3604,9 @@ def check_object_pages(f, schema, disc):
             f.error("opensheaf.json", f"the page of objects {path} is missing (section 3.1)")
             continue
         try:
-            page = json.loads(data)
+            page = names.loads_format(data)
         except ValueError as e:
-            f.error(path, f"not JSON: {e}")
+            f.error(path, str(e))
             continue
         schema(path, page, "objects")
         if isinstance(page, dict) and isinstance(page.get("objects"), list):
