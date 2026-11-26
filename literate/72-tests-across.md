@@ -1516,7 +1516,11 @@ needs stops at a level it cannot read, and at `MAX_DEPTH` levels.
 A branch point whose evidence is tampered with is inconsistent, an error;
 so is one whose `parent/object.json` was changed in place, the branch's
 inventory still stating the digest of the one the parent's inventory
-records: its bytes are hashed, not its stated digest trusted.
+records: its bytes are hashed, not its stated digest trusted. The parent
+version that the verifier finds in the parent's line decides too (section
+9.3): found with another digest than the pin's, the branch point is
+inconsistent; found signed, it counts as signed, even when the evidence
+carries no signature files.
 
     # in across: branches and accepted copies:
     def test_inconsistent_branch_point(tmp_path):
@@ -1543,6 +1547,18 @@ records: its bytes are hashed, not its stated digest trusted.
         v, problems = branch.verdict(stated, obj, genesis, P.key_log)
         assert v == branch.INCONSISTENT and \
             "parent/object.json is not the object.json the parent inventory records" in problems
+        v, problems = branch.verdict(branch.level_of_files(unsigned), obj, genesis, P.key_log,
+                                     resolve=lambda p: (True, sign.SIGNED))
+        assert v == branch.CONFIRMED, problems
+        v, problems = branch.verdict(level, obj, genesis, P.key_log, resolve=lambda p: (False, None))
+        assert v == branch.INCONSISTENT and \
+            "the parent version, resolved, does not match the pin (section 9.3)" in problems
+        pid = line(a, "paper")
+        pd = P.obj_dir(pid)
+        found = {pid: (pd, P.load_inventory(pd))}
+        assert P.parent_resolution(found)(obj["parent"]) == (True, sign.SIGNED)
+        assert P.parent_resolution(found)(dict(obj["parent"], inventorySha512="0" * 128)) == (False, None)
+        assert P.parent_resolution({})(obj["parent"]) is None
 
 A branch numbers its own document versions from 1 (section 9.4), and
 holds none of the parent's earlier versions: its history, once written,

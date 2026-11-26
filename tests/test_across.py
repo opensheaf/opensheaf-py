@@ -1123,6 +1123,18 @@ def test_inconsistent_branch_point(tmp_path):
     v, problems = branch.verdict(stated, obj, genesis, P.key_log)
     assert v == branch.INCONSISTENT and \
         "parent/object.json is not the object.json the parent inventory records" in problems
+    v, problems = branch.verdict(branch.level_of_files(unsigned), obj, genesis, P.key_log,
+                                 resolve=lambda p: (True, sign.SIGNED))
+    assert v == branch.CONFIRMED, problems
+    v, problems = branch.verdict(level, obj, genesis, P.key_log, resolve=lambda p: (False, None))
+    assert v == branch.INCONSISTENT and \
+        "the parent version, resolved, does not match the pin (section 9.3)" in problems
+    pid = line(a, "paper")
+    pd = P.obj_dir(pid)
+    found = {pid: (pd, P.load_inventory(pd))}
+    assert P.parent_resolution(found)(obj["parent"]) == (True, sign.SIGNED)
+    assert P.parent_resolution(found)(dict(obj["parent"], inventorySha512="0" * 128)) == (False, None)
+    assert P.parent_resolution({})(obj["parent"]) is None
 
 
 def test_the_history_of_a_branch(tmp_path):

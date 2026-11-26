@@ -3119,6 +3119,35 @@ def check_lines(f, found, logs, schema, disc, resolver=None):
     return statuses
 
 
+def parent_resolution(found, resolver=None):
+    """RESOLVE(parent) for branch.verdict: (whether the line found holds the parent version with the
+    digest of the pin, its status there) for a parent version that the verifier finds, held in
+    FOUND or resolved by RESOLVER; None for one it does not find."""
+    def resolve(p):
+        try:
+            pid = names.object_id(p["name"], p["owner"])
+            version, digest, n = p["objectVersion"], p["inventorySha512"], int(p["objectVersion"][1:])
+        except (KeyError, TypeError, ValueError, AttributeError):
+            return None
+        if pid in found:
+            pd, pinv = found[pid]
+            if version not in pinv.get("versions", {}) or not (pd / version / "inventory.json").is_file():
+                return None
+            if names.sha512_hex((pd / version / "inventory.json").read_bytes()) != digest:
+                return False, None
+            return True, line_statuses(pd, pinv)[1][n - 1]
+        if resolver is None:
+            return None
+        res = resolver.pin(p["name"], p["owner"], version, digest,
+                           resolver.archive_of(p["url"]) if isinstance(p.get("url"), str) else [])
+        if res.status in ("verified", "contested"):
+            return True, sign.SIGNED if res.status == "verified" else sign.CONTESTED
+        if any(c.digest(n) not in (None, digest) for c in res.copies or []):
+            return False, None
+        return None
+    return resolve
+
+
 def check_branch(f, place, obj_id, d, inv, genesis, logs, found, tombstoned, resolver=None):
     from . import branch
     _, nm, owner = obj_id.split(":")
@@ -3137,7 +3166,8 @@ def check_branch(f, place, obj_id, d, inv, genesis, logs, found, tombstoned, res
             if ev != prev_ev:
                 f.error(at, "the identity files change without a new branch point (section 9.4)")
         else:
-            v, problems = branch.verdict(branch.level_of_version(d, inv, ver), obj, genesis, logs.get)
+            v, problems = branch.verdict(branch.level_of_version(d, inv, ver), obj, genesis, logs.get,
+                                         resolve=parent_resolution(found, resolver))
             verdicts.append(v)
             if v == branch.INCONSISTENT:
                 f.error(at, "inconsistent branch point: " + "; ".join(problems))

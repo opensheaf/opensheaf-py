@@ -50,16 +50,18 @@ INCONSISTENT, CONFIRMED, UNCHECKED = "inconsistent", "confirmed", "unchecked"
 ORDER = {CONFIRMED: 0, UNCHECKED: 1, INCONSISTENT: 2}
 
 
-def verdict(level, obj, genesis, logs, depth=0):
+def verdict(level, obj, genesis, logs, depth=0, resolve=None):
     """(verdict, problems) of the branch point that OBJ (an object.json) records, the content of
-    its level being LEVEL; GENESIS the bytes of the genesis record; LOGS(owner) a key log or None."""
+    its level being LEVEL; GENESIS the bytes of the genesis record; LOGS(owner) a key log or None;
+    RESOLVE(parent), if given, the parent version as the verifier finds it in the parent's line:
+    None if it finds none, else (whether it matches the pin, its status there)."""
     try:
-        return level_verdict(level, obj, genesis, logs, depth)
+        return level_verdict(level, obj, genesis, logs, depth, resolve)
     except (ValueError, KeyError, IndexError, TypeError, AttributeError) as e:
         return INCONSISTENT, [f"the evidence of the branch point cannot be read: {type(e).__name__} {e}"]
 
 
-def level_verdict(level, obj, genesis, logs, depth=0):
+def level_verdict(level, obj, genesis, logs, depth=0, resolve=None):
     """verdict, the files read as they should be (an exception for a file of another form)."""
     p = obj.get("parent")
     if not isinstance(p, dict):
@@ -119,6 +121,11 @@ def level_verdict(level, obj, genesis, logs, depth=0):
                                    lookup=log.lookup if log else (lambda n, dg: None))
     status = sign.line_statuses([judgements], exposed=log.exposed_keys() if log else frozenset(),
                                 fork_point=log.fork_point if log else None)[0]
+    resolved = resolve(p) if resolve is not None else None
+    if resolved is not None and not resolved[0]:
+        problems.append("the parent version, resolved, does not match the pin (section 9.3)")
+    elif resolved is not None and resolved[1] in (sign.SIGNED, sign.VOUCHED) and status != sign.CONTESTED:
+        status = resolved[1]
     if status in (sign.UNSIGNED, sign.INVALID):
         problems.append(f"the parent version is not a version: {status} (sections 7.3 and 9.3)")
     result = CONFIRMED if status in (sign.SIGNED, sign.VOUCHED) else UNCHECKED
@@ -131,7 +138,7 @@ def level_verdict(level, obj, genesis, logs, depth=0):
         evidence = {path: dig for path, dig in pstate.items() if P.is_evidence(path)}
         if chain.digests != evidence:
             return INCONSISTENT, ["parent/parent/ is not the evidence of the parent version (section 9.3)"]
-        sub, more = verdict(chain, pobj, genesis, logs, depth + 1)
+        sub, more = verdict(chain, pobj, genesis, logs, depth + 1, resolve)
         if sub == INCONSISTENT:
             return INCONSISTENT, [f"parent/parent/: {m}" for m in more]
         notes += [f"parent/parent/: {m}" for m in more]
