@@ -375,7 +375,9 @@ The syntax is strict: a digest only after a version and of 128 digits, at
 most one of each parameter, the hint after the digest and an `https` URL,
 a version without leading zeros, no version for a work, complete parts of
 the right alphabet, and an owner part that is a name of algorithm 0.
-Uppercase letters are folded only when asked, never in the hint; unknown
+A hint whose percent-escapes do not decode as UTF-8 is malformed, not
+read with replacement characters. Uppercase letters are folded only when
+asked, never in the hint; unknown
 parameters are kept, and dropped by the canonical form.
 
     # in identity tests: sheaf: URIs and ORCID iDs:
@@ -388,6 +390,8 @@ parameters are kept, and dropped by the canonical form.
         for text in bad:
             with pytest.raises(ValueError):
                 names.parse_sheaf(text, short=True)
+        with pytest.raises(ValueError, match=r"not a sheaf: URI \(the percent-escapes of at are not UTF-8\)"):
+            names.parse_sheaf(f"sheaf:{N}?at=https%3A%2F%2Fa.org%2F%FF%2F")
         upper = f"SHEAF:{N.upper()}/V2?SHA512={D2.upper()}&at=https%3A%2F%2FA.org%2F"
         with pytest.raises(ValueError):
             names.parse_sheaf(upper)

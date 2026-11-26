@@ -506,7 +506,10 @@ def parse_sheaf(text, *, short=False, fold=False):
             elif key == "at":
                 if "at" in seen or not UNRESERVED_OR_ESCAPED.match(value):
                     fail("one at, percent-encoded")
-                at = urllib.parse.unquote(value)
+                try:
+                    at = urllib.parse.unquote(value, errors="strict")
+                except UnicodeDecodeError:
+                    fail("the percent-escapes of at are not UTF-8")
                 if not at.startswith("https://") or not at.endswith("/"):
                     fail("at is an https URL ending with /")
                 uri.at = at

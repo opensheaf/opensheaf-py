@@ -729,7 +729,8 @@ most once, and before `at`, also at most once. Short forms, prefixes of at
 least 8 characters (section 12.2), are accepted only when asked for, since
 files must always use complete parts; so is the folding of uppercase
 letters, which a resolver MAY do. The hint must be an `https` URL ending
-with `/`, percent-encoded, and is decoded once.
+with `/`, percent-encoded, and is decoded once, as UTF-8: escapes that
+are not UTF-8 make the URI malformed.
 
     # in names: sheaf: URIs:
     PART = re.compile(r"^[a-z2-7]+\Z")
@@ -776,7 +777,10 @@ with `/`, percent-encoded, and is decoded once.
                 elif key == "at":
                     if "at" in seen or not UNRESERVED_OR_ESCAPED.match(value):
                         fail("one at, percent-encoded")
-                    at = urllib.parse.unquote(value)
+                    try:
+                        at = urllib.parse.unquote(value, errors="strict")
+                    except UnicodeDecodeError:
+                        fail("the percent-escapes of at are not UTF-8")
                     if not at.startswith("https://") or not at.endswith("/"):
                         fail("at is an https URL ending with /")
                     uri.at = at
