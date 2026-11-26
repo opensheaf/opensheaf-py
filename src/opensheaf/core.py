@@ -943,9 +943,24 @@ def witnesses_of(d, version):
     return owners.witness_files(d, version)
 
 
+STATUSES = None     # {(folder, identifier, head, key log): (log, judgements, statuses)} in a verifier
+
+
 def line_statuses(d, inv, log=False):
     """(judgements, statuses) of the versions v1 to the head of the line held in D, against
-    LOG, the owner's key log (default: the one in the storage root)."""
+    LOG, the owner's key log (default: the one in the storage root); kept while STATUSES
+    is a dict."""
+    if STATUSES is None:
+        return computed_line_statuses(d, inv, log)
+    key = (str(d), inv.get("id"), inv.get("head"), "storage root" if log is False else id(log))
+    if key not in STATUSES:
+        STATUSES[key] = (log, *computed_line_statuses(d, inv, log))
+    _, judgements, statuses = STATUSES[key]
+    return [list(js) for js in judgements], list(statuses)
+
+
+def computed_line_statuses(d, inv, log):
+    """line_statuses(D, INV, LOG), computed."""
     owner = read_json(d, inv, OBJ, "v1").get("owner")
     if log is False:
         log = key_log(owner) if owner else None
@@ -2814,7 +2829,7 @@ def check_storage(f, schema, disc):
         if unread:
             f.warning("ocfl", "the storage root as a whole is not given to the OCFL validator: it would read "
                       "the files of the objects that cannot be read")
-        elif not ocfl.StorageRoot(root=str(OCFL)).validate(log_warnings=False):
+        elif not ocfl.StorageRoot(root=str(OCFL)).validate(validate_objects=False, log_warnings=False):
             f.error("ocfl", "the OCFL validator rejects the storage root")
     return found
 
@@ -3693,10 +3708,14 @@ def verify_findings(remote=False, keeper_fetch=None):
             if "objectPages" in disc:
                 disc["objects"] = check_object_pages(f, schema, disc)
     SKIPPED.clear()
+    global STATUSES
+    before, STATUSES = STATUSES, ({} if STATUSES is None else STATUSES)
     try:
-        return checked(f, schema, disc, remote, keeper_fetch)
+        with sign.remembered():
+            return checked(f, schema, disc, remote, keeper_fetch)
     finally:
         SKIPPED.clear()
+        STATUSES = before
 
 
 def checked(f, schema, disc, remote, keeper_fetch):

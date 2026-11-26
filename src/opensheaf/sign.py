@@ -5,6 +5,7 @@ signature files and of the versions of a line (section 7.3)."""
 
 import base64
 import binascii
+import contextlib
 import json
 import re
 from dataclasses import dataclass
@@ -70,6 +71,31 @@ def verify(did, msg, signature):
         return False
 
 
+VERIFIED = None     # {(did, message, signature): bool} within remembered()
+
+
+@contextlib.contextmanager
+def remembered():
+    """Within it, the result of each verification is kept, and a signature is verified once."""
+    global VERIFIED
+    before = VERIFIED
+    VERIFIED = {} if before is None else before
+    try:
+        yield
+    finally:
+        VERIFIED = before
+
+
+def verified(did, msg, signature):
+    """verify(DID, MSG, SIGNATURE), kept within remembered()."""
+    if VERIFIED is None:
+        return verify(did, msg, signature)
+    key = (did, bytes(msg), bytes(signature))
+    if key not in VERIFIED:
+        VERIFIED[key] = verify(did, msg, signature)
+    return VERIFIED[key]
+
+
 FIELDS = {
     "format": re.compile("^" + re.escape(SIGNATURE_FORMAT) + r"\Z"),
     "object": re.compile(r"^sheaf:[a-z2-7]{52}:[a-z2-7]{51}[aq]\Z"),
@@ -129,7 +155,7 @@ def judge(data, file, *, object_id, version, inventory, owner, lookup, key_log=F
         sig = base64.b64decode(d["signature"], validate=True)
     except (binascii.Error, ValueError):
         return bad("the signature is not base64", d)
-    if not verify(d["key"], message(d["object"], d["version"], d["inventorySha512"], d["keyLog"]), sig):
+    if not verified(d["key"], message(d["object"], d["version"], d["inventorySha512"], d["keyLog"]), sig):
         return bad("the signature does not verify", d)
     if (d["object"], d["version"], d["inventorySha512"]) != (object_id, version, inventory):
         return bad("it signs another version, or another inventory", d)

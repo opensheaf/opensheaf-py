@@ -1477,10 +1477,35 @@ folder holds it. Without the key log every signature is unchecked. The
 *latest signed version*, signed and not contested, gives the line's
 history, current version and status (sections 4.2 and 13.1).
 
+The verifier needs the statuses of a line in several places (for the line,
+for a branch of it, for the indexes and the pages), and nothing changes
+while it runs. While `STATUSES` is a dict, which `verify_findings` makes
+for one check of the archive ([chapter 17](17-verify.md)), the statuses of
+a line are computed once for each folder, head and key log, and kept: the
+key log is the one in the storage root by default, or the very object
+passed, which is kept with them so that its identity is not reused. The
+callers get copies of the lists. Outside a verifier, `STATUSES` is `None`
+and nothing is kept, as commands change the lines they read.
+
     # in the statuses of the versions of a line:
+    STATUSES = None     # {(folder, identifier, head, key log): (log, judgements, statuses)} in a verifier
+
+
     def line_statuses(d, inv, log=False):
         """(judgements, statuses) of the versions v1 to the head of the line held in D, against
-        LOG, the owner's key log (default: the one in the storage root)."""
+        LOG, the owner's key log (default: the one in the storage root); kept while STATUSES
+        is a dict."""
+        if STATUSES is None:
+            return computed_line_statuses(d, inv, log)
+        key = (str(d), inv.get("id"), inv.get("head"), "storage root" if log is False else id(log))
+        if key not in STATUSES:
+            STATUSES[key] = (log, *computed_line_statuses(d, inv, log))
+        _, judgements, statuses = STATUSES[key]
+        return [list(js) for js in judgements], list(statuses)
+
+
+    def computed_line_statuses(d, inv, log):
+        """line_statuses(D, INV, LOG), computed."""
         owner = read_json(d, inv, OBJ, "v1").get("owner")
         if log is False:
             log = key_log(owner) if owner else None

@@ -183,7 +183,10 @@ of an archive that pages its objects (section 3.1) are read and checked
 against their schema with the discovery document, a page missing being an
 error, and their entries are checked as `objects` are: that every object
 of the storage root is listed, and none twice, also across pages. Then the
-steps of section 14, in order.
+steps of section 14, in order, during which the statuses of each line
+([chapter 10](10-archive.md)) and the result of each verification of a
+signature ([chapter 8](08-signatures.md)) are kept, so that each is
+computed once.
 
     # in check an archive and list its findings:
     def verify_findings(remote=False, keeper_fetch=None):
@@ -216,10 +219,14 @@ steps of section 14, in order.
                 if "objectPages" in disc:
                     disc["objects"] = check_object_pages(f, schema, disc)
         SKIPPED.clear()
+        global STATUSES
+        before, STATUSES = STATUSES, ({} if STATUSES is None else STATUSES)
         try:
-            return checked(f, schema, disc, remote, keeper_fetch)
+            with sign.remembered():
+                return checked(f, schema, disc, remote, keeper_fetch)
         finally:
             SKIPPED.clear()
+            STATUSES = before
 
 
     def checked(f, schema, disc, remote, keeper_fetch):
@@ -652,9 +659,14 @@ twice. Only its errors are reported: its warnings are on what OpenSheaf
 does on purpose, such as the witness folder, an extension folder not yet
 registered with OCFL (section 7.2), or the first version of a key log,
 which has no message or user (section 6.1). Without it, the check is not
-made, which is a warning. It reads every content file of the storage
-root, links included, so it is not run on a storage root with an object
-that cannot be read.
+made, which is a warning. Each object is given to it once; the storage
+root as a whole is then validated without its objects
+(`validate_objects=False`): its declaration, its extensions and the
+hierarchy of folders down to the objects, whose errors are the only ones
+that make `validate` false (an object rejected there is not, and is
+reported above). It walks the folders of the storage root, links
+included, so it is not run on a storage root with an object that cannot
+be read.
 
     # in check the storage root with an independent OCFL validator:
     try:
@@ -671,7 +683,7 @@ that cannot be read.
         if unread:
             f.warning("ocfl", "the storage root as a whole is not given to the OCFL validator: it would read "
                       "the files of the objects that cannot be read")
-        elif not ocfl.StorageRoot(root=str(OCFL)).validate(log_warnings=False):
+        elif not ocfl.StorageRoot(root=str(OCFL)).validate(validate_objects=False, log_warnings=False):
             f.error("ocfl", "the OCFL validator rejects the storage root")
 
 Key logs (14.3)

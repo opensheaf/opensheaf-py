@@ -252,6 +252,26 @@ naming each member by its line.
         assert {m["name"]: m["version"] for m in members["members"]} == {name["paper-a"]: "v2", name["paper-b"]: "v1"}
         assert all(m["owner"] == P.ARCHIVE["owner"] and m["at"] == [CONFIG["baseUrl"]] for m in members["members"])
 
+The verifier needs the statuses of a line in several places, but judges
+each signature once (issue #6): the same archive, verified with a
+counting `sign.verify`, verifies no signature twice, and every signature
+file of a line is verified. Nothing is kept after the check.
+
+    # in test: the rules of document versions:
+    def test_verify_verifies_each_signature_once(archive, monkeypatch):
+        put("paper-a", 1, FILES1)
+        put("paper-a", 2, FILES2, available="2026-02-01")
+        put("paper-b", 1, FILES3, available="2026-03-01")
+        assert finish() == []
+        calls, verify = [], sign.verify
+        monkeypatch.setattr(sign, "verify", lambda *a: calls.append(a) or verify(*a))
+        assert P.verify_errors() == []
+        assert len(calls) == len(set(calls))
+        lines = [d for obj_id, d, inv in P.objects() if obj_id.split(":")[1] != obj_id.split(":")[2]]
+        files = [p for d in lines for p in (d / sign.WITNESSES).rglob("signature-*.json")]
+        assert len(files) >= 4 and len(calls) >= len(files)
+        assert sign.VERIFIED is None and P.STATUSES is None
+
 Every version says on what terms its files may be used: a
 `datacite.json` without a licence or rights statement is an error (section
 4.4, #79), and "All rights reserved" is enough.

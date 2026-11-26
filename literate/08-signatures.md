@@ -44,6 +44,7 @@ The module builds on the names, and on PyNaCl for Ed25519.
 
     import base64
     import binascii
+    import contextlib
     import json
     import re
     from dataclasses import dataclass
@@ -146,6 +147,41 @@ encoding has `y` less than p.
             return True
         except (BadSignatureError, CryptoError, ValueError, TypeError):
             return False
+
+A verifier needs the statuses of a line in several places: for the line
+itself, for the parent of a branch, for the indexes and the pages it
+compares with what they should be. Each time it reads the signature files again and
+judges them, and so would verify each signature again. Within
+`remembered()`, which `osheaf verify` enters for one check of the archive
+([chapter 17](17-verify.md)), the result of each verification is kept, by
+key, message and signature, the three things it depends on, so that each
+signature is verified once. Outside it, nothing is kept: a command that
+signs and then verifies sees the files as they are.
+
+    # in signatures: strict verification:
+    VERIFIED = None     # {(did, message, signature): bool} within remembered()
+
+
+    @contextlib.contextmanager
+    def remembered():
+        """Within it, the result of each verification is kept, and a signature is verified once."""
+        global VERIFIED
+        before = VERIFIED
+        VERIFIED = {} if before is None else before
+        try:
+            yield
+        finally:
+            VERIFIED = before
+
+
+    def verified(did, msg, signature):
+        """verify(DID, MSG, SIGNATURE), kept within remembered()."""
+        if VERIFIED is None:
+            return verify(did, msg, signature)
+        key = (did, bytes(msg), bytes(signature))
+        if key not in VERIFIED:
+            VERIFIED[key] = verify(did, msg, signature)
+        return VERIFIED[key]
 
 Reading a signature file
 ------------------------
@@ -251,7 +287,7 @@ version held or carried (an object with `keys`, the parsed `keys.json`,
             sig = base64.b64decode(d["signature"], validate=True)
         except (binascii.Error, ValueError):
             return bad("the signature is not base64", d)
-        if not verify(d["key"], message(d["object"], d["version"], d["inventorySha512"], d["keyLog"]), sig):
+        if not verified(d["key"], message(d["object"], d["version"], d["inventorySha512"], d["keyLog"]), sig):
             return bad("the signature does not verify", d)
         if (d["object"], d["version"], d["inventorySha512"]) != (object_id, version, inventory):
             return bad("it signs another version, or another inventory", d)

@@ -109,6 +109,21 @@ def test_simple_archive_verifies(archive):
     assert all(m["owner"] == P.ARCHIVE["owner"] and m["at"] == [CONFIG["baseUrl"]] for m in members["members"])
 
 
+def test_verify_verifies_each_signature_once(archive, monkeypatch):
+    put("paper-a", 1, FILES1)
+    put("paper-a", 2, FILES2, available="2026-02-01")
+    put("paper-b", 1, FILES3, available="2026-03-01")
+    assert finish() == []
+    calls, verify = [], sign.verify
+    monkeypatch.setattr(sign, "verify", lambda *a: calls.append(a) or verify(*a))
+    assert P.verify_errors() == []
+    assert len(calls) == len(set(calls))
+    lines = [d for obj_id, d, inv in P.objects() if obj_id.split(":")[1] != obj_id.split(":")[2]]
+    files = [p for d in lines for p in (d / sign.WITNESSES).rglob("signature-*.json")]
+    assert len(files) >= 4 and len(calls) >= len(files)
+    assert sign.VERIFIED is None and P.STATUSES is None
+
+
 def test_missing_rights_is_an_error(archive):
     put("paper-a", 1, FILES1, rights=())
     put("paper-b", 1, FILES3, rights=({"rights": "All rights reserved"},))
