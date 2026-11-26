@@ -89,7 +89,10 @@ byte, never converted or merged as text: an inventory whose line endings
 git changed would no longer have its digest (the git companion of the
 specification, section 4.1). `init` writes the `.gitattributes` that says
 so, the same lines as the archive template's, unless the folder has one
-already, which is left as it is. Every attribute is named, so that none of
+already, which is left as it is. The pages of objects, which the
+discovery document points to once it pages its objects (`objects/`,
+section 3.1), are archive files too (git companion, section 2). Every
+attribute is named, so that none of
 the user's own settings (a user-wide `*.pdf filter=lfs`, say) applies.
 
     # in create an archive in a folder:
@@ -98,6 +101,7 @@ the user's own settings (a user-wide `*.pdf filter=lfs`, say) applies.
     # attribute is named, so that no attribute of the user's own settings (a
     # user-wide `*.pdf filter=lfs`, for instance) applies to them.
     opensheaf.json -text -filter -ident -working-tree-encoding -export-subst -merge
+    objects/**     -text -filter -ident -working-tree-encoding -export-subst -merge
     ocfl/**        -text -filter -ident -working-tree-encoding -export-subst -merge
     indexes.json   -text -filter -ident -working-tree-encoding -export-subst -merge
     names/**       -text -filter -ident -working-tree-encoding -export-subst -merge

@@ -1143,6 +1143,7 @@ has the lines of the archive files; one that is there already is kept.
         assert P.verify_errors() == []
         attrs = (root / ".gitattributes").read_text()
         assert "ocfl/**        -text -filter -ident -working-tree-encoding -export-subst -merge" in attrs
+        assert "objects/**     -text -filter -ident -working-tree-encoding -export-subst -merge" in attrs
         assert "requests/" not in attrs and "key-log/" not in attrs
         mine = tmp_path / "b"
         mine.mkdir()

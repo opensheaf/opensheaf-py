@@ -3636,6 +3636,7 @@ GITATTRIBUTES = """# OpenSheaf archive files: stored and checked out byte for by
 # attribute is named, so that no attribute of the user's own settings (a
 # user-wide `*.pdf filter=lfs`, for instance) applies to them.
 opensheaf.json -text -filter -ident -working-tree-encoding -export-subst -merge
+objects/**     -text -filter -ident -working-tree-encoding -export-subst -merge
 ocfl/**        -text -filter -ident -working-tree-encoding -export-subst -merge
 indexes.json   -text -filter -ident -working-tree-encoding -export-subst -merge
 names/**       -text -filter -ident -working-tree-encoding -export-subst -merge

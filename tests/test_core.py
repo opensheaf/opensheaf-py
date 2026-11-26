@@ -768,6 +768,7 @@ def test_init_with_a_new_owner(tmp_path):
     assert P.verify_errors() == []
     attrs = (root / ".gitattributes").read_text()
     assert "ocfl/**        -text -filter -ident -working-tree-encoding -export-subst -merge" in attrs
+    assert "objects/**     -text -filter -ident -working-tree-encoding -export-subst -merge" in attrs
     assert "requests/" not in attrs and "key-log/" not in attrs
     mine = tmp_path / "b"
     mine.mkdir()
