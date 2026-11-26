@@ -791,6 +791,8 @@ def test_init_with_the_hashed_layout(tmp_path):
     run("--root", str(root), "collect")
     assert json.loads((root / "opensheaf.json").read_text())["storageLayout"] == P.HASHED_LAYOUT
     assert P.verify_errors() == []
+    (root / "ocfl" / "ocfl_layout.json").write_text(json.dumps({"extension": P.HASHED_LAYOUT}))
+    assert "ocfl: ocfl_layout.json has a description (section 3.2)" in P.verify_errors()
 
 
 def test_init_with_an_existing_owner(tmp_path):
@@ -1308,6 +1310,39 @@ def test_single_rotation_key_and_confirmation(tmp_path, monkeypatch, capsys):
         run("--root", str(root), "owner", "rotate", "--rotation-key", rotation_files(tmp_path / "S-keys")[0],
             "--export", str(tmp_path / "s2"), "--no-passphrase")
     assert len(P.key_log(P.ARCHIVE["owner"]).versions) == 1
+
+
+def test_checks_of_the_final_review(archive, monkeypatch):
+    put("paper-a", 1, FILES1)
+    d, inv = head_of("paper-a")
+    pin1 = P.digest(d / "v1" / "inventory.json")
+    _, nm, owner = P.LABELS["paper-a"].split(":")
+    member = {"kind": "document", "name": nm, "owner": owner, "at": [CONFIG["baseUrl"]], "version": "v1",
+              "inventorySha512": pin1, "follow": "latest", "doi": "10.5281/zenodo.123"}
+    put_collection("issue", [member], "catalogue")
+    errors = finish()
+    assert any(e.endswith("datacite.json has no HasPart relation to 10.5281/zenodo.123, the DOI of a member "
+                          "(section 8.6)") for e in errors), errors
+    disc = json.loads((archive / "opensheaf.json").read_text())
+    genesis = P.read_logical(d, inv, P.GENESIS).read_bytes()
+    other = names.name(genesis, 1)
+    disc["tombstones"] = [{"id": f"sheaf:{other}:{owner}", "kind": "document", "name": other, "owner": owner,
+                           "genesisName": names.name(genesis), "lastVersion": "v1",
+                           "inventorySha512": pin1, "date": "2026-01-02", "reason": "x"}]
+    (archive / "opensheaf.json").write_text(json.dumps(disc))
+    errors = P.verify_errors()
+    assert any("objects with the same genesis record" in e and other in e for e in errors), errors
+    w = d / sign.WITNESSES / "v1"
+    f = next(w.glob("signature-*.json"))
+    f.write_text(json.dumps(dict(json.loads(f.read_text()), extra="x")))
+    found = P.verify_findings()
+    assert any(x["severity"] == "warning" and x["place"].endswith(f"{sign.WITNESSES}/{f.name}")
+               for x in found), [x for x in found if "witnesses" in x["place"]]
+    checked = []
+    monkeypatch.setattr(P, "schema_checker", lambda f: lambda place, data, name, *a: checked.append((place, name)))
+    P.verify_findings()
+    assert (f"owner {owner} v1/{P.OBJ}", "object") in checked
+    assert (f"paper-a v1 {sign.WITNESSES}/{f.name}", "signature") in checked
 
 
 def test_wrong_previous_is_an_error(archive, monkeypatch):

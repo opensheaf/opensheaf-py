@@ -895,7 +895,7 @@ class Resolver:
         """The (name, owner) of the line the URI U names, among the lines the archives list."""
         if u.is_complete() and u.owner is not None:
             return u.name, u.owner
-        found = set()
+        found = {}
         for w in (["here"] if self.here else []) + where:
             entries = P.discovery()["objects"] if w == "here" else (
                 self.source(w).entries() if self.source(w) else [])
@@ -908,12 +908,17 @@ class Resolver:
                         continue
                     if o.get("kind") == "owner" and nm != owner:
                         continue
-                found.add((nm, owner))
+                found.setdefault((nm, owner), (w, o))
         if len(found) != 1:
-            listed = "\n".join(f"  sheaf:{n}:{o}" for n, o in sorted(found))
+            def origin(nm, owner, w, o):
+                if u.owner is None or o.get("kind") == "owner":
+                    return owner
+                return self.originator(w, o.get("id")) or "not read"
+            listed = "\n".join(f"  sheaf:{n}:{o}  originator {origin(n, o, *found[(n, o)])}"
+                               for n, o in sorted(found))
             raise ValueError(f"{u}: " + ("ambiguous, the candidates are:\n" + listed if found
                                          else "no line of that name in the archives read"))
-        return found.pop()
+        return next(iter(found))
 
     def originator(self, where, obj_id):
         """The originator of the genesis record of the object OBJ_ID at WHERE, or None."""

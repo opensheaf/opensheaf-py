@@ -749,7 +749,8 @@ its links names it, as `https://mgubi.org/papers/owner/<owner>/` does; a
 record whose links name other owners, or none, leaves the link claimed
 only; a link naming the owner and then another names a successor, which
 is accepted while the key log names none. A domain confirms through its
-`.well-known/opensheaf`, which must be of its format and list the owner.
+`.well-known/opensheaf`, which must be of its format and list the owner;
+the verifier checks that file against its schema (section 14.2).
 A place that cannot be read leaves the link not checked, and an owner
 without a keeper has no link.
 
@@ -796,6 +797,12 @@ without a keeper has no link.
         link = owners.keeper_link(journal, fetch(good))
         assert asked == ["https://journal.example.org/.well-known/opensheaf"]
         assert (link.status, link.successor) == (owners.CONFIRMED, A)
+        assert link.document == good
+        from opensheaf import core
+        checked = []
+        core.check_keepers(core.Findings(), {o: journal}, True, fetch(good),
+                           lambda place, data, schema, *a: checked.append((schema, data)))
+        assert checked == [("keeper", good)]
         assert owners.keeper_link(journal, fetch(dict(good, owners=[A]))).status == owners.CLAIMED
         assert "format" in owners.keeper_link(journal, fetch(dict(good, format="x"))).reason
         assert owners.keeper_link(journal, fetch(None)).reason.startswith("there is no ")

@@ -375,6 +375,21 @@ def test_short_uri_over_http(tmp_path, monkeypatch, server):
             assert found.copy.statuses == [sign.SIGNED, sign.SIGNED]
 
 
+def test_ambiguous_short_form_lists_originators(tmp_path):
+    a = make(tmp_path, "a")
+    deposit(a, "paper", "one", new=True)
+    deposit(a, "other", "two", new=True)
+    _, nm, owner = line(a, "paper").split(":")
+    u = names.parse_sheaf(f"sheaf:{nm[:8]}:{owner[:8]}", short=True)
+    u.matches = lambda n, o: True
+    with remote.Resolver(here=False, places=[str(a)]) as r:
+        with pytest.raises(ValueError, match="ambiguous, the candidates are") as e:
+            r.expand(u, [str(a)])
+    listed = str(e.value).splitlines()[1:]
+    assert f"  sheaf:{nm}:{owner}  originator {owner}" in listed
+    assert len(listed) >= 3 and all(x.endswith(f"  originator {owner}") for x in listed)
+
+
 def test_addresses_given_by_others(tmp_path, monkeypatch):
     import time
     a = make(tmp_path, "a")

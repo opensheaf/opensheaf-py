@@ -578,6 +578,12 @@ def test_keeper_link():
     link = owners.keeper_link(journal, fetch(good))
     assert asked == ["https://journal.example.org/.well-known/opensheaf"]
     assert (link.status, link.successor) == (owners.CONFIRMED, A)
+    assert link.document == good
+    from opensheaf import core
+    checked = []
+    core.check_keepers(core.Findings(), {o: journal}, True, fetch(good),
+                       lambda place, data, schema, *a: checked.append((schema, data)))
+    assert checked == [("keeper", good)]
     assert owners.keeper_link(journal, fetch(dict(good, owners=[A]))).status == owners.CLAIMED
     assert "format" in owners.keeper_link(journal, fetch(dict(good, format="x"))).reason
     assert owners.keeper_link(journal, fetch(None)).reason.startswith("there is no ")

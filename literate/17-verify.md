@@ -226,7 +226,7 @@ steps of section 14, in order.
         """The steps of section 14, with their findings in F."""
         found = guarded(f, "the storage root", check_storage, f, schema, disc) or {}
         logs = guarded(f, "the key logs", check_key_logs, f, found, schema) or {}
-        guarded(f, "the keepers", check_keepers, f, logs, remote, keeper_fetch)
+        guarded(f, "the keepers", check_keepers, f, logs, remote, keeper_fetch, schema)
         resolver = None
         if remote:
             from . import remote as remote_
@@ -308,7 +308,7 @@ The discovery document names the layout, and is authoritative
 compute every path. For the owner-name layout the storage root has no
 `ocfl_layout.json`, and, a breach being a warning, holds the text file that
 describes the layout; for the hashed layout, `ocfl_layout.json` names it,
-and a configuration file of the extension, if present, keeps its default
+with a `description`, and a configuration file of the extension, if present, keeps its default
 parameters. Every object must be at the path its identifier gives in that
 layout. The storage root the discovery document names is a relative path
 below the archive (`storage_root_ok`), checked by hand, as the resolver
@@ -332,11 +332,14 @@ checks it, and not only by the schema, which may not be installed.
                 f.warning("ocfl", f"{LAYOUT_FILE}, which describes the layout, is missing (section 3.2)")
         else:
             try:
-                ext = json.loads((OCFL / "ocfl_layout.json").read_text(encoding="utf-8")).get("extension")
+                layout = names.json_value((OCFL / "ocfl_layout.json").read_text(encoding="utf-8"))
             except (OSError, ValueError):
-                ext = None
-            if ext != HASHED_LAYOUT:
+                layout = None
+            layout = layout if isinstance(layout, dict) else {}
+            if layout.get("extension") != HASHED_LAYOUT:
                 f.error("ocfl", f"ocfl_layout.json must name the extension {HASHED_LAYOUT} (section 3.2)")
+            if not isinstance(layout.get("description"), str) or not layout["description"].strip():
+                f.error("ocfl", "ocfl_layout.json has a description (section 3.2)")
             cfg = OCFL / "extensions" / HASHED_LAYOUT / "config.json"
             try:
                 c = names.json_value(cfg.read_text(encoding="utf-8")) if cfg.exists() else {}
@@ -420,7 +423,9 @@ deposit refuses them in the same way (`deposit_path_problem`, in the
 chapter on the [deposit](13-deposit.md)).
 
 The files of the specification in each version, `object.json`,
-`members.json` and `parent/object.json`, are read with `loads_format`
+`members.json`, and, in the evidence of a branch point, `object.json` and
+the signature files of every level (`parent/object.json`,
+`parent/signatures/...`, `parent/parent/...`), are read with `loads_format`
 ([names](05-names.md)): JSON in UTF-8 without a byte order mark, and
 numbers that are integers written without a fraction or an exponent, of
 absolute value at most 2^53 - 1 (section 2), in the data of extensions
@@ -488,15 +493,26 @@ otherwise stop on it.
                 and all(x not in ("", ".", "..") for x in parts))
 
 
-    FORMAT_FILES = (OBJ, "members.json", "parent/object.json")
+    EVIDENCE_FILE = re.compile(r"(?:parent/)+(?:object\.json|signatures/signature-[^/]+\.json)\Z")
+
+
+    def format_file(p):
+        """The schema of the file of the specification at the logical path P of a version, or None:
+        object.json, members.json, and in the evidence of a branch point, at every level, object.json
+        and the signature files."""
+        if p in (OBJ, "members.json"):
+            return "object" if p == OBJ else "collection"
+        if EVIDENCE_FILE.match(p):
+            return "object" if p.endswith("/" + OBJ) else "signature"
+        return None
 
 
     def lexical_errors(d, inv, ver, logical):
         """The breaches of section 2 (UTF-8 without a byte order mark, numbers exact integers) in the
         files of the specification among the logical paths LOGICAL of VER of the object in D."""
         out = []
-        for name in FORMAT_FILES:
-            if name in logical:
+        for name in sorted(logical):
+            if format_file(name):
                 try:
                     names.loads_format(read_logical(d, inv, name, ver).read_bytes())
                 except ValueError as e:
@@ -560,8 +576,10 @@ otherwise stop on it.
             obj = read_json(d, inv, OBJ, ver) if OBJ in logical and not bad else None
             if obj is None:
                 continue
+            schema(f"{at}/{OBJ}", obj, "object")
+            for p in sorted(x for x in logical if x.startswith("parent/") and format_file(x)):
+                schema(f"{at}/{p}", read_json(d, inv, p, ver), format_file(p))
             if kind != "owner":
-                schema(f"{at}/{OBJ}", obj, "object")
                 for message in reserved_name_errors(obj, logical):
                     f.error(at, message)
                 <<check previous in an object version>>
@@ -666,11 +684,26 @@ byte; the keeper's check digit, through the genesis record; `keys.json`
 and the signatures of every later version; versions held after an ending
 version or a fork record (warnings); ending versions; the rules on keys,
 `next` and `exposed`; and fork records. Its errors and warnings are
-reported as they are; the files are also checked against their schemas.
+reported as they are; the files are also checked against their schemas,
+the signature files of the witness folders too (a breach is a warning, as
+a malformed witness is, section 7.2).
 The results: the latest version of each key log, the exposed keys, and
 ended owners, with their fork point and successor.
 
     # in check the key logs of an archive:
+    def check_witness_schemas(schema, at, witnesses):
+        """The signature files among WITNESSES ({name: bytes}) of the version AT, against their schema; a
+        breach is a warning, as a malformed witness is (section 7.2); one that is not JSON is judged
+        apart."""
+        for name, data in sorted(witnesses.items()):
+            if name.startswith("signature-") and name.endswith(".json"):
+                try:
+                    value = names.json_value(data.decode("utf-8"))
+                except (UnicodeDecodeError, ValueError):
+                    continue
+                schema(f"{at} {sign.WITNESSES}/{name}", value, "signature", "warning")
+
+
     def check_key_logs(f, found, schema):
         """The checks of section 14.3; returns {owner name: KeyLog} of the key logs held."""
         logs = {}
@@ -695,6 +728,7 @@ ended owners, with their fork point and successor.
             for v in log.versions:
                 if v.keys is not None:
                     schema(f"{place} v{v.number}/keys.json", v.keys, "keys")
+                check_witness_schemas(schema, f"{place} v{v.number}", v.witnesses)
             logs[log.owner] = log
             latest = [v for v in log.versions if v.is_version]
             if latest:
@@ -720,7 +754,7 @@ A successor that the keeper names is reported as section 6.6 says: named
 by the keeper, or a claim when an ending version names another.
 
     # in check the key logs of an archive:
-    def check_keepers(f, logs, remote, fetch=None):
+    def check_keepers(f, logs, remote, fetch=None, schema=lambda *a, **k: None):
         """The links of the owners of the key logs LOGS to their keepers (section 6.6), read with FETCH
         when REMOTE."""
         for log in logs.values():
@@ -736,6 +770,8 @@ by the keeper, or a claim when an ending version names another.
             if link.status == owners.NOT_CHECKED:
                 f.warning(place, f"keeper {keeper}: not checked ({link.reason})")
                 continue
+            if link.document is not None:
+                schema(f"{place} keeper {keeper}", link.document, "keeper")
             f.result(place, f"keeper {keeper}: {link.status} ({link.reason}; section 6.6)")
             claim = owners.successor_claim(log, link)
             if claim:
@@ -748,12 +784,16 @@ For every other object, the verifier checks its identity, its records and
 its signatures. Drafts ([chapter 24](24-drafts.md)) are checked as section
 10.1 says, as they stand: no genesis record, and no line in `object.json`.
 With a resolver (`--remote`), the members of collections held in other
-archives are resolved.
+archives are resolved. Objects that share a genesis record, compared by
+genesis name, the tombstones of the archive included (`genesisName`), are
+the originator's line and branches of it (sections 5.4 and 14.4): a
+tombstone of a line of the originator counts as that line, one of another
+owner as a branch.
 
     # in check the lines of an archive:
     def check_lines(f, found, logs, schema, disc, resolver=None):
         """The checks of sections 14.4 and 14.5; returns {identifier: statuses} of the lines."""
-        statuses, genesis_names = {}, {}
+        statuses, genesis_names, originators = {}, {}, {}
         tombstoned = {t.get("id") for t in disc.get("tombstones", []) if isinstance(t, dict)}
         for obj_id, (d, inv) in found.items():
             head = read_json(d, inv, OBJ) or {}
@@ -767,8 +807,12 @@ archives are resolved.
             <<check the identity of a line>>
             <<check the records of a line>>
             <<check the signatures of a line>>
+        for t in disc.get("tombstones", []) if isinstance(disc.get("tombstones"), list) else []:
+            g = t.get("genesisName") if isinstance(t, dict) else None
+            if g in genesis_names and isinstance(t.get("id"), str):
+                genesis_names[g].append((t["id"], t.get("owner") != originators.get(g)))
         for gname, ids in genesis_names.items():
-            lines = [i for i, branch in ids if not branch]
+            lines = list(dict.fromkeys(i for i, branch in ids if not branch))
             if len(lines) > 1:
                 f.error(", ".join(where(i) for i in lines), "objects with the same genesis record: only the "
                         "originator's line and its branches may share one (section 5.4)")
@@ -815,6 +859,7 @@ section 9.3 says (below).
             f.error(place, f"{GENESIS}: {e}")
     if rec is not None:
         genesis_names.setdefault(names.name(genesis), []).append((obj_id, "parent" in head))
+        originators[names.name(genesis)] = rec.get("originator")
         if rec["kind"] != head.get("kind"):
             f.error(place, f"its genesis record is of kind {rec['kind']}, its object.json of kind {head.get('kind')}")
         if not names.is_name_of(nm, genesis):
@@ -927,6 +972,7 @@ version is a result too, with the line's status when it is withdrawn.
         for j in js:
             if j.status != sign.GOOD:
                 f.warning(at, f"{j.file}: {j.status}: {j.reason}")
+        check_witness_schemas(schema, at, witnesses_of(d, f"v{i}"))
         others = [n for n in witnesses_of(d, f"v{i}") if not (n.startswith("signature-") and n.endswith(".json"))]
         for n in others:
             f.warning(at, f"{n}: not a witness these tools know (section 7.2)")
@@ -1176,9 +1222,25 @@ each pin is then resolved from the member's `at` as a resolver does
 when verified, an error when not a version, and a warning otherwise,
 contested included (section 14.5). The copy found must be of the kind,
 name and owner the member gives, and a revision must hold its document
-version.
+version. The `datacite.json` of the collection version has a `HasPart`
+relation to the DOI of every member (a catalogue's member) and revision
+(a selection's) that has one (section 8.6).
 
     # in check the members of a collection version:
+    def has_part_errors(d, inv, ver, mem):
+        """The DOIs of members (a catalogue member's doi, a selection revision's doi) of the collection
+        version VER in D to which its datacite.json has no HasPart relation (section 8.6)."""
+        dc = read_json(d, inv, "datacite.json", ver) or {}
+        rels = dc.get("relatedIdentifiers") if isinstance(dc.get("relatedIdentifiers"), list) else []
+        parts = {str(r.get("relatedIdentifier")).lower() for r in rels if isinstance(r, dict)
+                 and r.get("relationType") == "HasPart" and r.get("relatedIdentifierType") == "DOI"}
+        members = [m for m in mem.get("members", []) if isinstance(m, dict)] if isinstance(mem, dict) else []
+        dois = [m.get("doi") for m in members] + [r.get("doi") for m in members
+                                                   for r in (m.get("revisions") or []) if isinstance(r, dict)]
+        return [f"datacite.json has no HasPart relation to {doi}, the DOI of a member (section 8.6)"
+                for doi in dict.fromkeys(x for x in dois if isinstance(x, str) and x) if doi.lower() not in parts]
+
+
     def check_members(f, found, logs, statuses, tombstoned, schema, obj_id, d, inv, resolver=None):
         for ver in inv["versions"]:
             at = f"{where(obj_id)} {ver}"
@@ -1189,6 +1251,8 @@ version.
             kind = mem.get("type")
             if kind not in ("catalogue", "selection"):
                 f.error(at, "members.json has no valid type (catalogue or selection)")
+            for message in has_part_errors(d, inv, ver, mem):
+                f.error(at, message)
             for m in mem.get("members", []):
                 mid = names.object_id(m.get("name"), m.get("owner"))
                 who = f"{at} member {where(mid)}"

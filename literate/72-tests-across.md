@@ -490,6 +490,26 @@ with its witnesses, and resolves as its full URI does.
                 assert (found.status, found.version) == ("verified", "v2")
                 assert found.copy.statuses == [sign.SIGNED, sign.SIGNED]
 
+An ambiguous short form is not chosen: the candidates are listed with
+their full forms and originators (section 12.2). Names that share 8
+characters are out of reach of a test, so the URI here is made to match
+every line of the archive.
+
+    # in across: resolution:
+    def test_ambiguous_short_form_lists_originators(tmp_path):
+        a = make(tmp_path, "a")
+        deposit(a, "paper", "one", new=True)
+        deposit(a, "other", "two", new=True)
+        _, nm, owner = line(a, "paper").split(":")
+        u = names.parse_sheaf(f"sheaf:{nm[:8]}:{owner[:8]}", short=True)
+        u.matches = lambda n, o: True
+        with remote.Resolver(here=False, places=[str(a)]) as r:
+            with pytest.raises(ValueError, match="ambiguous, the candidates are") as e:
+                r.expand(u, [str(a)])
+        listed = str(e.value).splitlines()[1:]
+        assert f"  sheaf:{nm}:{owner}  originator {owner}" in listed
+        assert len(listed) >= 3 and all(x.endswith(f"  originator {owner}") for x in listed)
+
 ### What is read of addresses others give, and how much
 
 An address another archive gives (a member's `at`, the place in a URI) is

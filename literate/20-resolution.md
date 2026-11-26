@@ -1330,14 +1330,16 @@ whose owner starts with the owner part, or, without one, whose owner is
 the originator of their genesis record, which is read from the copy.
 Over HTTP only the first version is copied for this, without witnesses,
 and kept apart from the copy of the line that the resolution then makes
-with its witnesses: a short form resolves as the full URI does.
+with its witnesses: a short form resolves as the full URI does. An
+ambiguous short form is not chosen among its candidates: they are listed,
+each with its full form and its originator (section 12.2).
 
     # in resolution: resolving a sheaf: URI:
     def expand(self, u, where):
         """The (name, owner) of the line the URI U names, among the lines the archives list."""
         if u.is_complete() and u.owner is not None:
             return u.name, u.owner
-        found = set()
+        found = {}
         for w in (["here"] if self.here else []) + where:
             entries = P.discovery()["objects"] if w == "here" else (
                 self.source(w).entries() if self.source(w) else [])
@@ -1350,12 +1352,17 @@ with its witnesses: a short form resolves as the full URI does.
                         continue
                     if o.get("kind") == "owner" and nm != owner:
                         continue
-                found.add((nm, owner))
+                found.setdefault((nm, owner), (w, o))
         if len(found) != 1:
-            listed = "\n".join(f"  sheaf:{n}:{o}" for n, o in sorted(found))
+            def origin(nm, owner, w, o):
+                if u.owner is None or o.get("kind") == "owner":
+                    return owner
+                return self.originator(w, o.get("id")) or "not read"
+            listed = "\n".join(f"  sheaf:{n}:{o}  originator {origin(n, o, *found[(n, o)])}"
+                               for n, o in sorted(found))
             raise ValueError(f"{u}: " + ("ambiguous, the candidates are:\n" + listed if found
                                          else "no line of that name in the archives read"))
-        return found.pop()
+        return next(iter(found))
 
     def originator(self, where, obj_id):
         """The originator of the genesis record of the object OBJ_ID at WHERE, or None."""

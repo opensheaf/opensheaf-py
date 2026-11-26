@@ -572,6 +572,49 @@ pinned object version does not hold.
         assert any("has no version, inventorySha512 or follow" in e for e in errors)
         assert any("v1: does not hold document version 2" in e for e in errors)
 
+The checks of 14.2, 14.4 and 8.6 added in the final review: the
+`datacite.json` of a collection version relates to the DOI of each member
+that has one by `HasPart` (section 8.6); a tombstone with the genesis name
+of a line, of a line of the originator, is that line, so that another
+originator's line under the same genesis record is an error (sections 5.4
+and 14.4); a signature file of a witness folder is checked against its
+schema, a breach being a warning (section 7.2); and the `object.json` of
+an owner against the object schema.
+
+    # in test: verifying broken archives:
+    def test_checks_of_the_final_review(archive, monkeypatch):
+        put("paper-a", 1, FILES1)
+        d, inv = head_of("paper-a")
+        pin1 = P.digest(d / "v1" / "inventory.json")
+        _, nm, owner = P.LABELS["paper-a"].split(":")
+        member = {"kind": "document", "name": nm, "owner": owner, "at": [CONFIG["baseUrl"]], "version": "v1",
+                  "inventorySha512": pin1, "follow": "latest", "doi": "10.5281/zenodo.123"}
+        put_collection("issue", [member], "catalogue")
+        errors = finish()
+        assert any(e.endswith("datacite.json has no HasPart relation to 10.5281/zenodo.123, the DOI of a member "
+                              "(section 8.6)") for e in errors), errors
+        disc = json.loads((archive / "opensheaf.json").read_text())
+        genesis = P.read_logical(d, inv, P.GENESIS).read_bytes()
+        other = names.name(genesis, 1)
+        disc["tombstones"] = [{"id": f"sheaf:{other}:{owner}", "kind": "document", "name": other, "owner": owner,
+                               "genesisName": names.name(genesis), "lastVersion": "v1",
+                               "inventorySha512": pin1, "date": "2026-01-02", "reason": "x"}]
+        (archive / "opensheaf.json").write_text(json.dumps(disc))
+        errors = P.verify_errors()
+        assert any("objects with the same genesis record" in e and other in e for e in errors), errors
+        w = d / sign.WITNESSES / "v1"
+        f = next(w.glob("signature-*.json"))
+        f.write_text(json.dumps(dict(json.loads(f.read_text()), extra="x")))
+        found = P.verify_findings()
+        assert any(x["severity"] == "warning" and x["place"].endswith(f"{sign.WITNESSES}/{f.name}")
+                   for x in found), [x for x in found if "witnesses" in x["place"]]
+        checked = []
+        monkeypatch.setattr(P, "schema_checker", lambda f: lambda place, data, name, *a: checked.append((place, name)))
+        P.verify_findings()
+        assert (f"owner {owner} v1/{P.OBJ}", "object") in checked
+        assert (f"paper-a v1 {sign.WITNESSES}/{f.name}", "signature") in checked
+
+
 Digests in inventories and checksum files are in lower case (section 4.1).
 A checksum file rewritten in upper case, and an inventory whose manifest
 and state are rewritten in upper case, are each reported as such.
@@ -1170,6 +1213,8 @@ the path the digest of its identifier gives.
         run("--root", str(root), "collect")
         assert json.loads((root / "opensheaf.json").read_text())["storageLayout"] == P.HASHED_LAYOUT
         assert P.verify_errors() == []
+        (root / "ocfl" / "ocfl_layout.json").write_text(json.dumps({"extension": P.HASHED_LAYOUT}))
+        assert "ocfl: ocfl_layout.json has a description (section 3.2)" in P.verify_errors()
 
 An archive may also be made for an owner that exists already, whose key
 log is copied from the folder of its owner object in another archive.

@@ -793,6 +793,7 @@ class KeeperLink:
     status: str                      # CONFIRMED, CLAIMED, ABSENT or NOT_CHECKED
     reason: str = ""                 # how it was confirmed, or why not
     successor: object = None         # the successor the keeper names, if any
+    document: object = None          # the keeper's file of format opensheaf-keeper/0.2, when read
 
 
 def keeper_of(log):
@@ -833,10 +834,10 @@ def keeper_link(log, fetch=None):
         return KeeperLink(keeper, CLAIMED, f"{url} is not of format {KEEPER_FORMAT}")
     listed = data.get("owners")
     if not (isinstance(listed, list) and owner in listed):
-        return KeeperLink(keeper, CLAIMED, f"{url} does not list the owner")
+        return KeeperLink(keeper, CLAIMED, f"{url} does not list the owner", document=data)
     succ = (data.get("successors") or {}).get(owner) if isinstance(data.get("successors"), dict) else None
     succ = succ if isinstance(succ, str) and names.OWNER_NAME.match(succ) and succ != owner else None
-    return KeeperLink(keeper, CONFIRMED, f"{url} lists the owner", succ)
+    return KeeperLink(keeper, CONFIRMED, f"{url} lists the owner", succ, data)
 
 
 def successor_claim(log, link):
