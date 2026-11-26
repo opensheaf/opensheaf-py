@@ -1284,6 +1284,40 @@ def test_owner_catalogues(tmp_path):
     assert any(x["severity"] == "error" and "no owners" in x["message"] for x in findings(a))
 
 
+def test_collect_skips_an_owner_without_keys(tmp_path, capsys):
+    a = make(tmp_path, "a")
+    r = ["--root", str(a)]
+    deposit(a, "paper", "one", new=True)
+    run(*r, "owner", "init", "--export", str(tmp_path / "second-keys"), "--no-passphrase", "--yes")
+    P.configure(a)
+    second = P.ARCHIVE["owners"][0]
+    deposit(a, "theirs", "two", "--owner", second, new=True)
+    run(*r, "collect")
+    P.configure(a)
+    cat1, cat2 = P.CATALOGUES[P.ARCHIVE["owner"]], P.CATALOGUES[second]
+    heads = {c: P.load_inventory(P.obj_dir(c))["head"] for c in (cat1, cat2)}
+    deposit(a, "theirs", "three", "--owner", second)
+    P.configure(a)
+    P.forget_here(second, P.key_log(second).latest().keys["keys"])
+    deposit(a, "paper", "four")
+    capsys.readouterr()
+    with pytest.raises(SystemExit, match=r"1 owner catalogue not collected \(.*\): this computer does not "
+                                         r"hold the keys to sign for it; the others are collected"):
+        run(*r, "collect")
+    err = capsys.readouterr().err
+    assert f"Warning: Skipped the owner catalogue of {names.short(second)}: this computer holds 0 of" in err
+    assert f"osheaf collect --owner {second} collects it on a computer that holds its keys" in err
+    P.configure(a)
+    assert P.load_inventory(P.obj_dir(cat1))["head"] == f"v{int(heads[cat1][1:]) + 1}"
+    assert P.load_inventory(P.obj_dir(cat2))["head"] == heads[cat2]
+    assert P.CATALOGUES == {P.ARCHIVE["owner"]: cat1, second: cat2}
+    assert head_digest(a, "paper", "v2")[:32] in (a / "index.html").read_text()
+    assert errors(a) == []
+    with pytest.raises(SystemExit, match="This computer holds 0 of the current keys"):
+        run(*r, "collect", "--owner", second)
+    assert P.load_inventory(P.obj_dir(cat2))["head"] == heads[cat2]
+
+
 def test_draft_and_seal(tmp_path):
     a = make(tmp_path, "a")
     pdf = tmp_path / "d.pdf"

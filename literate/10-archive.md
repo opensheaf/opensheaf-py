@@ -1417,7 +1417,22 @@ than `threshold` of them cannot sign alone: an owner whose threshold needs
 the keys of several members (section 6.2) signs on one device holding them
 all, which these tools do not yet organise otherwise.
 
+That last stop is a `CannotSign`, a `SystemExit` like every other stop, so
+that a command which signs for one owner ends as before; `osheaf collect`,
+which goes through all the owners, catches it to skip the owner and go on
+with the others ([chapter 15](15-owner-catalogues.md)). Its `reason` is the
+message without the capital and the final period, to be quoted in another
+sentence. It is raised before anything is written.
+
     # in the keys that sign for an owner on this device:
+    class CannotSign(SystemExit):
+        """The command stops: this device does not hold enough of the current keys of an owner."""
+
+        def __init__(self, owner, reason):
+            super().__init__(sentence(reason))
+            self.owner, self.reason = owner, reason
+
+
     def signing_keys(owner):
         """(the key log of OWNER, its latest version, the current keys of this device that sign)."""
         who = names.short(owner)
@@ -1440,8 +1455,8 @@ all, which these tools do not yet organise otherwise.
         if len(found) < need:
             hint = ("configure a key wallet, from which each command opens them" if not keys.kept_on_device()
                     else "osheaf key new makes one for this computer")
-            stop(f"this computer holds {len(found)} of the current keys of {who}, and v{latest.number} "
-                 f"of its key log needs {need} to sign ({hint})")
+            raise CannotSign(owner, f"this computer holds {len(found)} of the current keys of {who}, and "
+                                    f"v{latest.number} of its key log needs {need} to sign ({hint})")
         return log, latest, found
 
 The witness files of a version, by name: the signature files and anything

@@ -161,16 +161,54 @@ would not change signs nothing, so the command needs the keys of only the
 owners whose documents changed: a deposit by one owner touches its
 catalogue only.
 
+An archive may host an owner whose keys this computer does not hold. Going
+through all the owners, `collect` skips such an owner when its catalogue
+would change: it says so on the standard error, with the reason and the
+command that collects it on a computer that holds its keys, and goes on
+with the others. Nothing of the skipped owner is written: the stop comes
+from `signing_keys`, before the version is built, and the labels and
+catalogues the command had noted for it in memory are put back. The
+command still ends with an error, which names the owners skipped, so that
+a script sees that the archive is not collected in full; but before it
+ends it writes the website again, as `main` does after every command that
+changes the archive ([chapter 60](60-command-line.md)), which it would not
+do after a stop: the catalogues collected before the skipped owner would
+otherwise be published with a stale `index.html`, which `osheaf verify`
+reports. With `--owner`, an owner that cannot be signed for stops the
+command as before: nothing has been added.
+
     # in write a new version of the owner catalogues:
     def collect(args):
         """A new version of each owner catalogue (or of that of --owner) whose documents have a new
-        signed version; members pin the latest signed version of their line and follow it (section 8.3)."""
+        signed version; members pin the latest signed version of their line and follow it (section 8.3).
+        Without --owner, an owner this computer cannot sign for is skipped, and the command ends with
+        an error after writing the website for the others."""
         init_storage_root()
         only = getattr(args, "owner", None)
         if only and only not in archive_owners():
             sys.exit(f"{only} is not an owner this archive hosts")
-        for owner in [only] if only else archive_owners():
-            collect_owner(owner, args)
+        if only:
+            collect_owner(only, args)
+            return
+        skipped = []
+        for owner in archive_owners():
+            noted = dict(LABELS), dict(CATALOGUES)
+            try:
+                collect_owner(owner, args)
+            except CannotSign as e:
+                for now, before in zip((LABELS, CATALOGUES), noted):
+                    now.clear()
+                    now.update(before)
+                skipped.append(owner)
+                warn(f"skipped the owner catalogue of {names.short(owner)}: {e.reason}; "
+                     f"osheaf collect --owner {owner} collects it on a computer that holds its keys")
+        if skipped:
+            present()
+            stop(f"{plural(len(skipped), 'owner catalogue')} not collected ("
+                 + ", ".join(names.short(o) for o in skipped)
+                 + "): this computer does not hold the keys to sign for "
+                 + ("it" if len(skipped) == 1 else "them")
+                 + "; the others are collected and the website is written")
 
 
     def collect_owner(owner, args):

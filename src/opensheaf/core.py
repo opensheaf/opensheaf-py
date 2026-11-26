@@ -903,6 +903,14 @@ def key_log(owner):
         sys.exit(str(e))
 
 
+class CannotSign(SystemExit):
+    """The command stops: this device does not hold enough of the current keys of an owner."""
+
+    def __init__(self, owner, reason):
+        super().__init__(sentence(reason))
+        self.owner, self.reason = owner, reason
+
+
 def signing_keys(owner):
     """(the key log of OWNER, its latest version, the current keys of this device that sign)."""
     who = names.short(owner)
@@ -925,8 +933,8 @@ def signing_keys(owner):
     if len(found) < need:
         hint = ("configure a key wallet, from which each command opens them" if not keys.kept_on_device()
                 else "osheaf key new makes one for this computer")
-        stop(f"this computer holds {len(found)} of the current keys of {who}, and v{latest.number} "
-             f"of its key log needs {need} to sign ({hint})")
+        raise CannotSign(owner, f"this computer holds {len(found)} of the current keys of {who}, and "
+                                f"v{latest.number} of its key log needs {need} to sign ({hint})")
     return log, latest, found
 
 
@@ -1855,13 +1863,35 @@ def member_order(members):
 
 def collect(args):
     """A new version of each owner catalogue (or of that of --owner) whose documents have a new
-    signed version; members pin the latest signed version of their line and follow it (section 8.3)."""
+    signed version; members pin the latest signed version of their line and follow it (section 8.3).
+    Without --owner, an owner this computer cannot sign for is skipped, and the command ends with
+    an error after writing the website for the others."""
     init_storage_root()
     only = getattr(args, "owner", None)
     if only and only not in archive_owners():
         sys.exit(f"{only} is not an owner this archive hosts")
-    for owner in [only] if only else archive_owners():
-        collect_owner(owner, args)
+    if only:
+        collect_owner(only, args)
+        return
+    skipped = []
+    for owner in archive_owners():
+        noted = dict(LABELS), dict(CATALOGUES)
+        try:
+            collect_owner(owner, args)
+        except CannotSign as e:
+            for now, before in zip((LABELS, CATALOGUES), noted):
+                now.clear()
+                now.update(before)
+            skipped.append(owner)
+            warn(f"skipped the owner catalogue of {names.short(owner)}: {e.reason}; "
+                 f"osheaf collect --owner {owner} collects it on a computer that holds its keys")
+    if skipped:
+        present()
+        stop(f"{plural(len(skipped), 'owner catalogue')} not collected ("
+             + ", ".join(names.short(o) for o in skipped)
+             + "): this computer does not hold the keys to sign for "
+             + ("it" if len(skipped) == 1 else "them")
+             + "; the others are collected and the website is written")
 
 
 def collect_owner(owner, args):
