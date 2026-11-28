@@ -89,7 +89,7 @@ def sort_revisions(revs, order):
                                        else len(order) + x["documentVersion"]))
 
 
-def describe(title, description, version, issued, members, url=None):
+def describe(title, description, version, issued, members, url=None, kind="catalogue"):
     cur = P.ARCHIVE["curator"]
     creator = {"name": cur["name"], "nameType": "Personal", "familyName": cur["familyName"]}
     if cur.get("givenName"):
@@ -103,7 +103,7 @@ def describe(title, description, version, issued, members, url=None):
         dc["url"] = url
     if description:
         dc["descriptions"] = [{"description": description, "descriptionType": "Abstract"}]
-    dois = [m["doi"] for m in members if m.get("doi")] + \
+    dois = [m["doi"] for m in members if m.get("doi")] if kind == "catalogue" else \
         [r["doi"] for m in members for r in m.get("revisions", []) if r.get("doi")]
     if dois:
         dc["relatedIdentifiers"] = [{"relatedIdentifier": x, "relatedIdentifierType": "DOI",
@@ -146,7 +146,8 @@ def write(coll_id, mem, *, message, title=None, description=None, owner=None, la
     label = label or P.label_of(coll_id)
     files = {"members.json": P.json_bytes(mem), P.GENESIS: genesis,
              "datacite.json": P.json_bytes(describe(title, description, version, issued, mem["members"],
-                                                    P.landing_url(coll_id) if label else None))}
+                                                    P.landing_url(coll_id) if label else None,
+                                                    mem.get("type")))}
     obj = {"format": P.OBJ_FORMAT, "specification": P.SPEC, "kind": "collection",
            "name": coll_id.split(":")[1], "owner": owner, "documentVersion": version, "status": "active"}
     if label:

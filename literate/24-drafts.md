@@ -75,7 +75,9 @@ A draft is named by its `<id>` alone, local to the archive; `draft_dir`
 finds it, and `drop_head` rewrites it, removing its head version. A
 draft removed (by `draft delete`, by `seal --delete-draft`, or by
 rewriting its only version) is removed by `remove`, which also removes the
-folder `draft/` of the storage root once it holds no draft: an empty
+folders above it that are left empty, up to the storage root: `draft/`
+once it holds no draft, and under the hashed layout the folders of the
+three tuples (`ocfl/93b/8be/2c1/`, say), as a takedown does. An empty
 folder in a storage root is refused by OCFL validators (E073).
 
     # in drafts: the folder of a draft:
@@ -92,11 +94,14 @@ folder in a storage root is refused by OCFL validators (E073).
 
 
     def remove(d):
-        """Remove the draft in D, and the folder draft/ of the storage root when it is left empty: an
-        empty folder there is not an object, and OCFL validators refuse it (E073)."""
+        """Remove the draft in D, and the folders above it left empty, up to the storage root (draft/,
+        or the tuples of the hashed layout): an empty folder there is not an object, and OCFL
+        validators refuse it (E073)."""
         shutil.rmtree(P.unlinked(d))
-        if d.parent != P.OCFL and d.parent.is_dir() and not any(d.parent.iterdir()):
-            d.parent.rmdir()
+        parent = d.parent
+        while parent != P.OCFL and P.OCFL in parent.parents and parent.is_dir() and not any(parent.iterdir()):
+            parent.rmdir()
+            parent = parent.parent
 
 
     def drop_head(d, inv):

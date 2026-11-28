@@ -1338,6 +1338,19 @@ def test_checks_of_the_final_review(archive, monkeypatch):
     errors = finish()
     assert any(e.endswith("datacite.json has no HasPart relation to 10.5281/zenodo.123, the DOI of a member "
                           "(section 8.6)") for e in errors), errors
+    from opensheaf import collections
+    revision = {"documentVersion": 1, "version": "v1", "inventorySha512": pin1, "doi": "10.5281/zenodo.456"}
+    vetted = {k: v for k, v in member.items() if k not in ("version", "inventorySha512", "follow")}
+    vetted.update(doi="10.5281/zenodo.999", revisions=[revision])
+    put_collection("vetted", [vetted], "selection")
+    errors = finish()
+    assert any(e.endswith("datacite.json has no HasPart relation to 10.5281/zenodo.456, the DOI of a member "
+                          "(section 8.6)") for e in errors), errors
+    assert not any("HasPart relation to 10.5281/zenodo.999" in e for e in errors), errors
+    dc = collections.describe("T", None, 1, "2026-01-01", [vetted], kind="selection")
+    assert [r["relatedIdentifier"] for r in dc["relatedIdentifiers"]] == ["10.5281/zenodo.456"]
+    dc = collections.describe("T", None, 1, "2026-01-01", [member])
+    assert [r["relatedIdentifier"] for r in dc["relatedIdentifiers"]] == ["10.5281/zenodo.123"]
     disc = json.loads((archive / "opensheaf.json").read_text())
     genesis = P.read_logical(d, inv, P.GENESIS).read_bytes()
     other = names.name(genesis, 1)

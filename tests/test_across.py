@@ -1147,9 +1147,14 @@ def test_inconsistent_branch_point(tmp_path):
     pid = line(a, "paper")
     pd = P.obj_dir(pid)
     found = {pid: (pd, P.load_inventory(pd))}
-    assert P.parent_resolution(found)(obj["parent"]) == (True, sign.SIGNED)
-    assert P.parent_resolution(found)(dict(obj["parent"], inventorySha512="0" * 128)) == (False, None)
-    assert P.parent_resolution({})(obj["parent"]) is None
+    v, problems = branch.verdict(level, obj, genesis, P.key_log, resolve=lambda p: (True, sign.CONTESTED))
+    assert v == branch.UNCHECKED and "the parent version is contested (section 9.3)" in problems
+    owner = obj["parent"]["owner"]
+    logs = {owner: P.key_log(owner)}
+    assert P.parent_resolution(found, logs)(obj["parent"]) == (True, sign.SIGNED)
+    assert P.parent_resolution(found, logs)(dict(obj["parent"], inventorySha512="0" * 128)) == (False, None)
+    assert P.parent_resolution({}, logs)(obj["parent"]) is None
+    assert P.parent_resolution(found, {})(obj["parent"]) == (True, sign.UNCHECKED)
 
 
 def test_the_history_of_a_branch(tmp_path):
@@ -1351,14 +1356,16 @@ def test_draft_and_seal(tmp_path):
     assert errors(a) == []
 
 
-def test_seal_delete_draft_leaves_no_empty_folder(tmp_path):
-    a = make(tmp_path, "a")
+@pytest.mark.parametrize("layout", ["owner-name", "hashed"])
+def test_seal_delete_draft_leaves_no_empty_folder(tmp_path, layout):
+    a = make(tmp_path, "a", *(["--layout", "hashed"] if layout == "hashed" else []))
     pdf = tmp_path / "d.pdf"
     pdf.write_bytes(b"%PDF-1.4 draft")
     run("--root", str(a), "draft", "new", "notes", "--pdf", str(pdf), "--no-source", "x", "--title", "Notes",
         "--author", "Doe, J")
     run("--root", str(a), "seal", "notes", "--label", "lecture-notes", "--delete-draft")
     assert not (P.OCFL / "draft").exists()
+    assert [p for p in P.OCFL.rglob("*") if p.is_dir() and not any(p.iterdir())] == []
     assert errors(a) == []
 
 
@@ -1484,3 +1491,75 @@ def test_indexes(tmp_path):
     target = a / "sha512" / f"{shas[0]['inventorySha512'][:2]}.json"
     target.unlink()
     assert any("no entry, or a stale one" in e for e in errors(a))
+
+
+def test_the_verifier_reads_files_with_their_digests(tmp_path):
+    a = make(tmp_path, "a")
+    deposit(a, "paper", "one", new=True)
+    d = P.obj_dir(line(a, "paper"))
+    inv = P.load_inventory(d)
+    g = d / P.content_path(inv, "v1", P.GENESIS)
+    good = g.read_bytes()
+    g.write_bytes(good.replace(b"{", b'{"x": 1e3, ', 1))
+    errs = errors(a)
+    assert f"paper: {P.content_path(inv, 'v1', P.GENESIS)} does not have the digest of the manifest" in errs
+    assert not any("1e3" in e for e in errs), errs
+    g.write_bytes(good)
+    assert errors(a) == []
+    o = d / P.content_path(inv, "v1", P.OBJ)
+    o.write_bytes(o.read_bytes().replace(b'"documentVersion": 1', b'"documentVersion":  1'))
+    found = [(x["severity"], x["place"], x["message"]) for x in findings(a)]
+    assert ("error", "paper v1", "object.json cannot be read: it does not have the digest its inventory "
+            "states (section 4.1)") in found
+    assert ("error", "paper v1", "object.json does not record the line of the identifier (section 4.3)") in found
+    assert ("warning", "paper v1", "not a version of the line: invalid (sections 7.3 and 7.5)") in found
+    assert any(s == "warning" and m.endswith("invalid: its signer is not the owner of the line")
+               for s, _, m in found), found
+
+
+def test_tampered_evidence_is_not_read(tmp_path):
+    a, j = make(tmp_path, "authors"), make(tmp_path, "journal")
+    deposit(a, "paper", "one", new=True)
+    run("--root", str(j), "branch", uri(a, "paper", 1), "--label", "accepted")
+    pd = P.obj_dir(line(a, "paper"))
+    shutil.copytree(pd, j / pd.relative_to(a))
+    d = P.obj_dir(line(j, "accepted"))
+    inv = P.load_inventory(d)
+    sig = next(p for ps in inv["versions"]["v1"]["state"].values() for p in ps
+               if p.startswith("parent/signatures/"))
+    c = d / P.content_path(inv, "v1", sig)
+    c.write_bytes(c.read_bytes().replace(b'"signature": "', b'"signature": "A', 1))
+    errs = errors(j)
+    assert f"accepted v1: inconsistent branch point: the evidence of the branch point cannot be read: {sig} " \
+        "does not have the digest its inventory states (section 4.1)" in errs, errs
+
+
+def test_a_key_log_that_cannot_be_read_ends_nothing(tmp_path):
+    a, j = make(tmp_path, "authors"), make(tmp_path, "journal")
+    deposit(a, "paper", "one", new=True)
+    run("--root", str(j), "branch", uri(a, "paper", 1), "--label", "accepted")
+    pid = line(a, "paper")
+    pd = P.obj_dir(pid)
+    shutil.copytree(pd, j / pd.relative_to(a))
+    owner = pid.split(":")[2]
+    P.configure(j)
+    (P.obj_dir(names.object_id(owner, owner)) / "inventory.json").write_text("{not json")
+    found = findings(j)
+    assert not any("stopped on a file" in x["message"] for x in found), found
+    assert any(x["severity"] == "error" and x["message"] == "an object without a readable inventory"
+               for x in found)
+    assert any(x["message"].startswith(f"the key log of its owner {owner} is not in the storage root")
+               for x in found)
+
+
+def test_both_objects_of_one_identifier_are_validated(tmp_path):
+    pytest.importorskip("ocfl")
+    a = make(tmp_path, "a")
+    deposit(a, "paper", "one", new=True)
+    d = P.obj_dir(line(a, "paper"))
+    copy = P.OCFL / "0" / d.name
+    shutil.copytree(d, copy)
+    (copy / "stray.txt").write_text("not of OCFL")
+    errs = errors(a)
+    assert "paper: two objects of the storage root have this identifier (section 4)" in errs
+    assert any(e.startswith("paper: OCFL validator:") and "stray.txt" in e for e in errs), errs

@@ -200,8 +200,12 @@ the resolver alike.
 
 
     def local_page(path):
+        """The bytes of the page of objects PATH of this archive, or None; one reached through a
+        symbolic link is not read (section 15.2)."""
+        if not page_path_ok(path):
+            return None
         f = ROOT / path
-        return f.read_bytes() if page_path_ok(path) and f.is_file() else None
+        return f.read_bytes() if not through_link(f) and f.is_file() else None
 
 The indexes
 -----------

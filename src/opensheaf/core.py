@@ -181,7 +181,10 @@ def configure(root):
 
 
 def read_discovery(path):
-    """(the discovery document at PATH, or {}, and why it cannot be read, or None)."""
+    """(the discovery document at PATH, or {}, and why it cannot be read, or None); a symbolic link
+    is not followed (section 15.2)."""
+    if path.is_symlink():
+        return {}, "the discovery document is a symbolic link: not read (section 15.2)"
     if not path.exists():
         return {}, None
     try:
@@ -432,6 +435,25 @@ def unlinked(path):
     return p
 
 
+def through_link(path):
+    """Whether the path PATH of the archive passes through a symbolic link below the archive root,
+    PATH itself included; a path outside the archive does not."""
+    if ROOT is None:
+        return False
+    full = Path(path) if Path(path).is_absolute() else Path.cwd() / path
+    try:
+        rel = full.relative_to(ROOT)
+    except ValueError:
+        return False
+    return owners.linked(ROOT, rel)
+
+
+def not_followed(path):
+    """Whether a verifier, while it runs, leaves the path PATH of the archive unread, since it
+    passes through a symbolic link (section 15.2)."""
+    return CHECKED_READS is not None and through_link(path)
+
+
 def write_file(path, data):
     """Write DATA (bytes or text, in UTF-8) to the file PATH of the archive, atomically."""
     path = unlinked(path)
@@ -495,6 +517,8 @@ def init_storage_root():
 
 def load_inventory(obj_dir):
     p = obj_dir / "inventory.json"
+    if obj_dir in SKIPPED or not_followed(p):
+        return None
     try:
         inv = names.json_value(p.read_text(encoding="utf-8")) if p.exists() else None
     except (ValueError, UnicodeDecodeError):
@@ -694,13 +718,20 @@ def objects():
                 out.append(((inv or {}).get("id"), c, inv))
             elif not (d == OCFL and c.name == "extensions"):
                 walk(c)
-    if OCFL is not None and OCFL.exists():
+    if OCFL is not None and OCFL.exists() and not not_followed(OCFL):
         walk(OCFL)
     return sorted(out, key=lambda o: (str(o[0]), str(o[1])))
 
 
 class UnsafePath(ValueError):
     """A content path of an inventory that the tools do not read."""
+
+
+class DigestMismatch(ValueError):
+    """A file of an object version whose bytes do not have the digest its inventory states."""
+
+
+CHECKED_READS = None    # {(file, digest): whether the file has it}, while a verifier runs
 
 
 def content_problem(obj_dir, cp):
@@ -733,9 +764,34 @@ def content_file(obj_dir, cp):
     return Path(obj_dir) / cp
 
 
+def logical_digest(inv, version, logical):
+    """The digest the state of VERSION in INV gives the logical path LOGICAL, or None."""
+    for dig, paths in inv["versions"][version]["state"].items():
+        if logical in paths:
+            return dig
+    return None
+
+
+def has_digest(path, dig):
+    """Whether the file PATH has the digest DIG (sha512), remembered while CHECKED_READS is a dict."""
+    key = (str(path), dig)
+    if key not in CHECKED_READS:
+        try:
+            CHECKED_READS[key] = isinstance(dig, str) and digest(path) == dig.lower()
+        except OSError:
+            CHECKED_READS[key] = False
+    return CHECKED_READS[key]
+
+
 def read_logical(obj_dir, inv, logical, version=None):
-    cp = content_path(inv, version or inv["head"], logical)
-    return content_file(obj_dir, cp) if cp else None
+    version = version or inv["head"]
+    cp = content_path(inv, version, logical)
+    if not cp:
+        return None
+    path = content_file(obj_dir, cp)
+    if CHECKED_READS is not None and not has_digest(path, logical_digest(inv, version, logical)):
+        return None
+    return path
 
 
 def previous_digest(obj_id, d, head):
@@ -892,8 +948,14 @@ def zenodo_pending(obj_id):
         return False
 
 
+KEY_LOGS = None     # {owner name: KeyLog} of the key logs a verifier has checked, while it runs
+
+
 def key_log(owner):
-    """The key log of OWNER kept in the storage root (section 6.5), or None."""
+    """The key log of OWNER kept in the storage root (section 6.5), or None; in a verifier, the one
+    it has checked."""
+    if KEY_LOGS is not None:
+        return KEY_LOGS.get(owner)
     d = obj_dir(names.object_id(owner, owner))
     if not (d / "inventory.json").exists():
         return None
@@ -961,7 +1023,7 @@ def line_statuses(d, inv, log=False):
 
 def computed_line_statuses(d, inv, log):
     """line_statuses(D, INV, LOG), computed."""
-    owner = read_json(d, inv, OBJ, "v1").get("owner")
+    owner = (read_json(d, inv, OBJ, "v1") or {}).get("owner")
     if log is False:
         log = key_log(owner) if owner else None
     versions = []
@@ -2119,8 +2181,12 @@ def listed_objects(disc, read):
 
 
 def local_page(path):
+    """The bytes of the page of objects PATH of this archive, or None; one reached through a
+    symbolic link is not read (section 15.2)."""
+    if not page_path_ok(path):
+        return None
     f = ROOT / path
-    return f.read_bytes() if page_path_ok(path) and f.is_file() else None
+    return f.read_bytes() if not through_link(f) and f.is_file() else None
 
 
 INDEXES = {"names": 2, "owners": 2, "sha512": 2}
@@ -2695,8 +2761,11 @@ def description_errors(d, inv, ver):
     out = []
     logical = {p for ps in inv["versions"][ver]["state"].values() for p in ps}
     obj = read_json(d, inv, OBJ, ver) if OBJ in logical else None
-    dc = read_json(d, inv, "datacite.json", ver) if "datacite.json" in logical else None
-    if obj is None or dc is None:
+    try:
+        dc = read_json(d, inv, "datacite.json", ver) if "datacite.json" in logical else None
+    except ValueError as e:
+        return [f"datacite.json is not JSON in UTF-8 without a byte order mark ({e})"]
+    if not isinstance(obj, dict) or not isinstance(dc, dict):
         return out
     if str(obj.get("documentVersion")) != dc.get("version"):
         out.append("datacite.json and object.json disagree on the version")
@@ -2747,8 +2816,18 @@ def notice_warnings(d, inv):
     return out
 
 
+def links_in(folder):
+    """Whether a symbolic link is below FOLDER, looked for without following any."""
+    for at, dirs, files in os.walk(folder):
+        if any(os.path.islink(os.path.join(at, name)) for name in dirs + files):
+            return True
+    return False
+
+
 def check_storage(f, schema, disc):
     """The checks of section 14.2; returns {identifier: (folder, inventory)} of the objects."""
+    if through_link(OCFL):
+        return {}
     if not (OCFL / "0=ocfl_1.1").exists():
         f.error("ocfl", "no OCFL 1.1 storage root (0=ocfl_1.1)")
     if disc and disc.get("storageLayout") != LAYOUT:
@@ -2762,7 +2841,7 @@ def check_storage(f, schema, disc):
                     "(section 3.2)")
         if not (OCFL / LAYOUT_FILE).exists():
             f.warning("ocfl", f"{LAYOUT_FILE}, which describes the layout, is missing (section 3.2)")
-    else:
+    elif not through_link(OCFL / "ocfl_layout.json") and not through_link(OCFL / "extensions"):
         try:
             layout = names.json_value((OCFL / "ocfl_layout.json").read_text(encoding="utf-8"))
         except (OSError, ValueError):
@@ -2783,9 +2862,15 @@ def check_storage(f, schema, disc):
             if (c.get("digestAlgorithm", "sha256"), c.get("tupleSize", 3), c.get("numberOfTuples", 3)) != \
                     ("sha256", 3, 3):
                 f.error("ocfl", "the hashed layout keeps its default parameters (section 3.2)")
-    found, unread = {}, []
+    found, unread, given, seen = {}, [], [], set()
     for obj_id, d, inv in objects():
         rel = d.relative_to(OCFL).as_posix()
+        if links_in(d) or through_link(d / "inventory.json"):
+            f.warning(f"ocfl/{rel}", "an object holding a symbolic link: not read, nor given to the OCFL "
+                      "validator (section 15.2)")
+            unread.append(rel)
+            SKIPPED.add(d)
+            continue
         if inv is None or obj_id is None:
             f.error(f"ocfl/{rel}", "an object without a readable inventory")
             unread.append(rel)
@@ -2795,12 +2880,18 @@ def check_storage(f, schema, disc):
             expected = path_of(obj_id)
         except ValueError as e:
             f.error(f"ocfl/{rel}", str(e))
+            if inventory_problem(inv) or any(content_problem(d, cp) for cps in inv["manifest"].values()
+                                             for cp in cps):
+                unread.append(rel)
+                SKIPPED.add(d)
+            else:
+                given.append((f"ocfl/{rel}", d))
             continue
         if rel != expected:
             f.error(where(obj_id), f"is at ocfl/{rel}, and its identifier puts it at ocfl/{expected} (section 3.2)")
-        if obj_id in found:
+        if obj_id in seen:
             f.error(where(obj_id), "two objects of the storage root have this identifier (section 4)")
-        found[obj_id] = (d, inv)
+        seen.add(obj_id)
         problem = inventory_problem(inv)
         try:
             if problem:
@@ -2812,9 +2903,11 @@ def check_storage(f, schema, disc):
             f.error(where(obj_id), f"cannot be read ({type(e).__name__}: {str(e)[:300]}): not checked further")
             readable = False
         if readable is False:
-            del found[obj_id]
             unread.append(obj_id)
             SKIPPED.add(d)
+        else:
+            found.setdefault(obj_id, (d, inv))
+            given.append((where(obj_id), d))
     try:
         import ocfl
         from ocfl.validator import Validator
@@ -2822,15 +2915,30 @@ def check_storage(f, schema, disc):
         f.warning("ocfl", "the storage root is not checked by an OCFL validator: ocfl-py is not installed"
                   " (pip install 'opensheaf[validate]')")
     else:
-        for obj_id, (d, inv) in found.items():
+        for place, d in given:
             v = Validator(log_warnings=False, log_errors=True)
-            if not v.validate_object(str(d)):
-                f.error(where(obj_id), f"OCFL validator: {v.status_str()}")
+            try:
+                valid = v.validate_object(str(d))
+            except Exception as e:
+                f.error(place, f"the OCFL validator stopped on it ({type(e).__name__}: {str(e)[:300]})")
+                continue
+            if not valid:
+                f.error(place, f"OCFL validator: {v.status_str()}")
         if unread:
             f.warning("ocfl", "the storage root as a whole is not given to the OCFL validator: it would read "
                       "the files of the objects that cannot be read")
-        elif not ocfl.StorageRoot(root=str(OCFL)).validate(validate_objects=False, log_warnings=False):
-            f.error("ocfl", "the OCFL validator rejects the storage root")
+        elif links_in(OCFL):
+            f.warning("ocfl", "the storage root as a whole is not given to the OCFL validator: it would follow "
+                      "the symbolic links in it")
+        else:
+            try:
+                valid = ocfl.StorageRoot(root=str(OCFL)).validate(validate_objects=False, log_warnings=False)
+            except Exception as e:
+                f.error("ocfl", f"the OCFL validator stopped on the storage root ({type(e).__name__}: "
+                        f"{str(e)[:300]})")
+            else:
+                if not valid:
+                    f.error("ocfl", "the OCFL validator rejects the storage root")
     return found
 
 
@@ -2906,7 +3014,11 @@ def lexical_errors(d, inv, ver, logical):
     for name in sorted(logical):
         if format_file(name):
             try:
-                names.loads_format(read_logical(d, inv, name, ver).read_bytes())
+                data = content_file(d, content_path(inv, ver, name)).read_bytes()
+            except OSError:
+                continue        # a file missing: the check of the digests reports it
+            try:
+                names.loads_format(data)
             except ValueError as e:
                 out.append(f"{name}: {e}")
     return out
@@ -2989,12 +3101,19 @@ def check_object_storage(f, schema, obj_id, d, inv):
         for message in bad:
             f.error(at, message)
         malformed = malformed or bool(bad)
-        obj = read_json(d, inv, OBJ, ver) if OBJ in logical and not bad else None
+        obj = None
+        if OBJ in logical and not bad:
+            if read_logical(d, inv, OBJ, ver) is None:
+                f.error(at, "object.json cannot be read: it does not have the digest its inventory states "
+                        "(section 4.1)")
+            else:
+                obj = read_json(d, inv, OBJ, ver)
         if obj is None:
             continue
         schema(f"{at}/{OBJ}", obj, "object")
         for p in sorted(x for x in logical if x.startswith("parent/") and format_file(x)):
-            schema(f"{at}/{p}", read_json(d, inv, p, ver), format_file(p))
+            if read_logical(d, inv, p, ver) is not None:
+                schema(f"{at}/{p}", read_json(d, inv, p, ver), format_file(p))
         if kind != "owner":
             for message in reserved_name_errors(obj, logical):
                 f.error(at, message)
@@ -3202,10 +3321,11 @@ def check_lines(f, found, logs, schema, disc, resolver=None):
     return statuses
 
 
-def parent_resolution(found, resolver=None):
+def parent_resolution(found, logs, resolver=None):
     """RESOLVE(parent) for branch.verdict: (whether the line found holds the parent version with the
     digest of the pin, its status there) for a parent version that the verifier finds, held in
-    FOUND or resolved by RESOLVER; None for one it does not find."""
+    FOUND or resolved by RESOLVER; None for one it does not find. LOGS: {owner: key log} of the
+    key logs checked."""
     def resolve(p):
         try:
             pid = names.object_id(p["name"], p["owner"])
@@ -3218,7 +3338,7 @@ def parent_resolution(found, resolver=None):
                 return None
             if names.sha512_hex((pd / version / "inventory.json").read_bytes()) != digest:
                 return False, None
-            return True, line_statuses(pd, pinv)[1][n - 1]
+            return True, line_statuses(pd, pinv, logs.get(p["owner"]))[1][n - 1]
         if resolver is None:
             return None
         res = resolver.pin(p["name"], p["owner"], version, digest,
@@ -3250,7 +3370,7 @@ def check_branch(f, place, obj_id, d, inv, genesis, logs, found, tombstoned, res
                 f.error(at, "the identity files change without a new branch point (section 9.4)")
         else:
             v, problems = branch.verdict(branch.level_of_version(d, inv, ver), obj, genesis, logs.get,
-                                         resolve=parent_resolution(found, resolver))
+                                         resolve=parent_resolution(found, logs, resolver))
             verdicts.append(v)
             if v == branch.INCONSISTENT:
                 f.error(at, "inconsistent branch point: " + "; ".join(problems))
@@ -3258,18 +3378,18 @@ def check_branch(f, place, obj_id, d, inv, genesis, logs, found, tombstoned, res
                 f.warning(at, "unchecked branch point: " + "; ".join(problems))
             if prev_obj is not None and v != branch.INCONSISTENT:
                 old = prev_obj["parent"]
-                pinv_old = json.loads(read_logical(d, inv, "parent/inventory.json", f"v{int(ver[1:]) - 1}").read_bytes())
-                pinv_new = json.loads(read_logical(d, inv, "parent/inventory.json", ver).read_bytes())
+                held = [read_logical(d, inv, "parent/inventory.json", v) for v in (f"v{int(ver[1:]) - 1}", ver)]
+                pinv_old, pinv_new = [json.loads(x.read_bytes()) if x else None for x in held]
                 if (p.get("owner"), p.get("name")) != (old.get("owner"), old.get("name")):
                     f.error(at, "a new branch point is a version of the same parent line (section 9.4)")
                 elif int(p["objectVersion"][1:]) <= int(old["objectVersion"][1:]) or \
                         p.get("documentVersion") == old.get("documentVersion"):
                     f.error(at, "a new branch point is a higher object version, holding another document "
                             "version (section 9.4)")
-                if pinv_old.get("id") != pinv_new.get("id") or any(
+                if isinstance(pinv_old, dict) and isinstance(pinv_new, dict) and (pinv_old.get("id") != pinv_new.get("id") or any(
                         pinv_new.get("versions", {}).get(v) != e for v, e in pinv_old.get("versions", {}).items()) or any(
                         dg not in pinv_new.get("manifest", {}) for e in pinv_old.get("versions", {}).values()
-                        for dg in e.get("state", {})):
+                        for dg in e.get("state", {}))):
                     f.error(at, "the new parent inventory does not continue the previous one (section 9.4)")
         prev_obj, prev_ev = obj, ev
     if not verdicts:
@@ -3306,13 +3426,19 @@ def check_branch(f, place, obj_id, d, inv, genesis, logs, found, tombstoned, res
 def has_part_errors(d, inv, ver, mem):
     """The DOIs of members (a catalogue member's doi, a selection revision's doi) of the collection
     version VER in D to which its datacite.json has no HasPart relation (section 8.6)."""
-    dc = read_json(d, inv, "datacite.json", ver) or {}
+    kind = mem.get("type") if isinstance(mem, dict) else None
+    try:
+        dc = read_json(d, inv, "datacite.json", ver) or {}
+    except ValueError:
+        return []       # not JSON: reported with the descriptions
+    dc = dc if isinstance(dc, dict) else {}
     rels = dc.get("relatedIdentifiers") if isinstance(dc.get("relatedIdentifiers"), list) else []
     parts = {str(r.get("relatedIdentifier")).lower() for r in rels if isinstance(r, dict)
              and r.get("relationType") == "HasPart" and r.get("relatedIdentifierType") == "DOI"}
     members = [m for m in mem.get("members", []) if isinstance(m, dict)] if isinstance(mem, dict) else []
-    dois = [m.get("doi") for m in members] + [r.get("doi") for m in members
-                                               for r in (m.get("revisions") or []) if isinstance(r, dict)]
+    dois = [m.get("doi") for m in members if kind == "catalogue"] + \
+        [r.get("doi") for m in members if kind == "selection"
+         for r in (m.get("revisions") if isinstance(m.get("revisions"), list) else []) if isinstance(r, dict)]
     return [f"datacite.json has no HasPart relation to {doi}, the DOI of a member (section 8.6)"
             for doi in dict.fromkeys(x for x in dois if isinstance(x, str) and x) if doi.lower() not in parts]
 
@@ -3438,8 +3564,11 @@ def check_indexes(f, schema, disc):
         if index not in INDEX_KEY:
             continue
         key, held = INDEX_KEY[index], []
-        for p in sorted((ROOT / index).glob("*.json")) if (ROOT / index).is_dir() else []:
+        folder = ROOT / index
+        for p in sorted(folder.glob("*.json")) if folder.is_dir() and not through_link(folder) else []:
             place = f"{index}/{p.name}"
+            if p.is_symlink():
+                continue    # a link, reported with the others: never followed (section 15.2)
             try:
                 data = names.loads_format(p.read_bytes())
             except ValueError as e:
@@ -3552,7 +3681,9 @@ def check_archive(f, found, statuses, disc):
         f.warning("opensheaf.json", f"extensions does not list {e}, which objects use (section 3.1)")
     seen = set()
     needed = {names.object_id(i.split(":")[2], i.split(":")[2]) for i in found if not i.startswith("sheaf:draft:")}
-    for t in disc.get("tombstones", []):
+    for t in disc.get("tombstones") if isinstance(disc.get("tombstones"), list) else []:
+        if not isinstance(t, dict):
+            continue    # the schema reports it
         tid = t.get("id")
         if tid != names.object_id(t.get("name"), t.get("owner")):
             f.error("opensheaf.json", f"the tombstone {tid} is not the line of its name and owner (section 13.3)")
@@ -3595,7 +3726,7 @@ def check_presentation(f, disc):
             report("index.html", f"does not show the pin of {m.get('name')}" + note)
         try:
             obj_id = names.object_id(m.get("name"), m.get("owner"))
-            held_here = (obj_dir(obj_id) / "inventory.json").is_file() and obj_dir(obj_id) not in SKIPPED
+            held_here = load_inventory(obj_dir(obj_id)) is not None
         except (ValueError, TypeError):
             continue
         if held_here:
@@ -3688,7 +3819,9 @@ def verify_findings(remote=False, keeper_fetch=None):
         return f
     schema = schema_checker(f)
     disc_path, disc = ROOT / "opensheaf.json", {}
-    if not disc_path.exists():
+    if disc_path.is_symlink():
+        pass        # a link, reported with the others: never followed (section 15.2)
+    elif not disc_path.exists():
         f.error("opensheaf.json", "the discovery document is missing (section 3.1)")
     else:
         try:
@@ -3708,20 +3841,23 @@ def verify_findings(remote=False, keeper_fetch=None):
             if "objectPages" in disc:
                 disc["objects"] = check_object_pages(f, schema, disc)
     SKIPPED.clear()
-    global STATUSES
-    before, STATUSES = STATUSES, ({} if STATUSES is None else STATUSES)
+    global STATUSES, CHECKED_READS, KEY_LOGS
+    before = STATUSES, CHECKED_READS, KEY_LOGS
+    STATUSES = {} if STATUSES is None else STATUSES
+    CHECKED_READS, KEY_LOGS = {}, {}
     try:
         with sign.remembered():
             return checked(f, schema, disc, remote, keeper_fetch)
     finally:
         SKIPPED.clear()
-        STATUSES = before
+        STATUSES, CHECKED_READS, KEY_LOGS = before
 
 
 def checked(f, schema, disc, remote, keeper_fetch):
     """The steps of section 14, with their findings in F."""
     found = guarded(f, "the storage root", check_storage, f, schema, disc) or {}
     logs = guarded(f, "the key logs", check_key_logs, f, found, schema) or {}
+    KEY_LOGS.update(logs)
     guarded(f, "the keepers", check_keepers, f, logs, remote, keeper_fetch, schema)
     resolver = None
     if remote:
@@ -3751,7 +3887,7 @@ def guarded(f, what, step, *args):
     """STEP(*ARGS), or None after an error in F if it stops on a file it cannot read."""
     try:
         return step(*args)
-    except UNREADABLE as e:
+    except (*UNREADABLE, SystemExit) as e:
         f.error("archive", f"the checks of {what} stopped on a file they cannot read "
                 f"({type(e).__name__}: {str(e)[:300]}); the rest of them are not made")
         return None

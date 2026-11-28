@@ -2,6 +2,7 @@
 """Tests of paths, links and malformed files: the tools stay inside the archive and report
 what they cannot read (no TeXmacs, no network)."""
 
+import hashlib
 import json
 import os
 import sys
@@ -129,9 +130,52 @@ def test_content_paths_outside_the_object_are_not_read(archive, tmp_path, where)
     with pytest.raises(P.UnsafePath):
         P.read_json(d, inv, P.OBJ)
     errors = P.verify_errors()
-    assert any("not read" in e for e in errors)
+    assert any("not read" in e or "never followed" in e for e in errors)
     with pytest.raises(SystemExit, match="nothing is read"):
         run("--root", str(archive), "describe", "paper-a", "--title", "T")
+
+
+def test_the_verifier_follows_no_link(archive, tmp_path):
+    put("paper-a", 1, FILES1)
+    finish()
+    secret = tmp_path / "outside.json"
+    secret.write_text('{"format": "opensheaf-index/0.2", "index": "SECRET-FROM-OUTSIDE", "entries": []}')
+    index_file = sorted((archive / "names").glob("*.json"))[0]
+    index_file.unlink()
+    os.symlink(secret, index_file)
+    d = P.obj_dir(P.LABELS["paper-a"])
+    copy = tmp_path / "inventory.json"
+    copy.write_bytes((d / "inventory.json").read_bytes())
+    (d / "inventory.json").unlink()
+    os.symlink(copy, d / "inventory.json")
+    copy.chmod(0)
+    try:
+        found = P.verify_findings()
+    finally:
+        copy.chmod(0o644)
+    text = json.dumps(found)
+    assert "SECRET" not in text and "Permission" not in text and "stopped on a file" not in text, text
+    links = sorted(x["place"] for x in found if x["severity"] == "error"
+                   and x["message"] == "a symbolic link in the archive: never followed (section 15.2)")
+    inventory = (d / "inventory.json").relative_to(archive).as_posix()
+    assert links == sorted([index_file.relative_to(archive).as_posix(), inventory])
+    assert {"severity": "warning", "place": d.relative_to(archive).as_posix(),
+            "message": "an object holding a symbolic link: not read, nor given to the OCFL validator "
+                       "(section 15.2)"} in found
+    assert not any(x["message"].startswith("OCFL validator:") for x in found)
+
+
+def test_the_verifier_walks_no_linked_storage_root(archive, tmp_path):
+    put("paper-a", 1, FILES1)
+    finish()
+    elsewhere = tmp_path / "elsewhere"
+    os.rename(P.OCFL, elsewhere)
+    os.symlink(elsewhere, P.OCFL)
+    found = P.verify_findings()
+    assert {"severity": "error", "place": "ocfl",
+            "message": "a symbolic link in the archive: never followed (section 15.2)"} in found
+    assert not any("stopped on a file" in x["message"] or "OCFL validator" in x["message"] for x in found)
+    assert not any(x["severity"] == "result" and x["place"] == "paper-a" for x in found)
 
 
 @pytest.mark.parametrize("setting", [{"htmlResources": ["../../.ssh/id_ed25519"]},
@@ -218,7 +262,7 @@ def break_inventory(d, change):
 @pytest.mark.parametrize("case", ["documentVersion text", "documentVersion missing", "discovery list",
                                   "deep inventory", "object.json latin-1", "object.json bom", "number 2.0",
                                   "number beyond", "discovery number", "extension float", "label newline", "storageRoot absolute", "hashed config",
-                                  "versions list", "user text"])
+                                  "versions list", "user text", "tombstones mapping"])
 def test_the_verifier_reports_what_it_cannot_read(archive, case):
     put("paper-a", 1, FILES1, extra_obj={"documentVersion": "1"} if case == "documentVersion text" else None)
     finish()
@@ -242,7 +286,8 @@ def test_the_verifier_reports_what_it_cannot_read(archive, case):
                 "label newline": "'paper-a\\n' does not match",
                 "storageRoot absolute": "storageRoot '/srv/ocfl/' is not a relative path of a folder below",
                 "extension float": "object.json: the number 0.5 is not an integer", "hashed config": "config.json is not a JSON object",
-                "versions list": "no versions", "user text": "a user that is not"}[case]
+                "versions list": "no versions", "user text": "a user that is not",
+                "tombstones mapping": "{'a': 1} is not of type 'array'"}[case]
     if case == "discovery list":
         (archive / "opensheaf.json").write_text("[]")
     elif case == "deep inventory":
@@ -268,6 +313,10 @@ def test_the_verifier_reports_what_it_cannot_read(archive, case):
         P.LAYOUT = P.HASHED_LAYOUT
         (P.OCFL / "extensions" / P.HASHED_LAYOUT).mkdir(parents=True)
         (P.OCFL / "extensions" / P.HASHED_LAYOUT / "config.json").write_text("[1")
+    elif case == "tombstones mapping":
+        disc = json.loads((archive / "opensheaf.json").read_text())
+        disc["tombstones"] = {"a": 1}
+        (archive / "opensheaf.json").write_text(json.dumps(disc))
     elif case == "versions list":
         break_inventory(d, lambda i: i.update(versions=["v1"]))
     elif case == "user text":
@@ -279,6 +328,54 @@ def test_the_verifier_reports_what_it_cannot_read(archive, case):
             P.LAYOUT = monkey
     assert any(expected in e for e in errors), errors
     assert not any("stopped on a file" in e for e in errors), [e for e in errors if "stopped" in e]
+
+
+def test_a_description_with_a_byte_order_mark(archive):
+    put("paper-a", 1, FILES1)
+    finish()
+    d = P.obj_dir(P.LABELS["paper-a"])
+    inv = P.load_inventory(d)
+    cp = P.content_path(inv, "v1", "datacite.json")
+    data = b"\xef\xbb\xbf" + (d / cp).read_bytes()
+    (d / cp).write_bytes(data)
+    old = next(dg for dg, cps in inv["manifest"].items() if cps == [cp])
+    new = hashlib.sha512(data).hexdigest()
+    inv["manifest"][new] = inv["manifest"].pop(old)
+    inv["versions"]["v1"]["state"][new] = inv["versions"]["v1"]["state"].pop(old)
+    rewrite(d, inv)
+    errors = P.verify_errors()
+    assert any(e.startswith("paper-a v1: datacite.json is not JSON in UTF-8 without a byte order mark")
+               for e in errors), errors
+    assert not any("stopped on a file" in e for e in errors), errors
+
+
+def test_a_missing_file_of_the_specification(archive):
+    put("paper-a", 1, FILES1)
+    finish()
+    d = P.obj_dir(P.LABELS["paper-a"])
+    inv = P.load_inventory(d)
+    cp = P.content_path(inv, "v1", P.OBJ)
+    (d / cp).unlink()
+    errors = P.verify_errors()
+    assert f"paper-a: missing {cp}" in errors
+    assert not any("cannot be read (" in e or "stopped on a file" in e for e in errors), errors
+
+
+def test_a_validator_that_stops(archive, monkeypatch):
+    ocfl = pytest.importorskip("ocfl")
+    put("paper-a", 1, FILES1)
+    assert finish() == []
+
+    def stops(self, **kw):
+        raise TypeError("the validator stops")
+    monkeypatch.setattr(ocfl.StorageRoot, "validate", stops)
+    found = P.verify_findings()
+    assert {"severity": "error", "place": "ocfl", "message": "the OCFL validator stopped on the storage "
+            "root (TypeError: the validator stops)"} in found
+    assert [x for x in found if x["severity"] == "error"] == [
+        {"severity": "error", "place": "ocfl", "message": "the OCFL validator stopped on the storage "
+         "root (TypeError: the validator stops)"}]
+    assert any(x["severity"] == "result" and x["place"] == "paper-a" for x in found)
 
 
 @pytest.mark.parametrize("text", ['{"format": "opensheaf-archive/0.2", "objects": [', "[]",

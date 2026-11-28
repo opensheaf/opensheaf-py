@@ -30,15 +30,24 @@ class Level:
         data = self.read(path) if path in self.digests else None
         try:
             return names.json_value(data) if data is not None else None
+        except P.DigestMismatch:
+            raise
         except ValueError:
             return None
 
 
 def level_of_version(d, inv, ver):
-    """The Level of the object version VER of the object in D."""
+    """The Level of the object version VER of the object in D, each file read only with the
+    digest its inventory states (DigestMismatch otherwise)."""
     state = inv["versions"][ver]["state"]
     digests = {p: dig for dig, ps in state.items() for p in ps}
-    return Level(digests, lambda p: P.content_file(d, inv["manifest"][digests[p]][0]).read_bytes())
+
+    def read(p):
+        data = P.content_file(d, inv["manifest"][digests[p]][0]).read_bytes()
+        if names.sha512_hex(data) != str(digests[p]).lower():
+            raise P.DigestMismatch(f"{p} does not have the digest its inventory states (section 4.1)")
+        return data
+    return Level(digests, read)
 
 
 def level_of_files(files):
@@ -57,6 +66,8 @@ def verdict(level, obj, genesis, logs, depth=0, resolve=None):
     None if it finds none, else (whether it matches the pin, its status there)."""
     try:
         return level_verdict(level, obj, genesis, logs, depth, resolve)
+    except P.DigestMismatch as e:
+        return INCONSISTENT, [f"the evidence of the branch point cannot be read: {e}"]
     except (ValueError, KeyError, IndexError, TypeError, AttributeError) as e:
         return INCONSISTENT, [f"the evidence of the branch point cannot be read: {type(e).__name__} {e}"]
 
@@ -124,6 +135,8 @@ def level_verdict(level, obj, genesis, logs, depth=0, resolve=None):
     resolved = resolve(p) if resolve is not None else None
     if resolved is not None and not resolved[0]:
         problems.append("the parent version, resolved, does not match the pin (section 9.3)")
+    elif resolved is not None and resolved[1] == sign.CONTESTED:
+        status = sign.CONTESTED
     elif resolved is not None and resolved[1] in (sign.SIGNED, sign.VOUCHED) and status != sign.CONTESTED:
         status = resolved[1]
     if status in (sign.UNSIGNED, sign.INVALID):

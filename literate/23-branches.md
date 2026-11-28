@@ -117,7 +117,14 @@ Checking a branch point
 The checks of section 9.3 read the content of a version level by level:
 the branch's own files, then, under `parent/parent/`, the parent's
 evidence, and so on. A `Level` is that view: the digests of its logical
-paths, and a function reading one.
+paths, and a function reading one. The files of a version are read with
+a check of their digests: a file whose bytes do not have the digest its
+inventory states is not read (`DigestMismatch`, [chapter 10](10-archive.md)),
+so that tampered evidence is never judged as if it were the evidence the
+inventory, and the signatures over it, fix. The evidence is what the
+verdict interprets; the check of the digests of the files of the object
+reports the file, and the branch point is inconsistent, since its
+evidence cannot be read.
 
     # in branches: the content of a version, level by level:
     class Level:
@@ -135,15 +142,24 @@ paths, and a function reading one.
             data = self.read(path) if path in self.digests else None
             try:
                 return names.json_value(data) if data is not None else None
+            except P.DigestMismatch:
+                raise
             except ValueError:
                 return None
 
 
     def level_of_version(d, inv, ver):
-        """The Level of the object version VER of the object in D."""
+        """The Level of the object version VER of the object in D, each file read only with the
+        digest its inventory states (DigestMismatch otherwise)."""
         state = inv["versions"][ver]["state"]
         digests = {p: dig for dig, ps in state.items() for p in ps}
-        return Level(digests, lambda p: P.content_file(d, inv["manifest"][digests[p]][0]).read_bytes())
+
+        def read(p):
+            data = P.content_file(d, inv["manifest"][digests[p]][0]).read_bytes()
+            if names.sha512_hex(data) != str(digests[p]).lower():
+                raise P.DigestMismatch(f"{p} does not have the digest its inventory states (section 4.1)")
+            return data
+        return Level(digests, read)
 
 
     def level_of_files(files):
@@ -204,6 +220,8 @@ they should be).
         None if it finds none, else (whether it matches the pin, its status there)."""
         try:
             return level_verdict(level, obj, genesis, logs, depth, resolve)
+        except P.DigestMismatch as e:
+            return INCONSISTENT, [f"the evidence of the branch point cannot be read: {e}"]
         except (ValueError, KeyError, IndexError, TypeError, AttributeError) as e:
             return INCONSISTENT, [f"the evidence of the branch point cannot be read: {type(e).__name__} {e}"]
 
@@ -283,7 +301,10 @@ find the parent's line, held in the archive or resolved (`resolve`): a
 parent version that it holds with another digest than the pin's makes the
 branch point inconsistent, and one that a signed version of that line
 vouches for counts as signed, whatever signature files the evidence
-carries (section 9.3). A parent version that is not a version otherwise
+carries (section 9.3). One that the verifier finds contested there is
+contested, even when the evidence carries good signatures: section 9.3
+confirms a branch point only for a parent version signed and not
+contested, so it is then unchecked. A parent version that is not a version otherwise
 (unsigned, or with an invalid signature file and no good ones) makes the
 branch point inconsistent.
 
@@ -303,6 +324,8 @@ branch point inconsistent.
     resolved = resolve(p) if resolve is not None else None
     if resolved is not None and not resolved[0]:
         problems.append("the parent version, resolved, does not match the pin (section 9.3)")
+    elif resolved is not None and resolved[1] == sign.CONTESTED:
+        status = sign.CONTESTED
     elif resolved is not None and resolved[1] in (sign.SIGNED, sign.VOUCHED) and status != sign.CONTESTED:
         status = resolved[1]
     if status in (sign.UNSIGNED, sign.INVALID):

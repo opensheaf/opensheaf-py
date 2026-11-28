@@ -257,11 +257,12 @@ is written when nothing changes.
 
 The description (section 8.6): the title and abstract given, the curator
 of the archive as creator, the archive as publisher, the type
-`Collection`, a `HasPart` relation to the version DOI of every member and
-revision that has one, and CC0, since a collection holds only metadata.
+`Collection`, a `HasPart` relation to the version DOI of every member of
+a catalogue and of every revision of a selection that has one, and CC0,
+since a collection holds only metadata.
 
     # in collections: writing a collection version:
-    def describe(title, description, version, issued, members, url=None):
+    def describe(title, description, version, issued, members, url=None, kind="catalogue"):
         cur = P.ARCHIVE["curator"]
         creator = {"name": cur["name"], "nameType": "Personal", "familyName": cur["familyName"]}
         if cur.get("givenName"):
@@ -275,7 +276,7 @@ revision that has one, and CC0, since a collection holds only metadata.
             dc["url"] = url
         if description:
             dc["descriptions"] = [{"description": description, "descriptionType": "Abstract"}]
-        dois = [m["doi"] for m in members if m.get("doi")] + \
+        dois = [m["doi"] for m in members if m.get("doi")] if kind == "catalogue" else \
             [r["doi"] for m in members for r in m.get("revisions", []) if r.get("doi")]
         if dois:
             dc["relatedIdentifiers"] = [{"relatedIdentifier": x, "relatedIdentifierType": "DOI",
@@ -318,7 +319,8 @@ revision that has one, and CC0, since a collection holds only metadata.
         label = label or P.label_of(coll_id)
         files = {"members.json": P.json_bytes(mem), P.GENESIS: genesis,
                  "datacite.json": P.json_bytes(describe(title, description, version, issued, mem["members"],
-                                                        P.landing_url(coll_id) if label else None))}
+                                                        P.landing_url(coll_id) if label else None,
+                                                        mem.get("type")))}
         obj = {"format": P.OBJ_FORMAT, "specification": P.SPEC, "kind": "collection",
                "name": coll_id.split(":")[1], "owner": owner, "documentVersion": version, "status": "active"}
         if label:

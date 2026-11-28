@@ -27,11 +27,14 @@ def draft_dir(draft_id):
 
 
 def remove(d):
-    """Remove the draft in D, and the folder draft/ of the storage root when it is left empty: an
-    empty folder there is not an object, and OCFL validators refuse it (E073)."""
+    """Remove the draft in D, and the folders above it left empty, up to the storage root (draft/,
+    or the tuples of the hashed layout): an empty folder there is not an object, and OCFL
+    validators refuse it (E073)."""
     shutil.rmtree(P.unlinked(d))
-    if d.parent != P.OCFL and d.parent.is_dir() and not any(d.parent.iterdir()):
-        d.parent.rmdir()
+    parent = d.parent
+    while parent != P.OCFL and P.OCFL in parent.parents and parent.is_dir() and not any(parent.iterdir()):
+        parent.rmdir()
+        parent = parent.parent
 
 
 def drop_head(d, inv):

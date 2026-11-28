@@ -593,8 +593,10 @@ pinned object version does not hold.
         assert any("v1: does not hold document version 2" in e for e in errors)
 
 The checks of 14.2, 14.4 and 8.6 added in the final review: the
-`datacite.json` of a collection version relates to the DOI of each member
-that has one by `HasPart` (section 8.6); a tombstone with the genesis name
+`datacite.json` of a collection version relates by `HasPart` to the DOI
+of each member of a catalogue and of each revision of a selection that
+has one (section 8.6), and not to a `doi` given to a member of a
+selection, as the tools write it; a tombstone with the genesis name
 of a line, of a line of the originator, is that line, so that another
 originator's line under the same genesis record is an error (sections 5.4
 and 14.4); a signature file of a witness folder is checked against its
@@ -613,6 +615,19 @@ an owner against the object schema.
         errors = finish()
         assert any(e.endswith("datacite.json has no HasPart relation to 10.5281/zenodo.123, the DOI of a member "
                               "(section 8.6)") for e in errors), errors
+        from opensheaf import collections
+        revision = {"documentVersion": 1, "version": "v1", "inventorySha512": pin1, "doi": "10.5281/zenodo.456"}
+        vetted = {k: v for k, v in member.items() if k not in ("version", "inventorySha512", "follow")}
+        vetted.update(doi="10.5281/zenodo.999", revisions=[revision])
+        put_collection("vetted", [vetted], "selection")
+        errors = finish()
+        assert any(e.endswith("datacite.json has no HasPart relation to 10.5281/zenodo.456, the DOI of a member "
+                              "(section 8.6)") for e in errors), errors
+        assert not any("HasPart relation to 10.5281/zenodo.999" in e for e in errors), errors
+        dc = collections.describe("T", None, 1, "2026-01-01", [vetted], kind="selection")
+        assert [r["relatedIdentifier"] for r in dc["relatedIdentifiers"]] == ["10.5281/zenodo.456"]
+        dc = collections.describe("T", None, 1, "2026-01-01", [member])
+        assert [r["relatedIdentifier"] for r in dc["relatedIdentifiers"]] == ["10.5281/zenodo.123"]
         disc = json.loads((archive / "opensheaf.json").read_text())
         genesis = P.read_logical(d, inv, P.GENESIS).read_bytes()
         other = names.name(genesis, 1)

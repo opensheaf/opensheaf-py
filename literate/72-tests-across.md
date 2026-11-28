@@ -37,6 +37,9 @@ does. They are in `tests/test_across.py`.
 
     <<across: takedowns and indexes>>
 
+
+    <<across: what the verifier reads>>
+
 The helpers
 -----------
 
@@ -1582,7 +1585,11 @@ records: its bytes are hashed, not its stated digest trusted. The parent
 version that the verifier finds in the parent's line decides too (section
 9.3): found with another digest than the pin's, the branch point is
 inconsistent; found signed, it counts as signed, even when the evidence
-carries no signature files.
+carries no signature files; found contested, it is contested, even when the
+evidence carries good signatures, and the branch point is unchecked. The
+statuses of a parent line held here are judged against the key logs the
+verifier checked, passed in: a parent owner's key log that cannot be read
+is reported once and never ends the verification.
 
     # in across: branches and accepted copies:
     def test_inconsistent_branch_point(tmp_path):
@@ -1618,9 +1625,14 @@ carries no signature files.
         pid = line(a, "paper")
         pd = P.obj_dir(pid)
         found = {pid: (pd, P.load_inventory(pd))}
-        assert P.parent_resolution(found)(obj["parent"]) == (True, sign.SIGNED)
-        assert P.parent_resolution(found)(dict(obj["parent"], inventorySha512="0" * 128)) == (False, None)
-        assert P.parent_resolution({})(obj["parent"]) is None
+        v, problems = branch.verdict(level, obj, genesis, P.key_log, resolve=lambda p: (True, sign.CONTESTED))
+        assert v == branch.UNCHECKED and "the parent version is contested (section 9.3)" in problems
+        owner = obj["parent"]["owner"]
+        logs = {owner: P.key_log(owner)}
+        assert P.parent_resolution(found, logs)(obj["parent"]) == (True, sign.SIGNED)
+        assert P.parent_resolution(found, logs)(dict(obj["parent"], inventorySha512="0" * 128)) == (False, None)
+        assert P.parent_resolution({}, logs)(obj["parent"]) is None
+        assert P.parent_resolution(found, {})(obj["parent"]) == (True, sign.UNCHECKED)
 
 A branch numbers its own document versions from 1 (section 9.4), and
 holds none of the parent's earlier versions: its history, once written,
@@ -1716,18 +1728,21 @@ deleted, and leaves no tombstone.
         assert errors(a) == []
 
 A draft sealed with `--delete-draft` goes as one deleted does, with the
-folder `draft/` once it is empty: an empty folder in the storage root is
-an error of OCFL validators (E073).
+folder `draft/` once it is empty, and under the hashed layout the folders
+of its tuples: an empty folder in the storage root is an error of OCFL
+validators (E073).
 
     # in across: drafts:
-    def test_seal_delete_draft_leaves_no_empty_folder(tmp_path):
-        a = make(tmp_path, "a")
+    @pytest.mark.parametrize("layout", ["owner-name", "hashed"])
+    def test_seal_delete_draft_leaves_no_empty_folder(tmp_path, layout):
+        a = make(tmp_path, "a", *(["--layout", "hashed"] if layout == "hashed" else []))
         pdf = tmp_path / "d.pdf"
         pdf.write_bytes(b"%PDF-1.4 draft")
         run("--root", str(a), "draft", "new", "notes", "--pdf", str(pdf), "--no-source", "x", "--title", "Notes",
             "--author", "Doe, J")
         run("--root", str(a), "seal", "notes", "--label", "lecture-notes", "--delete-draft")
         assert not (P.OCFL / "draft").exists()
+        assert [p for p in P.OCFL.rglob("*") if p.is_dir() and not any(p.iterdir())] == []
         assert errors(a) == []
 
 Takedowns and indexes
@@ -1883,3 +1898,101 @@ every version. A tampered index is reported by the verifier.
         target = a / "sha512" / f"{shas[0]['inventorySha512'][:2]}.json"
         target.unlink()
         assert any("no entry, or a stale one" in e for e in errors(a))
+
+What the verifier reads
+-----------------------
+
+The verifier reads the files of a version whose content it interprets
+only with the digests their inventory states, as the JavaScript tools do
+([chapter 17](17-verify.md)); these cases are judged alike by both. A
+genesis record changed on disk, here to hold a number of section 2's
+forbidden form, is only a file that does not have its digest: its content
+is not judged. An `object.json` changed on disk cannot be read, an error,
+and its version is judged without it: the line of the identifier is not
+recorded, and the signature names a signer that is not the line's owner,
+since the owner is read from it. The evidence of a branch point changed
+on disk, a signature file here, makes the branch point inconsistent,
+though the parent version is held in the archive and signed there.
+
+    # in across: what the verifier reads:
+    def test_the_verifier_reads_files_with_their_digests(tmp_path):
+        a = make(tmp_path, "a")
+        deposit(a, "paper", "one", new=True)
+        d = P.obj_dir(line(a, "paper"))
+        inv = P.load_inventory(d)
+        g = d / P.content_path(inv, "v1", P.GENESIS)
+        good = g.read_bytes()
+        g.write_bytes(good.replace(b"{", b'{"x": 1e3, ', 1))
+        errs = errors(a)
+        assert f"paper: {P.content_path(inv, 'v1', P.GENESIS)} does not have the digest of the manifest" in errs
+        assert not any("1e3" in e for e in errs), errs
+        g.write_bytes(good)
+        assert errors(a) == []
+        o = d / P.content_path(inv, "v1", P.OBJ)
+        o.write_bytes(o.read_bytes().replace(b'"documentVersion": 1', b'"documentVersion":  1'))
+        found = [(x["severity"], x["place"], x["message"]) for x in findings(a)]
+        assert ("error", "paper v1", "object.json cannot be read: it does not have the digest its inventory "
+                "states (section 4.1)") in found
+        assert ("error", "paper v1", "object.json does not record the line of the identifier (section 4.3)") in found
+        assert ("warning", "paper v1", "not a version of the line: invalid (sections 7.3 and 7.5)") in found
+        assert any(s == "warning" and m.endswith("invalid: its signer is not the owner of the line")
+                   for s, _, m in found), found
+
+
+    def test_tampered_evidence_is_not_read(tmp_path):
+        a, j = make(tmp_path, "authors"), make(tmp_path, "journal")
+        deposit(a, "paper", "one", new=True)
+        run("--root", str(j), "branch", uri(a, "paper", 1), "--label", "accepted")
+        pd = P.obj_dir(line(a, "paper"))
+        shutil.copytree(pd, j / pd.relative_to(a))
+        d = P.obj_dir(line(j, "accepted"))
+        inv = P.load_inventory(d)
+        sig = next(p for ps in inv["versions"]["v1"]["state"].values() for p in ps
+                   if p.startswith("parent/signatures/"))
+        c = d / P.content_path(inv, "v1", sig)
+        c.write_bytes(c.read_bytes().replace(b'"signature": "', b'"signature": "A', 1))
+        errs = errors(j)
+        assert f"accepted v1: inconsistent branch point: the evidence of the branch point cannot be read: {sig} " \
+            "does not have the digest its inventory states (section 4.1)" in errs, errs
+
+A key log that cannot be read is an error at its owner object, once, and
+never ends the verification: the lines of its owner, a parent line held
+beside its branch here, are judged without it, wherever the verifier asks
+for their statuses.
+
+    # in across: what the verifier reads:
+    def test_a_key_log_that_cannot_be_read_ends_nothing(tmp_path):
+        a, j = make(tmp_path, "authors"), make(tmp_path, "journal")
+        deposit(a, "paper", "one", new=True)
+        run("--root", str(j), "branch", uri(a, "paper", 1), "--label", "accepted")
+        pid = line(a, "paper")
+        pd = P.obj_dir(pid)
+        shutil.copytree(pd, j / pd.relative_to(a))
+        owner = pid.split(":")[2]
+        P.configure(j)
+        (P.obj_dir(names.object_id(owner, owner)) / "inventory.json").write_text("{not json")
+        found = findings(j)
+        assert not any("stopped on a file" in x["message"] for x in found), found
+        assert any(x["severity"] == "error" and x["message"] == "an object without a readable inventory"
+                   for x in found)
+        assert any(x["message"].startswith(f"the key log of its owner {owner} is not in the storage root")
+                   for x in found)
+
+Every folder of an object that the verifier reads is given to the OCFL
+validator once, two objects with the same identifier included: here a copy
+of a line, at a path of the storage root that sorts before the line's own,
+holds a file that OCFL does not allow in the root of an object, and the
+validator reports it.
+
+    # in across: what the verifier reads:
+    def test_both_objects_of_one_identifier_are_validated(tmp_path):
+        pytest.importorskip("ocfl")
+        a = make(tmp_path, "a")
+        deposit(a, "paper", "one", new=True)
+        d = P.obj_dir(line(a, "paper"))
+        copy = P.OCFL / "0" / d.name
+        shutil.copytree(d, copy)
+        (copy / "stray.txt").write_text("not of OCFL")
+        errs = errors(a)
+        assert "paper: two objects of the storage root have this identifier (section 4)" in errs
+        assert any(e.startswith("paper: OCFL validator:") and "stray.txt" in e for e in errs), errs

@@ -421,7 +421,10 @@ which the command says, and `osheaf label` gives them again.
 
 
     def read_discovery(path):
-        """(the discovery document at PATH, or {}, and why it cannot be read, or None)."""
+        """(the discovery document at PATH, or {}, and why it cannot be read, or None); a symbolic link
+        is not followed (section 15.2)."""
+        if path.is_symlink():
+            return {}, "the discovery document is a symbolic link: not read (section 15.2)"
         if not path.exists():
             return {}, None
         try:
@@ -856,7 +859,13 @@ archive: `osheaf deposit` empties the folder of the HTML version before
 writing it again, and through a link it would empty the folder linked to.
 The tools refuse any write or deletion whose path, below the archive root,
 passes through a symbolic link, as the JavaScript port does; paths outside
-the archive (temporary folders, the exported keys) are not checked. The one
+the archive (temporary folders, the exported keys) are not checked. The
+same test, `through_link`, keeps the readers of the
+[verifier](17-verify.md) from following a link (section 15.2): the root
+inventory of an object, the storage root itself (`not_followed`, which
+holds while a verifier runs: a command reads through a link, and stops
+when it would write through it), the discovery document and its pages,
+the files of the indexes. The one
 link the tools make themselves, `texmacs_home/plugins`, is only read
 through.
 
@@ -888,6 +897,25 @@ its owner only, and the website must be readable by the server).
                 stop(f"{at.relative_to(ROOT)} is a symbolic link: the tools write and delete nothing "
                      "through links in the archive (remove the link, or put the folder in its place)")
         return p
+
+
+    def through_link(path):
+        """Whether the path PATH of the archive passes through a symbolic link below the archive root,
+        PATH itself included; a path outside the archive does not."""
+        if ROOT is None:
+            return False
+        full = Path(path) if Path(path).is_absolute() else Path.cwd() / path
+        try:
+            rel = full.relative_to(ROOT)
+        except ValueError:
+            return False
+        return owners.linked(ROOT, rel)
+
+
+    def not_followed(path):
+        """Whether a verifier, while it runs, leaves the path PATH of the archive unread, since it
+        passes through a symbolic link (section 15.2)."""
+        return CHECKED_READS is not None and through_link(path)
 
 
     def write_file(path, data):
@@ -987,11 +1015,16 @@ layout, is authoritative. Creating the root is idempotent.
 
 The root inventory of an object, or `None` for an object not yet created
 or one whose inventory cannot be read (not JSON, nested too deep, or not a
-JSON object), which [verification](17-verify.md) reports.
+JSON object), which [verification](17-verify.md) reports. In a verifier,
+an inventory reached through a symbolic link is not read (section 15.2),
+nor that of an object it has left out (`SKIPPED`, below), so that no
+later step of the verification reads it again.
 
     # in read the inventory of an object:
     def load_inventory(obj_dir):
         p = obj_dir / "inventory.json"
+        if obj_dir in SKIPPED or not_followed(p):
+            return None
         try:
             inv = names.json_value(p.read_text(encoding="utf-8")) if p.exists() else None
         except (ValueError, UnicodeDecodeError):
@@ -1045,9 +1078,32 @@ object folder down, and names a regular file (or nothing yet); otherwise it
 raises `UnsafePath`, which the command line turns into a message and the
 verifier into a finding.
 
+The verifier reads the files of a version whose content it interprets
+(`object.json`, `datacite.json`, `members.json`, the genesis record, the
+evidence of a branch point) only with a check of their digests against
+the inventory, as the JavaScript tools read every file. The signatures
+and the pins fix the inventory, and through it the digest of each file,
+not the bytes on disk: a file changed after its version was written is
+reported by the check of the digests ("does not have the digest of the
+manifest", as the OCFL validator reports it), and is otherwise treated
+as not read, never judged as if it were the file the inventory names.
+While `CHECKED_READS` is a dict, which `verify_findings` makes for one
+check of the archive, `read_logical` gives `None` for such a file, and
+remembers the verdict on each file; the commands, which read the files
+they wrote themselves, do not check them. `DigestMismatch` is the error
+of a reader that checks digests on its own, as the evidence of a branch
+point is read ([chapter 23](23-branches.md)).
+
     # in the file holding a logical path:
     class UnsafePath(ValueError):
         """A content path of an inventory that the tools do not read."""
+
+
+    class DigestMismatch(ValueError):
+        """A file of an object version whose bytes do not have the digest its inventory states."""
+
+
+    CHECKED_READS = None    # {(file, digest): whether the file has it}, while a verifier runs
 
 
     def content_problem(obj_dir, cp):
@@ -1080,9 +1136,34 @@ verifier into a finding.
         return Path(obj_dir) / cp
 
 
+    def logical_digest(inv, version, logical):
+        """The digest the state of VERSION in INV gives the logical path LOGICAL, or None."""
+        for dig, paths in inv["versions"][version]["state"].items():
+            if logical in paths:
+                return dig
+        return None
+
+
+    def has_digest(path, dig):
+        """Whether the file PATH has the digest DIG (sha512), remembered while CHECKED_READS is a dict."""
+        key = (str(path), dig)
+        if key not in CHECKED_READS:
+            try:
+                CHECKED_READS[key] = isinstance(dig, str) and digest(path) == dig.lower()
+            except OSError:
+                CHECKED_READS[key] = False
+        return CHECKED_READS[key]
+
+
     def read_logical(obj_dir, inv, logical, version=None):
-        cp = content_path(inv, version or inv["head"], logical)
-        return content_file(obj_dir, cp) if cp else None
+        version = version or inv["head"]
+        cp = content_path(inv, version, logical)
+        if not cp:
+            return None
+        path = content_file(obj_dir, cp)
+        if CHECKED_READS is not None and not has_digest(path, logical_digest(inv, version, logical)):
+            return None
+        return path
 
 Most files the tools read are JSON: `object.json`, `datacite.json`,
 `members.json`. Reading one of a given version is the common case.
@@ -1094,7 +1175,8 @@ Most files the tools read are JSON: `object.json`, `datacite.json`,
 
 The objects of the storage root are its folders marked as OCFL objects,
 wherever the layout puts them: the storage root is walked, without
-following symbolic links (section 15.2), and without entering an object
+following symbolic links (section 15.2), nor, in a verifier, a storage
+root that is itself reached through one, and without entering an object
 or the storage root's own `extensions/`. Each is given with the identifier
 its inventory states, the [verifier](17-verify.md) checking that the
 layout puts it where it is, and sorted by identifier so that every listing
@@ -1120,7 +1202,7 @@ is reproducible.
                     out.append(((inv or {}).get("id"), c, inv))
                 elif not (d == OCFL and c.name == "extensions"):
                     walk(c)
-        if OCFL is not None and OCFL.exists():
+        if OCFL is not None and OCFL.exists() and not not_followed(OCFL):
             walk(OCFL)
         return sorted(out, key=lambda o: (str(o[0]), str(o[1])))
 
@@ -1390,11 +1472,23 @@ of that owner, which is where the owner-name layout puts it, next to them.
 
     <<show the versions a new version would extend>>
 
-The key log of an owner is read from its owner object, or is absent.
+The key log of an owner is read from its owner object, or is absent. A
+command stops on a key log that cannot be read. A verifier never stops
+(section 14.1): while it runs, `KEY_LOGS` holds the key logs it has read
+and checked ([chapter 17](17-verify.md)), and the key log of an owner is
+the one there; one that cannot be read is an error of its own, reported
+once, and the lines of its owner are judged without it, wherever the
+verifier asks for their statuses.
 
     # in the key log of an owner in the storage root:
+    KEY_LOGS = None     # {owner name: KeyLog} of the key logs a verifier has checked, while it runs
+
+
     def key_log(owner):
-        """The key log of OWNER kept in the storage root (section 6.5), or None."""
+        """The key log of OWNER kept in the storage root (section 6.5), or None; in a verifier, the one
+        it has checked."""
+        if KEY_LOGS is not None:
+            return KEY_LOGS.get(owner)
         d = obj_dir(names.object_id(owner, owner))
         if not (d / "inventory.json").exists():
             return None
@@ -1506,7 +1600,7 @@ and nothing is kept, as commands change the lines they read.
 
     def computed_line_statuses(d, inv, log):
         """line_statuses(D, INV, LOG), computed."""
-        owner = read_json(d, inv, OBJ, "v1").get("owner")
+        owner = (read_json(d, inv, OBJ, "v1") or {}).get("owner")
         if log is False:
             log = key_log(owner) if owner else None
         versions = []

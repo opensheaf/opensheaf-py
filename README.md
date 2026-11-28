@@ -39,7 +39,7 @@ pipx install "opensheaf[validate,keys] @ git+https://github.com/opensheaf/opensh
 ```
 
 (or `pip install` in a virtual environment). Python 3.9 or later (PyYAML is installed with it). The extra
-`validate` adds `jsonschema`, `rfc3986-validator` and `ocfl-py`, with which
+`validate` adds `jsonschema`, `rfc3986-validator` and `ocfl-py` (2.1 or later), with which
 `osheaf verify` also validates the JSON files against the schemas (with
 their formats, URIs included) and the storage root with an independent OCFL
 validator; without the first two, it says which schema checks it skipped.
