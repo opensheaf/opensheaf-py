@@ -741,7 +741,8 @@ reported above). It walks the folders of the storage root, links
 included, so it is not run on a storage root with an object that cannot
 be read, nor on one that holds a symbolic link. A validator that stops
 on what it reads (an exception of its own, as `ocfl-py` 2.0 raised on
-some errors of the storage root, hence the requirement of 2.1) is an
+some errors of the storage root, hence the requirement of 2.1 wherever
+it can be installed, Python 3.10 and later) is an
 error of the object or of the storage root, and the other checks go on
 with the objects already found.
 
