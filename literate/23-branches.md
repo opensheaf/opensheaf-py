@@ -121,7 +121,9 @@ paths, and a function reading one. The files of a version are read with
 a check of their digests: a file whose bytes do not have the digest its
 inventory states is not read (`DigestMismatch`, [chapter 10](10-archive.md)),
 so that tampered evidence is never judged as if it were the evidence the
-inventory, and the signatures over it, fix. The evidence is what the
+inventory, and the signatures over it, fix; a file of the evidence
+missing on disk is not read either, and makes the branch point
+inconsistent the same way, never a stop of the verification. The evidence is what the
 verdict interprets; the check of the digests of the files of the object
 reports the file, and the branch point is inconsistent, since its
 evidence cannot be read.
@@ -155,7 +157,10 @@ evidence cannot be read.
         digests = {p: dig for dig, ps in state.items() for p in ps}
 
         def read(p):
-            data = P.content_file(d, inv["manifest"][digests[p]][0]).read_bytes()
+            try:
+                data = P.content_file(d, inv["manifest"][digests[p]][0]).read_bytes()
+            except OSError:
+                raise P.DigestMismatch(f"{p} is missing (section 4.1)") from None
             if names.sha512_hex(data) != str(digests[p]).lower():
                 raise P.DigestMismatch(f"{p} does not have the digest its inventory states (section 4.1)")
             return data

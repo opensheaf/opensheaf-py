@@ -1532,6 +1532,11 @@ def test_tampered_evidence_is_not_read(tmp_path):
     errs = errors(j)
     assert f"accepted v1: inconsistent branch point: the evidence of the branch point cannot be read: {sig} " \
         "does not have the digest its inventory states (section 4.1)" in errs, errs
+    c.unlink()
+    errs = errors(j)
+    assert f"accepted v1: inconsistent branch point: the evidence of the branch point cannot be read: {sig} " \
+        "is missing (section 4.1)" in errs, errs
+    assert not any("stopped on a file" in e for e in errs), errs
 
 
 def test_a_key_log_that_cannot_be_read_ends_nothing(tmp_path):

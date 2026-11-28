@@ -1004,8 +1004,11 @@ checked with its members after every line has its statuses.
 The descriptions are checked against each other and against sections 4.3
 and 4.4. `rightsList` must hold at least one entry (#79): a version always
 says on what terms its files may be used, if only that the rights are not
-known. A `datacite.json` that is not JSON (one that starts with a byte
-order mark, say) is an error of its version, and the other checks go on.
+known. A `datacite.json` that is not JSON (section 2: in UTF-8, without a
+byte order mark) breaks section 4.4, which asks every version for the
+DataCite properties as JSON: it is an error of its version, said in
+words that do not depend on the JSON parser (`json_problem`), and the
+other checks go on.
 An entry of `rightsList` with `rightsIdentifier` or `rightsUri`
 is a licence, one with neither a rights statement (section 4.4): the kind
 is read from the file, never guessed from the name. An identifier is an
@@ -1014,6 +1017,17 @@ the same way. Whether a licence allows a copy is not checked: the archive
 keeping a copy answers for it (section 11.2).
 
     # in check the descriptions of an object version:
+    def json_problem(name, data):
+        """Why the bytes DATA of the file NAME are not JSON as section 2 defines it."""
+        if data.startswith(b"\xef\xbb\xbf"):
+            return f"{name} starts with a byte order mark: JSON is UTF-8 without one (section 2)"
+        try:
+            data.decode("utf-8")
+        except UnicodeDecodeError:
+            return f"{name} is not UTF-8 (section 2)"
+        return f"{name} is not JSON (section 2)"
+
+
     def description_errors(d, inv, ver):
         """The breaches of sections 4.3 and 4.4 in the descriptions of VER of the object in D."""
         out = []
@@ -1021,8 +1035,8 @@ keeping a copy answers for it (section 11.2).
         obj = read_json(d, inv, OBJ, ver) if OBJ in logical else None
         try:
             dc = read_json(d, inv, "datacite.json", ver) if "datacite.json" in logical else None
-        except ValueError as e:
-            return [f"datacite.json is not JSON in UTF-8 without a byte order mark ({e})"]
+        except ValueError:
+            return [json_problem("datacite.json", read_logical(d, inv, "datacite.json", ver).read_bytes())]
         if not isinstance(obj, dict) or not isinstance(dc, dict):
             return out
         if str(obj.get("documentVersion")) != dc.get("version"):
@@ -1794,7 +1808,8 @@ in `owners/`; and, the verifier having access to the files, there are no
 other entries, among them none of a draft. The entries the tools would
 write now are the measure (`index_entries`, [chapter 16](16-index.md)).
 A file of an index that is a symbolic link, or an index folder reached
-through one, is not read (section 15.2).
+through one, is not read (section 15.2); a folder named as a file of the
+index is an error, and is not read either.
 
     # in check the indexes of the archive:
     def check_indexes(f, schema, disc):
@@ -1813,6 +1828,9 @@ through one, is not read (section 15.2).
                 place = f"{index}/{p.name}"
                 if p.is_symlink():
                     continue    # a link, reported with the others: never followed (section 15.2)
+                if p.is_dir():
+                    f.error(place, "a folder among the files of the index: not read (section 12.5)")
+                    continue
                 try:
                     data = names.loads_format(p.read_bytes())
                 except ValueError as e:
@@ -1913,16 +1931,27 @@ the takedown removed it from the pages (section 13.2).
 The canonical form of the originator's line is `sheaf:<name>`, which is
 a prefix of every other line of the work: it is found in the page only
 when it is not followed by more of a URI (`:`, `/` or a character of a
-name).
+name). Which form is canonical depends on the originator, read from the
+genesis record. A genesis record that breaks section 2 (a number with an
+exponent, a byte order mark) is an error of its own, reported with the
+line; the page is judged by the originator the record names all the same,
+read as plain JSON, as the JavaScript tools read it, so that the one
+breach is not reported a second time as a missing landing page. A genesis
+record that is not read at all (missing, or without the digest its
+inventory states, which the checks of the storage report) leaves the
+canonical form unknown: either form of the URI is then accepted.
 
     # in check the presentation files of the profile website:
     def landing_names(text, nm, owner, obj_id):
         """Whether the landing page TEXT gives the sheaf: URI of the line (NM, OWNER), in canonical form."""
         g = read_logical(obj_dir(obj_id), load_inventory(obj_dir(obj_id)), GENESIS, "v1")
+        if g is None:
+            return re.search(rf"sheaf:{nm}(?![a-z0-9:/])", text) is not None or f"sheaf:{nm}:{owner}" in text
         try:
-            originator = names.read_genesis(g.read_bytes()).get("originator") if g else None
+            record = json.loads(g.read_bytes().decode("utf-8-sig", errors="replace"))
         except ValueError:
             return False
+        originator = record.get("originator") if isinstance(record, dict) else None
         if originator == owner:
             return re.search(rf"sheaf:{nm}(?![a-z0-9:/])", text) is not None
         return f"sheaf:{nm}:{owner}" in text

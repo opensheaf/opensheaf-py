@@ -271,6 +271,15 @@ of the verification stops.
         assert not any(x["message"].startswith("OCFL validator:") for x in found)
 
 
+    def test_a_folder_among_the_files_of_an_index(archive):
+        put("paper-a", 1, FILES1)
+        finish()
+        (archive / "names" / "zz.json").mkdir()
+        errors = P.verify_errors()
+        assert "names/zz.json: a folder among the files of the index: not read (section 12.5)" in errors
+        assert not any("stopped on a file" in e for e in errors), errors
+
+
     def test_the_verifier_walks_no_linked_storage_root(archive, tmp_path):
         put("paper-a", 1, FILES1)
         finish()
@@ -481,7 +490,9 @@ none ends the verification with a traceback.
 
 A `datacite.json` that starts with a byte order mark, its inventory
 stating the digest of those bytes (an archive written by other tools), is
-an error of its version, and the other checks of the lines go on; a file
+an error of its version, and the other checks of the lines go on; a
+genesis record with such a breach is an error of the line, and is not
+reported again as a missing landing page; a file
 of the specification that the manifest lists and that is missing on disk
 is reported missing by the check of the digests, and the object is
 checked further. An OCFL validator that stops with an exception of its
@@ -504,9 +515,20 @@ same.
         inv["versions"]["v1"]["state"][new] = inv["versions"]["v1"]["state"].pop(old)
         rewrite(d, inv)
         errors = P.verify_errors()
-        assert any(e.startswith("paper-a v1: datacite.json is not JSON in UTF-8 without a byte order mark")
-                   for e in errors), errors
+        assert "paper-a v1: datacite.json starts with a byte order mark: JSON is UTF-8 without one " \
+            "(section 2)" in errors, errors
         assert not any("stopped on a file" in e for e in errors), errors
+        cp = P.content_path(inv, "v1", P.GENESIS)
+        data = (d / cp).read_bytes().replace(b"{", b'{"x": 1e3, ', 1)
+        (d / cp).write_bytes(data)
+        old = next(dg for dg, cps in inv["manifest"].items() if cps == [cp])
+        new = hashlib.sha512(data).hexdigest()
+        inv["manifest"][new] = inv["manifest"].pop(old)
+        inv["versions"]["v1"]["state"][new] = inv["versions"]["v1"]["state"].pop(old)
+        rewrite(d, inv)
+        errors = P.verify_errors()
+        assert any("genesis.json: the number 1e3 is not an integer" in e for e in errors), errors
+        assert not any("no landing page" in e for e in errors), errors
 
 
     def test_a_missing_file_of_the_specification(archive):

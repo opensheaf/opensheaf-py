@@ -241,7 +241,10 @@ Drafts are never indexed. An object taken down
 with the status `removed`: since its files are gone, they are carried from
 the index files being replaced (the takedown writes them just before
 deleting), and the tombstone's own pin is added if it is missing. A
-takedown removes the name from `owners/`.
+takedown removes the name from `owners/`. The index files being replaced
+are read as plain files only: a folder or a symbolic link named like one
+is passed over, never followed (section 15.2), and the verifier reports
+it.
 
     # in write the discovery document of the archive:
     INDEXES = {"names": 2, "owners": 2, "sha512": 2}
@@ -310,12 +313,16 @@ takedown removes the name from `owners/`.
 
 
     def read_index(index):
-        """Every entry of the files of the index INDEX held next to the discovery document."""
+        """Every entry of the files of the index INDEX held next to the discovery document; a folder,
+        a symbolic link or a file that cannot be read is passed over."""
         out = []
-        for p in sorted((ROOT / index).glob("*.json")) if (ROOT / index).is_dir() else []:
+        folder = ROOT / index
+        for p in sorted(folder.glob("*.json")) if folder.is_dir() and not through_link(folder) else []:
+            if p.is_symlink() or not p.is_file():
+                continue
             try:
                 out += json.loads(p.read_text(encoding="utf-8")).get("entries", [])
-            except (ValueError, AttributeError):
+            except (ValueError, AttributeError, OSError):
                 pass
         return out
 

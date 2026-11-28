@@ -1100,7 +1100,8 @@ point is read ([chapter 23](23-branches.md)).
 
 
     class DigestMismatch(ValueError):
-        """A file of an object version whose bytes do not have the digest its inventory states."""
+        """A file of an object version that is missing, or whose bytes do not have the digest its
+        inventory states."""
 
 
     CHECKED_READS = None    # {(file, digest): whether the file has it}, while a verifier runs

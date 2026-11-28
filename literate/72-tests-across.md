@@ -1912,7 +1912,8 @@ and its version is judged without it: the line of the identifier is not
 recorded, and the signature names a signer that is not the line's owner,
 since the owner is read from it. The evidence of a branch point changed
 on disk, a signature file here, makes the branch point inconsistent,
-though the parent version is held in the archive and signed there.
+though the parent version is held in the archive and signed there; so
+does one missing on disk.
 
     # in across: what the verifier reads:
     def test_the_verifier_reads_files_with_their_digests(tmp_path):
@@ -1954,6 +1955,11 @@ though the parent version is held in the archive and signed there.
         errs = errors(j)
         assert f"accepted v1: inconsistent branch point: the evidence of the branch point cannot be read: {sig} " \
             "does not have the digest its inventory states (section 4.1)" in errs, errs
+        c.unlink()
+        errs = errors(j)
+        assert f"accepted v1: inconsistent branch point: the evidence of the branch point cannot be read: {sig} " \
+            "is missing (section 4.1)" in errs, errs
+        assert not any("stopped on a file" in e for e in errs), errs
 
 A key log that cannot be read is an error at its owner object, once, and
 never ends the verification: the lines of its owner, a parent line held

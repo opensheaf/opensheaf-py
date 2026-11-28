@@ -43,7 +43,10 @@ def level_of_version(d, inv, ver):
     digests = {p: dig for dig, ps in state.items() for p in ps}
 
     def read(p):
-        data = P.content_file(d, inv["manifest"][digests[p]][0]).read_bytes()
+        try:
+            data = P.content_file(d, inv["manifest"][digests[p]][0]).read_bytes()
+        except OSError:
+            raise P.DigestMismatch(f"{p} is missing (section 4.1)") from None
         if names.sha512_hex(data) != str(digests[p]).lower():
             raise P.DigestMismatch(f"{p} does not have the digest its inventory states (section 4.1)")
         return data
